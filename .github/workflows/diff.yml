@@ -1,0 +1,59 @@
+name: diff
+on:
+    workflow_dispatch:
+    schedule:
+        - cron: 20,50 * * * *
+jobs:
+    diff:
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        permissions:
+            contents: write
+            pull-requests: write
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+            - name: Check repo version
+              id: set_repo_version
+              run: |
+                  repo_version=$(cat ${{ github.workspace }}/package.json | jq -r '.version')
+                  echo "repo_version=$repo_version" >> $GITHUB_ENV
+                  echo "repo_version=$repo_version"
+            - name: Check LTN version
+              id: set_ltn_version
+              run: |
+                  ltn_version=$(curl -X POST -s https://live-theater.net/api/meta -H 'Content-Type: application/json' -d '{"detail":false}' | jq -r '.version')
+                  echo "ltn_version=$ltn_version" >> $GITHUB_ENV
+                  echo "ltn_version=$ltn_version"
+            - name: Fetch and extract new files
+              if: env.repo_version != env.ltn_version
+              run: |
+                  find . -type f -not \( -path './.git/*' -o -path './.github/workflows/*' \) | xargs rm -rf
+                  cd ~
+                  curl -sL 'https://live-theater.net/tarball/misskey-${{ env.ltn_version }}.tar.gz' > '${{ env.ltn_version }}.tar.gz'
+                  mkdir '${{ env.ltn_version }}' && tar -xf '${{ env.ltn_version }}.tar.gz' -C '${{ env.ltn_version }}' && cd '${{ env.ltn_version }}'
+                  rm -rf .git
+                  mv .github/workflows .github/workflows_orig
+                  mv .github/dependabot.yml .github/dependabot_orig.yml
+                  mv .github/FUNDING.yml .github/FUNDING_orig.yml
+                  shopt -s dotglob
+                  cp -r * -t '${{ github.workspace }}'
+                  cd '${{ github.workspace }}'
+            - name: Create Pull Request
+              if: env.repo_version != env.ltn_version
+              id: cpr
+              uses: peter-evans/create-pull-request@v6
+              with:
+                  branch: update/${{ env.ltn_version }}
+                  delete-branch: true
+                  title: ${{ env.ltn_version }}
+                  commit-message: ${{ env.ltn_version }}
+                  author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+                  committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+                  body: ${{ env.repo_version }} -> ${{ env.ltn_version }}
+            - name: Merge
+              if: ${{ steps.cpr.outputs.pull-request-number }}
+              run: |
+                  gh pr merge "${{ steps.cpr.outputs.pull-request-url }}" -r -d
