@@ -480,6 +480,8 @@ import type {
 	UsernameAvailableResponse,
 	UsersRequest,
 	UsersResponse,
+	UsersAvatarsRequest,
+	UsersAvatarsResponse,
 	UsersClipsRequest,
 	UsersClipsResponse,
 	UsersFollowersRequest,
@@ -880,6 +882,7 @@ export type Endpoints = {
 	'test': { req: TestRequest; res: TestResponse };
 	'username/available': { req: UsernameAvailableRequest; res: UsernameAvailableResponse };
 	'users': { req: UsersRequest; res: UsersResponse };
+	'users/avatars': { req: UsersAvatarsRequest; res: UsersAvatarsResponse };
 	'users/clips': { req: UsersClipsRequest; res: UsersClipsResponse };
 	'users/followers': { req: UsersFollowersRequest; res: UsersFollowersResponse };
 	'users/following': { req: UsersFollowingRequest; res: UsersFollowingResponse };

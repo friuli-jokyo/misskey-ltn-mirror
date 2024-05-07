@@ -3132,6 +3132,15 @@ export type paths = {
      */
     post: operations['users'];
   };
+  '/users/avatars': {
+    /**
+     * users/avatars
+     * @description List avatars of users.
+     *
+     * **Credential required**: *No*
+     */
+    post: operations['users___avatars'];
+  };
   '/users/clips': {
     /**
      * users/clips
@@ -3945,6 +3954,12 @@ export type components = {
       renoteId?: string | null;
       reply?: components['schemas']['Note'] | null;
       renote?: components['schemas']['Note'] | null;
+      /**
+       * Format: id
+       * @example xxxxxxxxxx
+       */
+      anonymouslySendToUserId?: string | null;
+      anonymouslySendToUser?: components['schemas']['UserLite'] | null;
       isHidden?: boolean;
       /** @enum {string} */
       visibility: 'public' | 'home' | 'followers' | 'specified';
@@ -4904,6 +4919,7 @@ export type operations = {
             sensitiveWords: string[];
             prohibitedWords: string[];
             bannedEmailDomains?: string[];
+            bannedMediaDomains?: string[];
             preservedUsernames: string[];
             hcaptchaSecretKey: string | null;
             mcaptchaSecretKey: string | null;
@@ -6513,6 +6529,8 @@ export type operations = {
           license?: string | null;
           isSensitive?: boolean;
           localOnly?: boolean;
+          hidden?: boolean;
+          conspicuousScale?: number;
           roleIdsThatCanBeUsedThisEmojiAsReaction?: string[];
         };
       };
@@ -7143,6 +7161,9 @@ export type operations = {
           license?: string | null;
           isSensitive?: boolean;
           localOnly?: boolean;
+          /** @default false */
+          hidden?: boolean;
+          conspicuousScale?: number;
           roleIdsThatCanBeUsedThisEmojiAsReaction?: string[];
         };
       };
@@ -8922,6 +8943,7 @@ export type operations = {
           enableIdenticonGeneration?: boolean;
           serverRules?: string[];
           bannedEmailDomains?: string[];
+          bannedMediaDomains?: string[];
           preservedUsernames?: string[];
           manifestJsonOverride?: string;
           enableFanoutTimeline?: boolean;
@@ -18821,6 +18843,8 @@ export type operations = {
           followersVisibility?: 'public' | 'followers' | 'private';
           /** Format: misskey:id */
           pinnedPageId?: string | null;
+          /** Format: misskey:id */
+          pinnedGalleryPostId?: string | null;
           mutedWords?: (string[] | string)[];
           hardMutedWords?: (string[] | string)[];
           mutedInstances?: string[];
@@ -20453,6 +20477,8 @@ export type operations = {
           renoteId?: string | null;
           /** Format: misskey:id */
           channelId?: string | null;
+          /** Format: misskey:id */
+          anonymouslySendToUserId?: string | null;
           text?: string | null;
           fileIds?: string[];
           mediaIds?: string[];
@@ -20524,6 +20550,8 @@ export type operations = {
         'application/json': {
           /** Format: misskey:id */
           noteId: string;
+          /** @default false */
+          block?: boolean;
         };
       };
     };
@@ -24241,6 +24269,8 @@ export type operations = {
            * @default null
            */
           hostname?: string | null;
+          /** @default false */
+          excludePinned?: boolean;
         };
       };
     };
@@ -24249,6 +24279,80 @@ export type operations = {
       200: {
         content: {
           'application/json': components['schemas']['UserDetailed'][];
+        };
+      };
+      /** @description Client error */
+      400: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+      /** @description Authentication error */
+      401: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+      /** @description Forbidden error */
+      403: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+      /** @description I'm Ai */
+      418: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+      /** @description Internal server error */
+      500: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+    };
+  };
+  /**
+   * users/avatars
+   * @description List avatars of users.
+   *
+   * **Credential required**: *No*
+   */
+  users___avatars: {
+    requestBody: {
+      content: {
+        'application/json': {
+          users: ({
+              /** Format: misskey:id */
+              id?: string;
+              username?: string;
+              /** @description The local host is represented with `null`. */
+              host?: string | null;
+            })[];
+        };
+      };
+    };
+    responses: {
+      /** @description OK (with results) */
+      200: {
+        content: {
+          'application/json': ({
+              /** Format: id */
+              id: string;
+              /** @example 藍 */
+              name: string | null;
+              /** @example ai */
+              username: string;
+              /**
+               * @description The local host is represented with `null`.
+               * @example misskey.example.com
+               */
+              host: string | null;
+              /** Format: url */
+              avatarUrl: string;
+              avatarBlurhash: string | null;
+            })[];
         };
       };
       /** @description Client error */
@@ -25714,6 +25818,8 @@ export type operations = {
         'application/json': {
           /** Format: misskey:id */
           userId: string;
+          /** Format: misskey:id */
+          noteId?: string;
           comment: string;
         };
       };

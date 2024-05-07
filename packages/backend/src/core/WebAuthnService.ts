@@ -23,7 +23,6 @@ import type {
 	AuthenticatorTransportFuture,
 	CredentialDeviceType,
 	PublicKeyCredentialCreationOptionsJSON,
-	PublicKeyCredentialDescriptorFuture,
 	PublicKeyCredentialRequestOptionsJSON,
 	RegistrationResponseJSON,
 } from '@simplewebauthn/types';
@@ -155,10 +154,9 @@ export class WebAuthnService {
 		const authenticationOptions = await generateAuthenticationOptions({
 			rpID: relyingParty.rpId,
 			allowCredentials: keys.map(key => ({
-				id: Buffer.from(key.id, 'base64url'),
-				type: 'public-key',
+				id: key.id,
 				transports: (key.transports as AuthenticatorTransportFuture[] | null) ?? undefined,
-			} satisfies PublicKeyCredentialDescriptorFuture)),
+			})),
 			userVerification: 'required',
 		});
 

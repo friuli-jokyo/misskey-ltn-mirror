@@ -1603,6 +1603,8 @@ declare namespace entities {
         UsernameAvailableResponse,
         UsersRequest,
         UsersResponse,
+        UsersAvatarsRequest,
+        UsersAvatarsResponse,
         UsersClipsRequest,
         UsersClipsResponse,
         UsersFollowersRequest,
@@ -2951,6 +2953,12 @@ type UsersAchievementsRequest = operations['users___achievements']['requestBody'
 
 // @public (undocumented)
 type UsersAchievementsResponse = operations['users___achievements']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type UsersAvatarsRequest = operations['users___avatars']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type UsersAvatarsResponse = operations['users___avatars']['responses']['200']['content']['application/json'];
 
 // @public (undocumented)
 type UsersClipsRequest = operations['users___clips']['requestBody']['content']['application/json'];

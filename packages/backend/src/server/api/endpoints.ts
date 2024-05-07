@@ -332,6 +332,7 @@ import * as ep___sw_unregister from './endpoints/sw/unregister.js';
 import * as ep___test from './endpoints/test.js';
 import * as ep___username_available from './endpoints/username/available.js';
 import * as ep___users from './endpoints/users.js';
+import * as ep___users_avatars from './endpoints/users/avatars.js';
 import * as ep___users_clips from './endpoints/users/clips.js';
 import * as ep___users_followers from './endpoints/users/followers.js';
 import * as ep___users_following from './endpoints/users/following.js';
@@ -702,6 +703,7 @@ const eps = [
 	['test', ep___test],
 	['username/available', ep___username_available],
 	['users', ep___users],
+	['users/avatars', ep___users_avatars],
 	['users/clips', ep___users_clips],
 	['users/followers', ep___users_followers],
 	['users/following', ep___users_following],
