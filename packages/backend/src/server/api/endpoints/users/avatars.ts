@@ -151,7 +151,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					name: entity.name,
 					username: entity.username,
 					host: entity.host,
-					avatarUrl: entity.avatarUrl ?? userEntityService.getIdenticonUrl(entity as MiUser),
+					avatarUrl: entity.avatarUrl ?? this.userEntityService.getIdenticonUrl(entity as MiUser),
 					avatarBlurhash: entity.avatarBlurhash,
 				}] : [];
 			});

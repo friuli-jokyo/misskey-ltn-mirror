@@ -10,17 +10,21 @@ import fastifyCookie from '@fastify/cookie';
 import { ModuleRef } from '@nestjs/core';
 import type { Config } from '@/config.js';
 import type { InstancesRepository, AccessTokensRepository } from '@/models/_.js';
+import type Logger from '@/logger.js';
 import { DI } from '@/di-symbols.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { bindThis } from '@/decorators.js';
 import endpoints from './endpoints.js';
 import { ApiCallService } from './ApiCallService.js';
+import { ApiLoggerService } from './ApiLoggerService.js';
 import { SignupApiService } from './SignupApiService.js';
 import { SigninApiService } from './SigninApiService.js';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 
 @Injectable()
 export class ApiServerService {
+	private logger: Logger;
+
 	constructor(
 		private moduleRef: ModuleRef,
 
@@ -35,9 +39,11 @@ export class ApiServerService {
 
 		private userEntityService: UserEntityService,
 		private apiCallService: ApiCallService,
+		private apiLoggerService: ApiLoggerService,
 		private signupApiService: SignupApiService,
 		private signinApiService: SigninApiService,
 	) {
+		this.logger = this.apiLoggerService.logger;
 		//this.createServer = this.createServer.bind(this);
 	}
 
@@ -116,7 +122,10 @@ export class ApiServerService {
 				'g-recaptcha-response'?: string;
 				'turnstile-response'?: string;
 			}
-		}>('/signup', (request, reply) => this.signupApiService.signup(request, reply));
+		}>('/signup', (request, reply) => this.signupApiService.signup(request, reply).catch(err => {
+			this.logger.error(err);
+			throw err;
+		}));
 
 		fastify.post<{
 			Body: {
@@ -129,7 +138,10 @@ export class ApiServerService {
 				credentialId?: string;
 				challengeId?: string;
 			};
-		}>('/signin', (request, reply) => this.signinApiService.signin(request, reply));
+		}>('/signin', (request, reply) => this.signinApiService.signin(request, reply).catch(err => {
+			this.logger.error(err);
+			throw err;
+		}));
 
 		fastify.post<{ Body: { code: string; } }>('/signup-pending', (request, reply) => this.signupApiService.signupPending(request, reply));
 
