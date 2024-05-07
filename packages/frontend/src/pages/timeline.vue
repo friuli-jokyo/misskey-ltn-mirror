@@ -176,8 +176,8 @@ watch(canvas2024, (value, oldValue) => {
 	const runner = Matter.Runner.create();
 	runner2024Map.set(value, runner);
 	Matter.Runner.run(runner, engine);
-	const ground = Matter.Bodies.rectangle(400, 500, 800, 100, { isStatic: true, label: 'Ground' });
-	const pit = Matter.Bodies.rectangle(400, 5000, 80000, 100, { isStatic: true, label: 'Pit' });
+	const ground = Matter.Bodies.rectangle(400, 500, 800, 100, { isStatic: true, label: 'Ground', render: { visible: false }, chamfer: { radius: 12 } });
+	const pit = Matter.Bodies.rectangle(400, 5000, 80000, 100, { isStatic: true, label: 'Pit', render: { visible: false } });
 	Matter.Composite.add(engine.world, [ground, pit]);
 	Matter.Events.on(engine, 'collisionStart', (event) => {
 		for (const pair of event.pairs) {
@@ -188,9 +188,9 @@ watch(canvas2024, (value, oldValue) => {
 			} else if (pair.bodyA.label === pair.bodyB.label) {
 				const aspect = (Math.max(...pair.bodyA.vertices.map(v => v.x)) - Math.min(...pair.bodyA.vertices.map(v => v.x))) / (Math.max(...pair.bodyA.vertices.map(v => v.y)) - Math.min(...pair.bodyA.vertices.map(v => v.y)));
 				const rect = value.getBoundingClientRect();
-				const x = (pair.bodyA.position.x + pair.bodyB.position.x) / 2;
-				const y = (pair.bodyA.position.y + pair.bodyB.position.y) / 2;
-				os.popup(MkRippleEffect, { x: x + rect.x, y: y + rect.y }, {}, 'end');
+				const x = pair.activeContacts[0]?.vertex.x ?? (pair.bodyA.position.x + pair.bodyB.position.x) / 2;
+				const y = pair.activeContacts[0]?.vertex.y ?? (pair.bodyA.position.y + pair.bodyB.position.y) / 2;
+				os.popup(MkRippleEffect, { x: x * rect.width / 800 + rect.x, y: y * rect.height / 450 + rect.y }, {}, 'end');
 				Matter.Composite.remove(engine.world, [pair.bodyA, pair.bodyB]);
 				if (canvas2024WithSound.value) {
 					sound.playUrl('/client-assets/drop-and-fusion/fusion.mp3', {
@@ -204,12 +204,12 @@ watch(canvas2024, (value, oldValue) => {
 				const aspectA = (Math.max(...pair.bodyA.vertices.map(v => v.x)) - Math.min(...pair.bodyA.vertices.map(v => v.x))) / (Math.max(...pair.bodyA.vertices.map(v => v.y)) - Math.min(...pair.bodyA.vertices.map(v => v.y)));
 				const aspectB = (Math.max(...pair.bodyB.vertices.map(v => v.x)) - Math.min(...pair.bodyB.vertices.map(v => v.x))) / (Math.max(...pair.bodyB.vertices.map(v => v.y)) - Math.min(...pair.bodyB.vertices.map(v => v.y)));
 				sound.playUrl('/client-assets/drop-and-fusion/collision.mp3', {
-					volume: Math.min(1, aspectA / Math.E),
+					volume: Math.min(1, pair.separation),
 					pan: (x - 400) / 400,
 					playbackRate: 1 / Math.log1p(aspectA),
 				});
 				sound.playUrl('/client-assets/drop-and-fusion/collision.mp3', {
-					volume: Math.min(1, aspectB / Math.E),
+					volume: Math.min(1, pair.separation),
 					pan: (x - 400) / 400,
 					playbackRate: 1 / Math.log1p(aspectB),
 				});
@@ -230,7 +230,7 @@ watch(canvas2024, (value, oldValue) => {
 		});
 		ready.then(image => {
 			const aspect = image.naturalWidth / image.naturalHeight;
-			const marginX = 12 * aspect;
+			const marginX = Math.min(400, 12 * aspect);
 			const x = Math.random() * (800 - marginX * 2) + marginX;
 			const y = Math.min(0, ...Matter.Composite.allBodies(engine.world).map(b => b.position.y)) - 24;
 			const body = Matter.Bodies.rectangle(x, y, 24 * aspect, 24, {
@@ -530,6 +530,7 @@ definePageMetadata(() => ({
 	width: 100%;
 	margin: calc(-0.675em - 8px) 0;
 
+	.canvasActionButton + &,
 	&:first-child {
 		margin-top: calc(-0.675em - 8px - var(--margin));
 	}

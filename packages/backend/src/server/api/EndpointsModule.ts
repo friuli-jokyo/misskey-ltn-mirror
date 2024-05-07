@@ -332,6 +332,7 @@ import * as ep___sw_unregister from './endpoints/sw/unregister.js';
 import * as ep___test from './endpoints/test.js';
 import * as ep___username_available from './endpoints/username/available.js';
 import * as ep___users from './endpoints/users.js';
+import * as ep___users_avatars from './endpoints/users/avatars.js';
 import * as ep___users_clips from './endpoints/users/clips.js';
 import * as ep___users_followers from './endpoints/users/followers.js';
 import * as ep___users_following from './endpoints/users/following.js';
@@ -704,6 +705,7 @@ const $sw_unregister: Provider = { provide: 'ep:sw/unregister', useClass: ep___s
 const $test: Provider = { provide: 'ep:test', useClass: ep___test.default };
 const $username_available: Provider = { provide: 'ep:username/available', useClass: ep___username_available.default };
 const $users: Provider = { provide: 'ep:users', useClass: ep___users.default };
+const $users_avatars: Provider = { provide: 'ep:users/avatars', useClass: ep___users_avatars.default };
 const $users_clips: Provider = { provide: 'ep:users/clips', useClass: ep___users_clips.default };
 const $users_followers: Provider = { provide: 'ep:users/followers', useClass: ep___users_followers.default };
 const $users_following: Provider = { provide: 'ep:users/following', useClass: ep___users_following.default };
@@ -1080,6 +1082,7 @@ const $reversi_verify: Provider = { provide: 'ep:reversi/verify', useClass: ep__
 		$test,
 		$username_available,
 		$users,
+		$users_avatars,
 		$users_clips,
 		$users_followers,
 		$users_following,
@@ -1448,6 +1451,7 @@ const $reversi_verify: Provider = { provide: 'ep:reversi/verify', useClass: ep__
 		$test,
 		$username_available,
 		$users,
+		$users_avatars,
 		$users_clips,
 		$users_followers,
 		$users_following,

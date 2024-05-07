@@ -3,22 +3,23 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { VNode, h, SetupContext } from 'vue';
+import { Ref, SetupContext, VNode, h, provide, ref } from 'vue';
 import * as mfm from 'mfm-js';
 import * as Misskey from 'misskey-js';
 import MkUrl from '@/components/global/MkUrl.vue';
 import MkTime from '@/components/global/MkTime.vue';
 import MkLink from '@/components/MkLink.vue';
-import MkMention from '@/components/MkMention.vue';
+import MkMention, { type AvatarsMap } from '@/components/MkMention.vue';
 import MkEmoji from '@/components/global/MkEmoji.vue';
 import MkCustomEmoji from '@/components/global/MkCustomEmoji.vue';
 import MkCode from '@/components/MkCode.vue';
 import MkCodeInline from '@/components/MkCodeInline.vue';
 import MkGoogle from '@/components/MkGoogle.vue';
 import MkSparkle from '@/components/MkSparkle.vue';
-import MkA from '@/components/global/MkA.vue';
+import MkA, { MkABehavior } from '@/components/global/MkA.vue';
 import { host } from '@/config.js';
 import { defaultStore } from '@/store.js';
+import { misskeyApi } from '@/scripts/misskey-api.js';
 import { nyaize as doNyaize } from '@/scripts/nyaize.js';
 import { safeParseFloat } from '@/scripts/safe-parse.js';
 
@@ -43,14 +44,27 @@ type MfmProps = {
 	parsedNodes?: mfm.MfmNode[] | null;
 	enableEmojiMenu?: boolean;
 	enableEmojiMenuReaction?: boolean;
+	linkNavigationBehavior?: MkABehavior;
 };
 
 type MfmEvents = {
 	clickEv(id: string): void;
 };
 
+function getMentionNodeProps(ast: readonly mfm.MfmNode[]): {
+	username: string;
+	host: string | null;
+}[] {
+	return ast.flatMap((node) => node.children ? getMentionNodeProps(node.children) : node.type === 'mention' ? [node.props] : []);
+}
+
+const avatarsMapRef: Ref<AvatarsMap> = ref(new Map());
+const avatarsLoadingSet = new Set<string>();
+
 // eslint-disable-next-line import/no-default-export
 export default function (props: MfmProps, { emit }: { emit: SetupContext<MfmEvents>['emit'] }) {
+	provide('linkNavigationBehavior', props.linkNavigationBehavior);
+
 	const isNote = props.isNote ?? true;
 	const shouldNyaize = props.nyaize ? props.nyaize === 'respect' ? props.author?.isCat : false : false;
 
@@ -58,6 +72,34 @@ export default function (props: MfmProps, { emit }: { emit: SetupContext<MfmEven
 	if (props.text == null || props.text === '') return;
 
 	const rootAst = props.parsedNodes ?? (props.plain ? mfm.parseSimple : mfm.parse)(props.text);
+
+	const mentionedUsers = getMentionNodeProps(rootAst);
+
+	if (mentionedUsers.length) {
+		const users: {
+			username: string;
+			host: string | null;
+		}[] = [];
+
+		for (const user of mentionedUsers) {
+			const key = `${user.username}@${user.host ?? '.'}`;
+			if (avatarsLoadingSet.has(key)) continue;
+			avatarsLoadingSet.add(key);
+			users.push(user);
+		}
+
+		if (users.length) {
+			misskeyApi('users/avatars', {
+				users: mentionedUsers,
+			}).then((avatars) => {
+				for (const avatar of avatars) {
+					avatarsMapRef.value.set(avatar.id, avatar);
+				}
+			});
+		}
+
+		provide('avatarsMap', avatarsMapRef);
+	}
 
 	const validTime = (t: string | boolean | null | undefined) => {
 		if (t == null) return null;
