@@ -85,8 +85,6 @@ export const paramDef = {
 	required: ['users'],
 } as const;
 
-type ExposeSelection<T extends string, TAlias extends string> = T extends `${TAlias}.${infer P}` ? P : never;
-
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
@@ -137,23 +135,24 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				query[orWhereOrWhere()](`user.username IN (:...byUsernameRemote${i}Username)`, { [`byUsernameRemote${i}Username`]: usernames });
 				query.andWhere(`user.host = :byUsernameRemote${i}Host`, { [`byUsernameRemote${i}Host`]: host });
 			}
-			const users = await query.getRawMany<Pick<MiUser, ExposeSelection<typeof selection[number], 'user'>>>();
+			const users = await query.getRawMany<{
+				[K in typeof selection[number] extends `user.${infer P}` ? P : never as `user_${K}`]: MiUser[K];
+			}>();
 			return ps.users.flatMap((user) => {
-				const entity = users.find((u) => {
-					if (user.id) {
-						return u.id === user.id;
-					} else {
-						return u.username === user.username && u.host === user.host;
-					}
-				});
-				return entity ? [{
-					id: entity.id,
-					name: entity.name,
-					username: entity.username,
-					host: entity.host,
-					avatarUrl: entity.avatarUrl ?? this.userEntityService.getIdenticonUrl(entity as MiUser),
-					avatarBlurhash: entity.avatarBlurhash,
-				}] : [];
+				const entity = users.find(user.id ? (u) => u.user_id === user.id : (u) => u.user_username === user.username && u.user_host === user.host);
+				if (!entity) return [];
+				const model = {
+					id: entity.user_id,
+					name: entity.user_name,
+					username: entity.user_username,
+					host: entity.user_host,
+					avatarUrl: entity.user_avatarUrl,
+					avatarBlurhash: entity.user_avatarBlurhash,
+				};
+				model.avatarUrl ??= this.userEntityService.getIdenticonUrl(model as MiUser);
+				return [model as {
+					[K in keyof typeof model]: K extends 'avatarUrl' ? NonNullable<typeof model[K]> : typeof model[K];
+				}];
 			});
 		});
 	}
