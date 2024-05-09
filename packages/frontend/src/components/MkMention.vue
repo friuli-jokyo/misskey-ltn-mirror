@@ -15,12 +15,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { toUnicode } from 'punycode';
-import { computed } from 'vue';
+import * as Misskey from 'misskey-js';
+import { Ref, computed, inject, shallowRef } from 'vue';
 import tinycolor from 'tinycolor2';
 import { host as localHost } from '@/config.js';
 import { $i } from '@/account.js';
 import { defaultStore } from '@/store.js';
-import { avatarsMap, loadUsers, usernameAndHostToIdMap, usernameAndHostToKey } from '@/scripts/avatars.js';
 import { getStaticImageUrl } from '@/scripts/media-proxy.js';
 import { MkABehavior } from '@/components/global/MkA.vue';
 
@@ -29,6 +29,10 @@ const props = defineProps<{
 	host: string;
 	navigationBehavior?: MkABehavior;
 }>();
+
+export type AvatarsMap = Map<Misskey.entities.User['id'], Pick<Misskey.entities.User, 'id' | 'name' | 'username' | 'host' | 'avatarBlurhash'> & { [T in keyof Misskey.entities.User & 'avatarUrl']: NonNullable<Misskey.entities.User[T]> }>;
+
+const avatarsMap = inject<Ref<AvatarsMap>>('avatarsMap', () => shallowRef(new Map()), true);
 
 const canonical = props.host === localHost ? `@${props.username}` : `@${props.username}@${toUnicode(props.host)}`;
 
@@ -43,17 +47,12 @@ bg.setAlpha(0.1);
 const bgCss = bg.toRgbString();
 
 const baseUrl = computed(() => {
-	const key = usernameAndHostToIdMap.value.get(usernameAndHostToKey(props.username, props.host));
-	if (key) {
-		const user = avatarsMap.value.get(key);
-		if (user) {
+	for (const user of avatarsMap.value.values()) {
+		if (user.username === props.username && user.host === props.host) {
 			return user.avatarUrl;
 		}
-	} else {
-		loadUsers({ username: props.username, host: props.host });
-		return `/avatar/@${props.username}@${toUnicode(props.host)}`;
 	}
-	return '/static-assets/user-unknown.png';
+	return `/avatar/@${props.username}@${props.host}`;
 });
 
 const avatarUrl = computed(() => defaultStore.state.disableShowingAnimatedImages ? getStaticImageUrl(baseUrl.value) : baseUrl.value);

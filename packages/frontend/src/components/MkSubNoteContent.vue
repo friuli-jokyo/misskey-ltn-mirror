@@ -30,12 +30,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { ref, watch } from 'vue';
+import { ref } from 'vue';
 import * as Misskey from 'misskey-js';
 import MkMediaList from '@/components/MkMediaList.vue';
 import MkPoll from '@/components/MkPoll.vue';
 import { i18n } from '@/i18n.js';
-import { loadUsers } from '@/scripts/avatars.js';
 import { shouldCollapsed } from '@/scripts/collapsed.js';
 
 const props = defineProps<{
@@ -45,13 +44,6 @@ const props = defineProps<{
 const isLong = shouldCollapsed(props.note, []);
 
 const collapsed = ref(isLong);
-
-watch(() => props.note, value => {
-	const specifiers = value.mentions?.map(id => ({ id }));
-	if (specifiers) {
-		loadUsers(...specifiers);
-	}
-}, { immediate: true });
 </script>
 
 <style lang="scss" module>
