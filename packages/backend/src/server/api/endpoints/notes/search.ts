@@ -48,7 +48,6 @@ export const paramDef = {
 		},
 		userId: { type: 'string', format: 'misskey:id', nullable: true, default: null },
 		channelId: { type: 'string', format: 'misskey:id', nullable: true, default: null },
-		internal: { type: 'boolean', default: false },
 	},
 	required: ['query'],
 } as const;
@@ -72,7 +71,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				userId: ps.userId,
 				channelId: ps.channelId,
 				host: ps.host,
-				internal: ps.internal,
 			}, {
 				untilId: ps.untilId,
 				sinceId: ps.sinceId,
