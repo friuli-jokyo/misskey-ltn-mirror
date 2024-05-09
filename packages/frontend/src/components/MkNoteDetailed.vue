@@ -210,7 +210,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { computed, inject, onMounted, provide, ref, shallowRef } from 'vue';
+import { computed, inject, onMounted, provide, ref, shallowRef, watch } from 'vue';
 import * as mfm from 'mfm-js';
 import * as Misskey from 'misskey-js';
 import MkNoteSub from '@/components/MkNoteSub.vue';
@@ -223,6 +223,7 @@ import MkPoll from '@/components/MkPoll.vue';
 import MkUsersTooltip from '@/components/MkUsersTooltip.vue';
 import MkUrlPreview from '@/components/MkUrlPreview.vue';
 import MkInstanceTicker from '@/components/MkInstanceTicker.vue';
+import { loadUsers } from '@/scripts/avatars';
 import { pleaseLogin } from '@/scripts/please-login.js';
 import { checkWordMute } from '@/scripts/check-word-mute.js';
 import { userPage } from '@/filters/user.js';
@@ -346,6 +347,13 @@ const reactionsPagination = computed<Paging>(() => ({
 		type: reactionTabType.value,
 	},
 }));
+
+watch(appearNote, value => {
+	const specifiers = value.mentions?.map(id => ({ id }));
+	if (specifiers) {
+		loadUsers(...specifiers);
+	}
+}, { immediate: true });
 
 useNoteCapture({
 	rootEl: rootEl,

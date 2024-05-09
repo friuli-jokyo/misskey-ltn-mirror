@@ -185,6 +185,7 @@ import MkPoll from '@/components/MkPoll.vue';
 import MkUsersTooltip from '@/components/MkUsersTooltip.vue';
 import MkUrlPreview from '@/components/MkUrlPreview.vue';
 import MkInstanceTicker from '@/components/MkInstanceTicker.vue';
+import { loadUsers } from '@/scripts/avatars';
 import { pleaseLogin } from '@/scripts/please-login.js';
 import { focusPrev, focusNext } from '@/scripts/focus.js';
 import { checkWordMute } from '@/scripts/check-word-mute.js';
@@ -329,6 +330,12 @@ if (props.mock) {
 		note.value = deepClone(to);
 	}, { deep: true });
 } else {
+	watch(appearNote, value => {
+		const specifiers = value.mentions?.map(id => ({ id }));
+		if (specifiers) {
+			loadUsers(...specifiers);
+		}
+	}, { immediate: true });
 	useNoteCapture({
 		rootEl: rootEl,
 		note: appearNote,
