@@ -114,10 +114,12 @@ export class FanoutTimelineEndpointService {
 
 				const parentFilter = filter;
 				filter = (note) => {
-					if (isUserRelated(note, userIdsWhoBlockingMe, ps.ignoreAuthorFromBlock)) return false;
-					if (isUserRelated(note, userIdsWhoMeMuting, ps.ignoreAuthorFromMute)) return false;
-					if (!ps.ignoreAuthorFromMute && isRenote(note) && !isQuote(note) && userIdsWhoMeMutingRenotes.has(note.userId)) return false;
-					if (isInstanceMuted(note, userMutedInstances)) return false;
+					if (!note.anonymousChannelUsername) {
+						if (isUserRelated(note, userIdsWhoBlockingMe, ps.ignoreAuthorFromBlock)) return false;
+						if (isUserRelated(note, userIdsWhoMeMuting, ps.ignoreAuthorFromMute)) return false;
+						if (!ps.ignoreAuthorFromMute && isRenote(note) && !isQuote(note) && userIdsWhoMeMutingRenotes.has(note.userId)) return false;
+						if (isInstanceMuted(note, userMutedInstances)) return false;
+					}
 
 					return parentFilter(note);
 				};

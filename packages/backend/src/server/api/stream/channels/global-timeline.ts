@@ -45,6 +45,7 @@ class GlobalTimelineChannel extends Channel {
 
 	@bindThis
 	private async onNote(note: Packed<'Note'>) {
+		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
 
 		if (note.visibility !== 'public') return;

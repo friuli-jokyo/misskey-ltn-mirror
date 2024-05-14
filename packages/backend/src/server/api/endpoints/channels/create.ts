@@ -50,6 +50,8 @@ export const paramDef = {
 		bannerId: { type: 'string', format: 'misskey:id', nullable: true },
 		color: { type: 'string', minLength: 1, maxLength: 16 },
 		isSensitive: { type: 'boolean', nullable: true },
+		anonymousStrategy: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'manual'], nullable: true },
+		requirePublicWriteAccess: { type: 'boolean', default: false },
 		allowRenoteToExternal: { type: 'boolean', nullable: true },
 	},
 	required: ['name'],
@@ -87,6 +89,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				description: ps.description ?? null,
 				bannerId: banner ? banner.id : null,
 				isSensitive: ps.isSensitive ?? false,
+				anonymousStrategy: ps.anonymousStrategy ?? null,
+				requirePublicWriteAccess: ps.requirePublicWriteAccess,
 				...(ps.color !== undefined ? { color: ps.color } : {}),
 				allowRenoteToExternal: ps.allowRenoteToExternal ?? true,
 			} as MiChannel).then(x => this.channelsRepository.findOneByOrFail(x.identifiers[0]));

@@ -29,7 +29,10 @@ function getRandom() {
 	return str;
 }
 
-export function genMeid(t: number): string {
+export function genMeid(t: number, immutable = false): string {
+	if (immutable) {
+		return getTime(t) + '000000000000';
+	}
 	return getTime(t) + getRandom();
 }
 

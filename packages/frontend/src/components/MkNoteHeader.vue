@@ -8,7 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<div v-if="mock" :class="$style.name">
 		<MkUserName :user="note.user"/>
 	</div>
-	<div v-else-if="note.anonymouslySendToUser" :class="$style.name">
+	<div v-else-if="note.anonymouslySendToUser" v-user-preview="note.user.id" :class="$style.name">
 		<I18n :src="i18n.ts.anonymouslySendToUser" tag="span">
 			<template #user>
 				<MkA v-user-preview="note.anonymouslySendToUser.id" :to="userPage(note.anonymouslySendToUser)">
@@ -18,10 +18,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</I18n>
 	</div>
 	<MkA v-else v-user-preview="note.user.id" :class="$style.name" :to="userPage(note.user)">
-		<MkUserName :user="note.user"/>
+		<MkUserName :user="userOf(note)"/>
 	</MkA>
 	<div v-if="note.user.isBot" :class="$style.isBot">bot</div>
-	<div v-if="!note.anonymouslySendToUser" :class="$style.username"><MkAcct :user="note.user"/></div>
+	<div v-if="!note.anonymouslySendToUser && !note.anonymousChannelUsername" :class="$style.username"><MkAcct :user="note.user"/></div>
 	<div v-if="note.user.badgeRoles" :class="$style.badgeRoles">
 		<img v-for="(role, i) in note.user.badgeRoles" :key="i" v-tooltip="role.name" :class="$style.badgeRole" :src="role.iconUrl!"/>
 	</div>
@@ -53,6 +53,10 @@ import { userPage } from '@/filters/user.js';
 defineProps<{
 	note: Misskey.entities.Note;
 }>();
+
+function userOf(note: Misskey.entities.Note): Misskey.entities.User {
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+}
 
 const mock = inject<boolean>('mock', false);
 </script>

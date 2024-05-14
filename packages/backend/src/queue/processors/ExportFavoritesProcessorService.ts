@@ -131,7 +131,7 @@ export class ExportFavoritesProcessorService {
 	}
 
 	private async serialize(favorite: MiNoteFavorite & { note: MiNote & { user: MiUser } }, poll: MiPoll | null = null): Promise<Record<string, unknown>> {
-		const user = favorite.note.anonymouslySendToUserId ? await this.instanceActorService.getInstanceActor() : favorite.note.user;
+		const user = favorite.note.anonymouslySendToUserId || favorite.note.anonymousChannelUsername ? await this.instanceActorService.getInstanceActor() : favorite.note.user;
 		return {
 			id: favorite.id,
 			createdAt: this.idService.parse(favorite.id).date.toISOString(),

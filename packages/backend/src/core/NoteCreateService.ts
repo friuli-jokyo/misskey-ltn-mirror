@@ -137,6 +137,7 @@ type Option = {
 	poll?: IPoll | null;
 	localOnly?: boolean | null;
 	anonymouslySendToUser?: MinimumUser | null;
+	anonymousChannelUsername?: string | null;
 	reactionAcceptance?: MiNote['reactionAcceptance'];
 	cw?: string | null;
 	visibility?: string;
@@ -279,6 +280,14 @@ export class NoteCreateService implements OnApplicationShutdown {
 			} else if ((await this.roleService.getUserPolicies(user.id)).canPublicNote === false) {
 				data.visibility = 'home';
 			}
+		}
+
+		if (data.channel?.requirePublicWriteAccess && !(await this.roleService.getUserPolicies(user.id)).canPublicNote) {
+			throw new Error('channel requires public write access');
+		}
+
+		if (data.anonymousChannelUsername) {
+			data.files = null; // file オブジェクトを照会すると送信元を特定できるため
 		}
 
 		const hasProhibitedWords = await this.checkProhibitedWordsContain({
@@ -437,6 +446,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 					: data.reply.id
 				: null,
 			anonymouslySendToUserId: data.anonymouslySendToUser ? data.anonymouslySendToUser.id : null,
+			anonymousChannelUsername: data.anonymousChannelUsername ?? null,
 			name: data.name,
 			text: data.text,
 			hasPoll: data.poll != null,
@@ -531,7 +541,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 		const meta = await this.metaService.fetch();
 
 		this.notesChart.update(note, true);
-		if ((meta.enableChartsForRemoteUser || (user.host == null)) && !note.anonymouslySendToUserId) {
+		if ((meta.enableChartsForRemoteUser || (user.host == null)) && !note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
 			this.perUserNotesChart.update(user, note, true);
 		}
 
@@ -551,7 +561,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 		}
 
 		// Increment notes count (user)
-		if (!note.anonymouslySendToUserId) {
+		if (!note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
 			this.incNotesCountOfUser(user);
 		}
 
@@ -563,7 +573,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 			this.saveReply(data.reply, note);
 		}
 
-		if (data.reply == null && note.anonymouslySendToUserId == null) {
+		if (data.reply == null && note.anonymouslySendToUserId == null && note.anonymousChannelUsername == null) {
 			// TODO: キャッシュ
 			this.followingsRepository.findBy({
 				followeeId: user.id,
@@ -580,7 +590,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 			});
 		}
 
-		if (data.renote && (data.anonymouslySendToUser || data.renote.userId !== user.id && !user.isBot)) {
+		if (data.renote && (data.anonymouslySendToUser || data.channel?.anonymousStrategy || data.renote.userId !== user.id && !user.isBot)) {
 			this.incRenoteCount(data.renote);
 		}
 
@@ -595,7 +605,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 		}
 
 		if (!silent) {
-			if (!data.anonymouslySendToUser && this.userEntityService.isLocalUser(user)) this.activeUsersChart.write(user);
+			if (!data.anonymouslySendToUser && !data.channel?.anonymousStrategy && this.userEntityService.isLocalUser(user)) this.activeUsersChart.write(user);
 
 			// 未読通知を作成
 			if (data.visibility === 'specified') {
@@ -625,10 +635,10 @@ export class NoteCreateService implements OnApplicationShutdown {
 			// Pack the note
 			const noteObj = await this.noteEntityService.pack(note, null, { skipHide: true, withReactionAndUserPairCache: true });
 
-			if (!note.anonymouslySendToUserId) {
-				this.globalEventService.publishNotesStream(noteObj);
-				this.roleService.addNoteToRoleTimeline(noteObj);
+			this.globalEventService.publishNotesStream(noteObj);
 
+			if (!note.anonymouslySendToUserId) {
+				this.roleService.addNoteToRoleTimeline(noteObj);
 				this.webhookService.getActiveWebhooks().then(webhooks => {
 					webhooks = webhooks.filter(x => x.userId === user.id && x.on.includes('note'));
 					for (const webhook of webhooks) {
@@ -903,7 +913,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 					this.fanoutTimelineService.push(`homeTimelineWithFiles:${channelFollowing.followerId}`, note.id, meta.perUserHomeTimelineCacheMax / 2, r);
 				}
 			}
-		} else if (!note.anonymouslySendToUserId) {
+		} else if (!note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
 			// TODO: キャッシュ？
 			// eslint-disable-next-line prefer-const
 			let [followings, userListMemberships] = await Promise.all([

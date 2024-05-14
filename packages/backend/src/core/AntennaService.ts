@@ -121,6 +121,7 @@ export class AntennaService implements OnApplicationShutdown {
 		if (!antenna.withReplies && note.replyId != null) return false;
 
 		if (note.anonymouslySendToUserId) return false;
+		if (note.anonymousChannelUsername) return false;
 		if (antenna.src === 'home') {
 			// TODO
 		} else if (antenna.src === 'list') {

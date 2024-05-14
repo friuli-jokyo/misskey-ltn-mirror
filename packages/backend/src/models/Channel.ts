@@ -75,6 +75,17 @@ export class MiChannel {
 	})
 	public isArchived: boolean;
 
+	@Column('enum', {
+		enum: ['daily', 'weekly', 'monthly', 'yearly', 'manual'],
+		nullable: true,
+	})
+	public anonymousStrategy: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'manual' | null;
+
+	@Column('boolean', {
+		default: false,
+	})
+	public requirePublicWriteAccess: boolean;
+
 	@Index()
 	@Column('integer', {
 		default: 0,

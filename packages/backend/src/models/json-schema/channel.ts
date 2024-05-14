@@ -56,6 +56,11 @@ export const packedChannelSchema = {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
+		anonymousStrategy: {
+			type: 'string',
+			enum: ['daily', 'weekly', 'monthly', 'yearly', 'manual'],
+			nullable: true, optional: false,
+		},
 		usersCount: {
 			type: 'number',
 			nullable: false, optional: false,

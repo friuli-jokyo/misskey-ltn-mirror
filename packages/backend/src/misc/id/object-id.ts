@@ -29,7 +29,10 @@ function getRandom() {
 	return str;
 }
 
-export function genObjectId(t: number): string {
+export function genObjectId(t: number, immutable = false): string {
+	if (immutable) {
+		return getTime(t) + '0000000000000000';
+	}
 	return getTime(t) + getRandom();
 }
 

@@ -24,8 +24,11 @@ function getNoise(): string {
 	return counter.toString(36).padStart(2, '0').slice(-2);
 }
 
-export function genAid(t: number): string {
+export function genAid(t: number, immutable = false): string {
 	if (isNaN(t)) throw new Error('Failed to create AID: Invalid Date');
+	if (immutable) {
+		return getTime(t) + '00';
+	}
 	counter++;
 	return getTime(t) + getNoise();
 }

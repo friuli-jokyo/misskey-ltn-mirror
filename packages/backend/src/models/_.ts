@@ -13,6 +13,7 @@ import { MiApp } from '@/models/App.js';
 import { MiAvatarDecoration } from '@/models/AvatarDecoration.js';
 import { MiAuthSession } from '@/models/AuthSession.js';
 import { MiBlocking } from '@/models/Blocking.js';
+import { MiChannelAnonymousSalt } from '@/models/ChannelAnonymousSalt.js';
 import { MiChannelFollowing } from '@/models/ChannelFollowing.js';
 import { MiChannelFavorite } from '@/models/ChannelFavorite.js';
 import { MiClip } from '@/models/Clip.js';
@@ -84,6 +85,7 @@ export {
 	MiAvatarDecoration,
 	MiAuthSession,
 	MiBlocking,
+	MiChannelAnonymousSalt,
 	MiChannelFollowing,
 	MiChannelFavorite,
 	MiClip,
@@ -153,6 +155,7 @@ export type AppsRepository = Repository<MiApp>;
 export type AvatarDecorationsRepository = Repository<MiAvatarDecoration>;
 export type AuthSessionsRepository = Repository<MiAuthSession>;
 export type BlockingsRepository = Repository<MiBlocking>;
+export type ChannelAnonymousSaltsRepository = Repository<MiChannelAnonymousSalt>;
 export type ChannelFollowingsRepository = Repository<MiChannelFollowing>;
 export type ChannelFavoritesRepository = Repository<MiChannelFavorite>;
 export type ClipsRepository = Repository<MiClip>;

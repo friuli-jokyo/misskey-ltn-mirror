@@ -5,7 +5,7 @@
 
 import { Module } from '@nestjs/common';
 import { DI } from '@/di-symbols.js';
-import { MiAbuseUserReport, MiAccessToken, MiAd, MiAnnouncement, MiAnnouncementRead, MiAntenna, MiApp, MiAuthSession, MiAvatarDecoration, MiBlocking, MiChannel, MiChannelFavorite, MiChannelFollowing, MiClip, MiClipFavorite, MiClipNote, MiDriveFile, MiDriveFolder, MiEmoji, MiFlash, MiFlashLike, MiFollowRequest, MiFollowing, MiGalleryLike, MiGalleryPost, MiHashtag, MiInstance, MiMeta, MiModerationLog, MiMuting, MiNote, MiNoteFavorite, MiNoteReaction, MiNoteThreadMuting, MiNoteUnread, MiPage, MiPageLike, MiPasswordResetRequest, MiPoll, MiPollVote, MiPromoNote, MiPromoRead, MiRegistrationTicket, MiRegistryItem, MiRelay, MiRenoteMuting, MiRetentionAggregation, MiRole, MiRoleAssignment, MiSignin, MiSwSubscription, MiUsedUsername, MiUser, MiUserIp, MiUserKeypair, MiUserList, MiUserListFavorite, MiUserListMembership, MiUserMemo, MiUserNotePining, MiUserPending, MiUserProfile, MiUserPublickey, MiUserSecurityKey, MiWebhook, MiBubbleGameRecord, MiReversiGame } from './_.js';
+import { MiAbuseUserReport, MiAccessToken, MiAd, MiAnnouncement, MiAnnouncementRead, MiAntenna, MiApp, MiAuthSession, MiAvatarDecoration, MiBlocking, MiChannel, MiChannelAnonymousSalt, MiChannelFavorite, MiChannelFollowing, MiClip, MiClipFavorite, MiClipNote, MiDriveFile, MiDriveFolder, MiEmoji, MiFlash, MiFlashLike, MiFollowRequest, MiFollowing, MiGalleryLike, MiGalleryPost, MiHashtag, MiInstance, MiMeta, MiModerationLog, MiMuting, MiNote, MiNoteFavorite, MiNoteReaction, MiNoteThreadMuting, MiNoteUnread, MiPage, MiPageLike, MiPasswordResetRequest, MiPoll, MiPollVote, MiPromoNote, MiPromoRead, MiRegistrationTicket, MiRegistryItem, MiRelay, MiRenoteMuting, MiRetentionAggregation, MiRole, MiRoleAssignment, MiSignin, MiSwSubscription, MiUsedUsername, MiUser, MiUserIp, MiUserKeypair, MiUserList, MiUserListFavorite, MiUserListMembership, MiUserMemo, MiUserNotePining, MiUserPending, MiUserProfile, MiUserPublickey, MiUserSecurityKey, MiWebhook, MiBubbleGameRecord, MiReversiGame } from './_.js';
 import type { DataSource } from 'typeorm';
 import type { Provider } from '@nestjs/common';
 
@@ -327,6 +327,12 @@ const $channelsRepository: Provider = {
 	inject: [DI.db],
 };
 
+const $channelAnonymousSaltsRepository: Provider = {
+	provide: DI.channelAnonymousSaltsRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiChannelAnonymousSalt),
+	inject: [DI.db],
+};
+
 const $channelFollowingsRepository: Provider = {
 	provide: DI.channelFollowingsRepository,
 	useFactory: (db: DataSource) => db.getRepository(MiChannelFollowing),
@@ -468,6 +474,7 @@ const $reversiGamesRepository: Provider = {
 		$promoReadsRepository,
 		$relaysRepository,
 		$channelsRepository,
+		$channelAnonymousSaltsRepository,
 		$channelFollowingsRepository,
 		$channelFavoritesRepository,
 		$registryItemsRepository,
@@ -537,6 +544,7 @@ const $reversiGamesRepository: Provider = {
 		$promoReadsRepository,
 		$relaysRepository,
 		$channelsRepository,
+		$channelAnonymousSaltsRepository,
 		$channelFollowingsRepository,
 		$channelFavoritesRepository,
 		$registryItemsRepository,

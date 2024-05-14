@@ -326,8 +326,8 @@ export class NoteEntityService implements OnModuleInit {
 		const packed: Packed<'Note'> = await awaitAll({
 			id: note.id,
 			createdAt: this.idService.parse(note.id).date.toISOString(),
-			userId: note.anonymouslySendToUserId ? this.instanceActorService.getInstanceActor().then(user => user.id) : note.userId,
-			user: note.anonymouslySendToUserId ? this.instanceActorService.getInstanceActor().then(user => this.userEntityService.pack(user, me)) : this.userEntityService.pack(note.user ?? note.userId, me),
+			userId: note.anonymouslySendToUserId || note.anonymousChannelUsername ? this.instanceActorService.getInstanceActor().then(user => user.id) : note.userId,
+			user: note.anonymouslySendToUserId || note.anonymousChannelUsername ? this.instanceActorService.getInstanceActor().then(user => this.userEntityService.pack(user, me)) : this.userEntityService.pack(note.user ?? note.userId, me),
 			text: text,
 			cw: note.cw,
 			visibility: note.visibility,
@@ -359,6 +359,7 @@ export class NoteEntityService implements OnModuleInit {
 				allowRenoteToExternal: channel.allowRenoteToExternal,
 				userId: channel.userId,
 			} : undefined,
+			anonymousChannelUsername: note.anonymousChannelUsername ?? undefined,
 			mentions: note.mentions.length > 0 ? note.mentions : undefined,
 			uri: note.uri ?? undefined,
 			url: note.url ?? undefined,

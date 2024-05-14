@@ -79,6 +79,7 @@ class UserListChannel extends Channel {
 
 	@bindThis
 	private async onNote(note: Packed<'Note'>) {
+		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
 		const isMe = this.user!.id === note.userId;
 
 		// チャンネル投稿は無視する

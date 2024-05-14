@@ -39,6 +39,7 @@ class HashtagChannel extends Channel {
 
 	@bindThis
 	private async onNote(note: Packed<'Note'>) {
+		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
 		const noteTags = note.tags ? note.tags.map((t: string) => t.toLowerCase()) : [];
 		const matched = this.q.some(tags => tags.every(tag => noteTags.includes(normalizeForSearch(tag))));
 		if (!matched) return;

@@ -73,6 +73,10 @@ export const packedNoteSchema = {
 			optional: true, nullable: true,
 			ref: 'UserLite',
 		},
+		anonymousChannelUsername: {
+			type: 'string',
+			optional: true, nullable: false,
+		},
 		isHidden: {
 			type: 'boolean',
 			optional: true, nullable: false,
