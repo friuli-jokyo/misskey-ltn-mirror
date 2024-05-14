@@ -82,7 +82,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw new ApiError(meta.errors.cannotReportYourself);
 			}
 
-			if (await this.roleService.isAdministrator(user)) {
+			if (user.username !== ACTOR_USERNAME && await this.roleService.isAdministrator(user)) {
 				throw new ApiError(meta.errors.cannotReportAdmin);
 			}
 

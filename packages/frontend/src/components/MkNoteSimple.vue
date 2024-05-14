@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div :class="$style.root">
-	<MkAvatar v-if="!quote && !note.anonymouslySendToUser" :class="$style.avatar" :user="userOf(note)" :link="!note.anonymousChannelUsername" preview small/>
+	<MkAvatar v-if="!note.anonymouslySendToUser" :class="$style.avatar" :user="userOf(note)" :link="!note.anonymousChannelUsername" preview small/>
 	<div :class="$style.main">
 		<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
 		<div>
