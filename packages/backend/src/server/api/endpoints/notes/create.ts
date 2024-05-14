@@ -5,10 +5,10 @@
 
 import crypto from 'node:crypto';
 import ms from 'ms';
-import { FindOneOptions, In, LessThan, MoreThanOrEqual } from 'typeorm';
+import { In, LessThanOrEqual, Not } from 'typeorm';
 import { Inject, Injectable } from '@nestjs/common';
 import type { MiUser } from '@/models/User.js';
-import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository, ChannelAnonymousSaltsRepository, MiChannelAnonymousSalt } from '@/models/_.js';
+import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository, ChannelAnonymousSaltsRepository } from '@/models/_.js';
 import type { MiDriveFile } from '@/models/DriveFile.js';
 import type { MiNote } from '@/models/Note.js';
 import type { MiChannel } from '@/models/Channel.js';
@@ -426,32 +426,32 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 						break;
 				}
 				/* eslint-enable @typescript-eslint/no-non-null-assertion */
-				const options = {
+				let saltModel = await this.channelAnonymousSaltsRepository.findOne({
 					where: {
 						channelId: channel.id,
-						...since && { since: MoreThanOrEqual(this.idService.gen(since.valueOf(), true)) },
-						...until && { until: LessThan(this.idService.gen(until.valueOf(), true)) },
+						since: LessThanOrEqual(this.idService.gen(createdAt.valueOf(), true)),
+						until: Not(LessThanOrEqual(this.idService.gen(createdAt.valueOf(), true))),
 					},
 					order: {
-						since: 'ASC',
+						since: 'DESC',
 						until: {
 							direction: 'ASC',
 							nulls: 'FIRST',
 						},
 					},
-				} satisfies FindOneOptions<MiChannelAnonymousSalt>;
-				let saltModel = await this.channelAnonymousSaltsRepository.findOne(options);
+				});
 				if (!saltModel) {
 					saltModel = await this.channelAnonymousSaltsRepository.insert({
+						id: this.idService.gen(createdAt.valueOf()),
 						channelId: channel.id,
 						since: this.idService.gen(since ? since.valueOf() : 0, true),
 						until: until && this.idService.gen(until.valueOf(), true),
-						salt: crypto.getRandomValues(new BigUint64Array(1))[0].toString(),
-					}).catch(() => null).then(() => this.channelAnonymousSaltsRepository.findOneOrFail(options));
+						salt: crypto.getRandomValues(new BigInt64Array(1))[0].toString(),
+					}).then(x => this.channelAnonymousSaltsRepository.findOneByOrFail(x.identifiers[0]));
 				}
 				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 				const salt = BigInt(saltModel!.salt);
-				anonymousChannelUsername = `${channel.anonymousStrategy === 'manual' ? 'x' : channel.anonymousStrategy[0]}.${crypto.createHash('shake256').update(me.id + salt.toString(16).padStart(16, '0')).copy({ outputLength: 6 }).digest('base64url')}`;
+				anonymousChannelUsername = `${channel.anonymousStrategy === 'manual' ? 'x' : channel.anonymousStrategy[0]}.${crypto.createHash('shake256').update(me.id + salt.toString(16).padStart(16, '0'), 'utf-8').copy({ outputLength: 6 }).digest('base64url')}`;
 			}
 
 			// 投稿を作成
