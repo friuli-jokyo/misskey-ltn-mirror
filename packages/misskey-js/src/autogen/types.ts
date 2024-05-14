@@ -3960,6 +3960,7 @@ export type components = {
        */
       anonymouslySendToUserId?: string | null;
       anonymouslySendToUser?: components['schemas']['UserLite'] | null;
+      anonymousChannelUsername?: string;
       isHidden?: boolean;
       /** @enum {string} */
       visibility: 'public' | 'home' | 'followers' | 'specified';
@@ -4415,6 +4416,8 @@ export type components = {
       pinnedNoteIds: string[];
       color: string;
       isArchived: boolean;
+      /** @enum {string|null} */
+      anonymousStrategy: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'manual';
       usersCount: number;
       notesCount: number;
       isSensitive: boolean;
@@ -10684,6 +10687,10 @@ export type operations = {
           bannerId?: string | null;
           color?: string;
           isSensitive?: boolean | null;
+          /** @enum {string|null} */
+          anonymousStrategy?: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'manual';
+          /** @default false */
+          requirePublicWriteAccess?: boolean;
           allowRenoteToExternal?: boolean | null;
         };
       };
@@ -11134,6 +11141,9 @@ export type operations = {
           /** Format: misskey:id */
           bannerId?: string | null;
           isArchived?: boolean | null;
+          requirePublicWriteAccess?: boolean | null;
+          /** @default false */
+          regenerateAnonymousSalt?: boolean;
           pinnedNoteIds?: string[];
           color?: string;
           isSensitive?: boolean | null;
@@ -21537,6 +21547,8 @@ export type operations = {
            * @default null
            */
           channelId?: string | null;
+          /** @default false */
+          internal?: boolean;
         };
       };
     };

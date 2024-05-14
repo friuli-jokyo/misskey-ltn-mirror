@@ -162,12 +162,13 @@ export class SearchService {
 		userId?: MiNote['userId'] | null;
 		channelId?: MiNote['channelId'] | null;
 		host?: string | null;
+		internal?: boolean;
 	}, pagination: {
 		untilId?: MiNote['id'];
 		sinceId?: MiNote['id'];
 		limit?: number;
 	}): Promise<MiNote[]> {
-		if (this.meilisearch) {
+		if (!opts.internal && this.meilisearch) {
 			const filter: Q = {
 				op: 'and',
 				qs: [],
@@ -216,7 +217,7 @@ export class SearchService {
 			}
 
 			query
-				.andWhere('note.text ILIKE :q', { q: `%${ sqlLikeEscape(q) }%` })
+				.andWhere('concat_ws(\' \', note.cw, note.text) &@~ :q', { q: `${sqlLikeEscape(q)}` })
 				.innerJoinAndSelect('note.user', 'user')
 				.leftJoinAndSelect('note.reply', 'reply')
 				.leftJoinAndSelect('note.renote', 'renote')
