@@ -373,6 +373,10 @@ export class NoteCreateService implements OnApplicationShutdown {
 			data.text = null;
 		}
 
+		if (data.text == null && data.files == null && data.poll == null && data.renote == null) {
+			throw new Error('text or files or poll or renote is required');
+		}
+
 		let tags = data.apHashtags;
 		let emojis = data.apEmojis;
 		let mentionedUsers = data.apMentions;
@@ -898,7 +902,9 @@ export class NoteCreateService implements OnApplicationShutdown {
 		if (note.channelId) {
 			this.fanoutTimelineService.push(`channelTimeline:${note.channelId}`, note.id, this.config.perChannelMaxNoteCacheCount, r);
 
-			this.fanoutTimelineService.push(`userTimelineWithChannel:${user.id}`, note.id, note.userHost == null ? meta.perLocalUserUserTimelineCacheMax : meta.perRemoteUserUserTimelineCacheMax, r);
+			if (!note.anonymousChannelUsername) {
+				this.fanoutTimelineService.push(`userTimelineWithChannel:${user.id}`, note.id, note.userHost == null ? meta.perLocalUserUserTimelineCacheMax : meta.perRemoteUserUserTimelineCacheMax, r);
+			}
 
 			const channelFollowings = await this.channelFollowingsRepository.find({
 				where: {
@@ -913,7 +919,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 					this.fanoutTimelineService.push(`homeTimelineWithFiles:${channelFollowing.followerId}`, note.id, meta.perUserHomeTimelineCacheMax / 2, r);
 				}
 			}
-		} else if (!note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
+		} else if (!note.anonymouslySendToUserId) {
 			// TODO: キャッシュ？
 			// eslint-disable-next-line prefer-const
 			let [followings, userListMemberships] = await Promise.all([

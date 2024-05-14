@@ -315,19 +315,21 @@ export function getUserMenu(user: Misskey.entities.UserDetailed, router: IRouter
 		}]);
 		//}
 
-		menu = menu.concat([{ type: 'divider' }, {
-			icon: user.isMuted ? 'ti ti-eye' : 'ti ti-eye-off',
-			text: user.isMuted ? i18n.ts.unmute : i18n.ts.mute,
-			action: toggleMute,
-		}, {
-			icon: user.isRenoteMuted ? 'ti ti-repeat' : 'ti ti-repeat-off',
-			text: user.isRenoteMuted ? i18n.ts.renoteUnmute : i18n.ts.renoteMute,
-			action: toggleRenoteMute,
-		}, {
-			icon: 'ti ti-ban',
-			text: user.isBlocking ? i18n.ts.unblock : i18n.ts.block,
-			action: toggleBlock,
-		}]);
+		if (user.username !== 'instance.actor') {
+			menu = menu.concat([{ type: 'divider' }, {
+				icon: user.isMuted ? 'ti ti-eye' : 'ti ti-eye-off',
+				text: user.isMuted ? i18n.ts.unmute : i18n.ts.mute,
+				action: toggleMute,
+			}, {
+				icon: user.isRenoteMuted ? 'ti ti-repeat' : 'ti ti-repeat-off',
+				text: user.isRenoteMuted ? i18n.ts.renoteUnmute : i18n.ts.renoteMute,
+				action: toggleRenoteMute,
+			}, {
+				icon: 'ti ti-ban',
+				text: user.isBlocking ? i18n.ts.unblock : i18n.ts.block,
+				action: toggleBlock,
+			}]);
+		}
 
 		if (user.isFollowed) {
 			menu = menu.concat([{

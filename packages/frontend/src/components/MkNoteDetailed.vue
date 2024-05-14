@@ -59,7 +59,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkAvatar :class="$style.noteHeaderAvatar" :user="userOf(appearNote)" indicator link preview/>
 			<div :class="$style.noteHeaderBody">
 				<div>
-					<MkA v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(userOf(appearNote))">
+					<div v-if="appearNote.anonymouslySendToUser || appearNote.anonymousChannelUsername" v-user-preview="appearNote.user.id" :class="$style.noteHeaderName">
+						<MkUserName :nowrap="false" :user="userOf(appearNote)"/>
+					</div>
+					<MkA v-else v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote)">
 						<MkUserName :nowrap="false" :user="userOf(appearNote)"/>
 					</MkA>
 					<span v-if="appearNote.user.isBot" :class="$style.isBot">bot</span>
@@ -303,7 +306,6 @@ const renoteTime = shallowRef<HTMLElement>();
 const reactButton = shallowRef<HTMLElement>();
 const clipButton = shallowRef<HTMLElement>();
 const appearNote = computed(() => isRenote ? note.value.renote as Misskey.entities.Note : note.value);
-const appearUser = computed(() => appearNote.value.anonymousChannelUsername ? { ...appearNote.value.user, username: appearNote.value.anonymousChannelUsername, avatarUrl: `/identicon/@${appearNote.value.anonymousChannelUsername}@${hostname}` } : appearNote.value.user);
 const isMyRenote = $i && ($i.id === note.value.userId);
 const showContent = ref(appearNote.value.cw != null && defaultStore.state.autoOpenCws.some((word) => appearNote.value.cw!.includes(word)));
 const isDeleted = ref(false);
@@ -461,7 +463,7 @@ function reply(viaKeyboard = false): void {
 	});
 }
 
-async function react(viaKeyboard = false): void {
+async function react(viaKeyboard = false): Promise<void> {
 	pleaseLogin();
 	showMovedDialog();
 	if (appearNote.value.anonymousChannelUsername) {

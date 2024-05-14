@@ -45,7 +45,7 @@ export class IdService {
 	 */
 	@bindThis
 	public gen(time?: number, immutable = false): string {
-		const t = (!time || (time > Date.now())) ? Date.now() : time;
+		const t = (!time || !immutable && (time > Date.now())) ? Date.now() : time;
 
 		switch (this.method) {
 			case 'aid': return genAid(t, immutable);
