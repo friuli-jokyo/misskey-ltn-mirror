@@ -295,7 +295,7 @@ if (props.mention) {
 	text.value += ' ';
 }
 
-if (props.reply && (props.reply.user.username !== $i.username || (props.reply.user.host != null && props.reply.user.host !== host))) {
+if (props.reply && (props.reply.user.username !== $i.username && props.reply.user.username !== 'instance.actor' || (props.reply.user.host != null && props.reply.user.host !== host))) {
 	text.value = `@${props.reply.user.username}${props.reply.user.host != null ? '@' + toASCII(props.reply.user.host) : ''} `;
 }
 

@@ -22,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<i class="ti ti-repeat" style="margin-right: 4px;"></i>
 		<I18n :src="i18n.ts.renotedBy" tag="span" :class="$style.renoteText">
 			<template #user>
-				<div v-if="note.anonymousChannelUsername" v-user-preview="note.userId" :class="$style.renoteUserName" :to="userPage(note.user)">
+				<div v-if="note.anonymouslySendToUser || note.anonymousChannelUsername" v-user-preview="note.userId" :class="$style.renoteUserName">
 					<MkUserName :user="userOf(note)"/>
 				</div>
 				<MkA v-else v-user-preview="note.userId" :class="$style.renoteUserName" :to="userPage(note.user)">
@@ -50,7 +50,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	</div>
 	<article v-else :class="$style.article" @contextmenu.stop="onContextmenu">
 		<div v-if="appearNote.channel" :class="$style.colorBar" :style="{ background: appearNote.channel.color }"></div>
-		<MkAvatar :class="$style.avatar" :user="userOf(appearNote)" :link="!mock" :preview="!mock"/>
+		<MkAvatar :class="$style.avatar" :user="userOf(appearNote)" :link="!mock && !appearNote.anonymouslySendToUser && !appearNote.anonymousChannelUsername" :preview="!mock"/>
 		<div :class="$style.main">
 			<MkNoteHeader :note="appearNote" :mini="true"/>
 			<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>
