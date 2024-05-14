@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div :class="$style.root">
-	<MkAvatar v-if="!quote || !note.anonymouslySendToUser" :class="$style.avatar" :user="note.user" link preview small/>
+	<MkAvatar v-if="!quote && !note.anonymouslySendToUser" :class="$style.avatar" :user="userOf(note)" :link="!note.anonymousChannelUsername" preview small/>
 	<div :class="$style.main">
 		<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
 		<div>
@@ -34,6 +34,10 @@ const props = withDefaults(defineProps<{
 }>(), {
 	quote: false,
 });
+
+function userOf(note: Misskey.entities.Note): Misskey.entities.User {
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+}
 
 const showContent = ref(false);
 </script>

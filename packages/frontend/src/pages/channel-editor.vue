@@ -28,6 +28,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<template #label>{{ i18n.ts._channel.allowRenoteToExternal }}</template>
 			</MkSwitch>
 
+			<MkSwitch v-model="requirePublicWriteAccess">
+				<template #label>{{ i18n.ts._channel.requirePublicWriteAccess }}</template>
+			</MkSwitch>
+
+			<MkSelect v-model="anonymousStrategy" :readonly="channelId != null">
+				<template #label>{{ i18n.ts._channel.anonymousStrategy }}</template>
+				<option v-for="item in ['none', 'daily', 'weekly', 'monthly', 'yearly', 'manual']" :key="item" :value="item">{{ i18n.ts[item] }}</option>
+			</MkSelect>
+
 			<div>
 				<MkButton v-if="bannerId == null" @click="setBannerImage"><i class="ti ti-plus"></i> {{ i18n.ts._channel.setBanner }}</MkButton>
 				<div v-else-if="bannerUrl">
@@ -62,6 +71,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<div class="_buttons">
 				<MkButton primary @click="save()"><i class="ti ti-device-floppy"></i> {{ channelId ? i18n.ts.save : i18n.ts.create }}</MkButton>
 				<MkButton v-if="channelId" danger @click="archive()"><i class="ti ti-trash"></i> {{ i18n.ts.archive }}</MkButton>
+				<MkButton v-if="channel?.anonymousStrategy === 'manual'" danger @click="regenerateSalt()"><i class="ti ti-refresh-alert"></i> {{ i18n.ts.regenerate }}</MkButton>
 			</div>
 		</div>
 	</MkSpacer>
@@ -80,6 +90,7 @@ import { misskeyApi } from '@/scripts/misskey-api.js';
 import { definePageMetadata } from '@/scripts/page-metadata.js';
 import { i18n } from '@/i18n.js';
 import MkFolder from '@/components/MkFolder.vue';
+import MkSelect from '@/components/MkSelect.vue';
 import MkSwitch from '@/components/MkSwitch.vue';
 import MkTextarea from '@/components/MkTextarea.vue';
 import { useRouter } from '@/router/supplier.js';
@@ -100,6 +111,8 @@ const bannerId = ref<string | null>(null);
 const color = ref('#000');
 const isSensitive = ref(false);
 const allowRenoteToExternal = ref(true);
+const requirePublicWriteAccess = ref(false);
+const anonymousStrategy = ref<'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'manual'>('none');
 const pinnedNotes = ref<{ id: Misskey.entities.Note['id'] }[]>([]);
 
 watch(() => bannerId.value, async () => {
@@ -129,6 +142,8 @@ async function fetchChannel() {
 	}));
 	color.value = channel.value.color;
 	allowRenoteToExternal.value = channel.value.allowRenoteToExternal;
+	requirePublicWriteAccess.value = channel.value.requirePublicWriteAccess;
+	anonymousStrategy.value = channel.value.anonymousStrategy ?? 'none';
 }
 
 fetchChannel();
@@ -159,12 +174,16 @@ function save() {
 		color: color.value,
 		isSensitive: isSensitive.value,
 		allowRenoteToExternal: allowRenoteToExternal.value,
+		requirePublicWriteAccess: requirePublicWriteAccess.value,
 	};
 
 	if (props.channelId) {
 		params.channelId = props.channelId;
 		os.apiWithDialog('channels/update', params);
 	} else {
+		if (anonymousStrategy.value !== 'none') {
+			params.anonymousStrategy = anonymousStrategy.value;
+		}
 		os.apiWithDialog('channels/create', params).then(created => {
 			router.push(`/channels/${created.id}`);
 		});
@@ -183,6 +202,23 @@ async function archive() {
 	misskeyApi('channels/update', {
 		channelId: props.channelId,
 		isArchived: true,
+	}).then(() => {
+		os.success();
+	});
+}
+
+async function regenerateSalt() {
+	const { canceled } = await os.confirm({
+		type: 'warning',
+		title: i18n.ts.regenerate,
+		text: i18n.ts.areYouSure,
+	});
+
+	if (canceled) return;
+
+	misskeyApi('channels/update', {
+		channelId: props.channelId,
+		regenerateSalt: true,
 	}).then(() => {
 		os.success();
 	});

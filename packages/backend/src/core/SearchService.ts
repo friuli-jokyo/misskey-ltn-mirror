@@ -115,7 +115,7 @@ export class SearchService {
 	public async indexNote(note: MiNote): Promise<void> {
 		if (note.text == null && note.cw == null) return;
 		if (!['home', 'public'].includes(note.visibility)) return;
-		if (note.anonymouslySendToUserId) return;
+		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
 
 		if (this.meilisearch) {
 			switch (this.meilisearchIndexScope) {

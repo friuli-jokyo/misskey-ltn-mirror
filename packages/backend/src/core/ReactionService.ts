@@ -105,7 +105,7 @@ export class ReactionService {
 	@bindThis
 	public async create(user: { id: MiUser['id']; host: MiUser['host']; isBot: MiUser['isBot'] }, note: MiNote, _reaction?: string | null) {
 		// Check blocking
-		if (note.userId !== user.id && !note.anonymouslySendToUserId) {
+		if (note.userId !== user.id && !note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
 			const blocked = await this.userBlockingService.checkBlocked(note.userId, user.id);
 			if (blocked) {
 				throw new IdentifiableError('e70412a4-7197-4726-8e74-f3e0deb92aa7');
@@ -209,7 +209,7 @@ export class ReactionService {
 			} else {
 				if (note.visibility === 'public' && note.userHost == null && note.replyId == null) {
 					this.featuredService.updateGlobalNotesRanking(note.id, 1);
-					if (!note.anonymouslySendToUserId) {
+					if (!note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
 						this.featuredService.updatePerUserNotesRanking(note.userId, note.id, 1);
 					}
 				}

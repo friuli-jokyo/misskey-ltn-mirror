@@ -73,6 +73,16 @@ onBeforeUnmount(() => abortController.abort());
 
 async function toggleReaction() {
 	if (!canToggle.value) return;
+	if (props.note.anonymousChannelUsername) {
+		const { canceled } = await os.confirm({
+			type: 'warning',
+			title: i18n.ts.reactionsAreNotAnonymized,
+			text: i18n.ts.areYouSure,
+		});
+		if (canceled) {
+			return;
+		}
+	}
 
 	const oldReaction = props.note.myReaction;
 	if (oldReaction) {

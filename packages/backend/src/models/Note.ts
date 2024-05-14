@@ -195,6 +195,12 @@ export class MiNote {
 	@JoinColumn()
 	public anonymouslySendToUser: MiUser | null;
 
+	@Column('varchar', {
+		length: 128,
+		nullable: true,
+	})
+	public anonymousChannelUsername: string | null;
+
 	@Index()
 	@Column({
 		...id(),

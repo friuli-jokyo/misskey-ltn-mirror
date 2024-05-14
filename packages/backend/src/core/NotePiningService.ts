@@ -56,6 +56,7 @@ export class NotePiningService {
 			id: noteId,
 			userId: user.id,
 			anonymouslySendToUserId: IsNull(),
+			anonymousChannelUsername: IsNull(),
 		});
 
 		if (note == null) {
@@ -96,6 +97,7 @@ export class NotePiningService {
 			id: noteId,
 			userId: user.id,
 			anonymouslySendToUserId: IsNull(),
+			anonymousChannelUsername: IsNull(),
 		});
 
 		if (note == null) {

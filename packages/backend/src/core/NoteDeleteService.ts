@@ -105,7 +105,7 @@ export class NoteDeleteService {
 			const meta = await this.metaService.fetch();
 
 			this.notesChart.update(note, false);
-			if ((meta.enableChartsForRemoteUser || (user.host == null)) && !note.anonymouslySendToUserId) {
+			if ((meta.enableChartsForRemoteUser || (user.host == null)) && !note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
 				this.perUserNotesChart.update(user, note, false);
 			}
 
@@ -129,7 +129,7 @@ export class NoteDeleteService {
 			userId: user.id,
 		});
 
-		if (deleter && ((note.userId !== deleter.id) || note.anonymouslySendToUserId)) {
+		if (deleter && ((note.userId !== deleter.id) || note.anonymouslySendToUserId || note.anonymousChannelUsername)) {
 			const user = await this.usersRepository.findOneByOrFail({ id: note.userId });
 			this.moderationLogService.log(deleter, 'deleteNote', {
 				noteId: note.id,

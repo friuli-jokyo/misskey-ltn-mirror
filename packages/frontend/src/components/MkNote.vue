@@ -22,8 +22,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<i class="ti ti-repeat" style="margin-right: 4px;"></i>
 		<I18n :src="i18n.ts.renotedBy" tag="span" :class="$style.renoteText">
 			<template #user>
-				<MkA v-user-preview="note.userId" :class="$style.renoteUserName" :to="userPage(note.user)">
-					<MkUserName :user="note.user"/>
+				<div v-if="note.anonymousChannelUsername" v-user-preview="note.userId" :class="$style.renoteUserName" :to="userPage(note.user)">
+					<MkUserName :user="userOf(note)"/>
+				</div>
+				<MkA v-else v-user-preview="note.userId" :class="$style.renoteUserName" :to="userPage(note.user)">
+					<MkUserName :user="userOf(note)"/>
 				</MkA>
 			</template>
 		</I18n>
@@ -42,12 +45,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</div>
 	<div v-if="renoteCollapsed" :class="$style.collapsedRenoteTarget">
-		<MkAvatar :class="$style.collapsedRenoteTargetAvatar" :user="appearNote.user" link preview/>
+		<MkAvatar :class="$style.collapsedRenoteTargetAvatar" :user="userOf(appearNote)" link preview/>
 		<Mfm :text="getNoteSummary(appearNote)" :plain="true" :nowrap="true" :author="appearNote.user" :nyaize="'respect'" :class="$style.collapsedRenoteTargetText" @click="renoteCollapsed = false"/>
 	</div>
 	<article v-else :class="$style.article" @contextmenu.stop="onContextmenu">
 		<div v-if="appearNote.channel" :class="$style.colorBar" :style="{ background: appearNote.channel.color }"></div>
-		<MkAvatar :class="$style.avatar" :user="appearNote.user" :link="!mock && !appearNote.anonymouslySendToUser" :preview="!mock && !appearNote.anonymouslySendToUser"/>
+		<MkAvatar :class="$style.avatar" :user="userOf(appearNote)" :link="!mock" :preview="!mock"/>
 		<div :class="$style.main">
 			<MkNoteHeader :note="appearNote" :mini="true"/>
 			<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>
@@ -191,6 +194,7 @@ import { focusPrev, focusNext } from '@/scripts/focus.js';
 import { checkWordMute } from '@/scripts/check-word-mute.js';
 import { userPage } from '@/filters/user.js';
 import number from '@/filters/number.js';
+import { hostname } from '@/config.js';
 import * as os from '@/os.js';
 import * as sound from '@/scripts/sound.js';
 import { misskeyApi, misskeyApiGet } from '@/scripts/misskey-api.js';
@@ -220,6 +224,10 @@ const props = withDefaults(defineProps<{
 }>(), {
 	mock: false,
 });
+
+function userOf(note: Misskey.entities.Note): Misskey.entities.User {
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+}
 
 provide('mock', props.mock);
 
@@ -319,9 +327,19 @@ const keymap = {
 };
 
 provide('react', (reaction: string) => {
-	misskeyApi('notes/reactions/create', {
-		noteId: appearNote.value.id,
-		reaction: reaction,
+	const confirm = appearNote.value.anonymousChannelUsername
+		? os.confirm({
+				type: 'warning',
+				title: i18n.ts.reactionsAreNotAnonymized,
+				text: i18n.ts.areYouSure,
+			})
+		: Promise.resolve({ canceled: false })
+	confirm.then(({ canceled }) => {
+		if (canceled) return;
+		misskeyApi('notes/reactions/create', {
+			noteId: appearNote.value.id,
+			reaction: reaction,
+		});
 	});
 });
 
@@ -420,9 +438,19 @@ function reply(viaKeyboard = false): void {
 	});
 }
 
-function react(viaKeyboard = false): void {
+async function react(viaKeyboard = false): void {
 	pleaseLogin();
 	showMovedDialog();
+	if (appearNote.value.anonymousChannelUsername) {
+		const { canceled } = await os.confirm({
+			type: 'warning',
+			title: i18n.ts.reactionsAreNotAnonymized,
+			text: i18n.ts.areYouSure,
+		});
+		if (canceled) {
+			return;
+		}
+	}
 	if (appearNote.value.reactionAcceptance === 'likeOnly') {
 		sound.playMisskeySfx('reaction');
 

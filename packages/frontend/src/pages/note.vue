@@ -67,6 +67,10 @@ const props = defineProps<{
 	initialTab?: string;
 }>();
 
+function userOf(note: Misskey.entities.Note): Misskey.entities.User {
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+}
+
 const note = ref<null | Misskey.entities.Note>();
 const clips = ref<Misskey.entities.Clip[]>();
 const showPrev = ref<'user' | 'channel' | false>(false);
@@ -144,10 +148,12 @@ definePageMetadata(() => ({
 	title: i18n.ts.note,
 	...note.value ? {
 		subtitle: dateString(note.value.createdAt),
-		avatar: note.value.user,
+		avatar: note.value.anonymouslySendToUser ? undefined : userOf(note.value),
 		path: `/notes/${note.value.id}`,
 		share: {
-			title: i18n.tsx.noteOf({ user: note.value.user.name }),
+			title: note.value.anonymouslySendToUser
+				? i18n.tsx.anonymouslySendToUser({ user: note.value.anonymouslySendToUser.name ?? note.value.anonymouslySendToUser.username })
+				: i18n.tsx.noteOf({ user: note.value.anonymousChannelUsername ?? note.value.user.name ?? note.value.user.username }),
 			text: note.value.text,
 		},
 	} : {},

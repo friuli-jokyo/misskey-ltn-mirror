@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <div v-if="!muted" :class="[$style.root, { [$style.children]: depth > 1 }]">
 	<div :class="$style.main">
 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
-		<MkAvatar :class="$style.avatar" :user="note.user" :link="!note.anonymouslySendToUser" :preview="!note.anonymouslySendToUser" small/>
+		<MkAvatar :class="$style.avatar" :user="userOf(note)" :link="!note.anonymouslySendToUser && !note.anonymousChannelUsername" small/>
 		<div :class="$style.body">
 			<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
 			<div>
@@ -68,6 +68,10 @@ const props = withDefaults(defineProps<{
 }>(), {
 	depth: 1,
 });
+
+function userOf(note: Misskey.entities.Note): Misskey.entities.User {
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+}
 
 const muted = ref($i ? checkWordMute(props.note, $i, $i.mutedWords) : false);
 

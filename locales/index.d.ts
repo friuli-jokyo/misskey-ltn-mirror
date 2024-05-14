@@ -1449,6 +1449,30 @@ export interface Locale extends ILocale {
      */
     "yearX": ParameterizedString<"year">;
     /**
+     * 日次
+     */
+    "daily": string;
+    /**
+     * 週次
+     */
+    "weekly": string;
+    /**
+     * 月次
+     */
+    "monthly": string;
+    /**
+     * 年次
+     */
+    "yearly": string;
+    /**
+     * 手動
+     */
+    "manual": string;
+    /**
+     * リアクションは匿名化されません
+     */
+    "reactionsAreNotAnonymized": string;
+    /**
      * ページ
      */
     "pages": string;
@@ -7147,6 +7171,14 @@ export interface Locale extends ILocale {
          * チャンネル外へのリノートと引用リノートを許可する
          */
         "allowRenoteToExternal": string;
+        /**
+         * パブリックの投稿権限が必要
+         */
+        "requirePublicWriteAccess": string;
+        /**
+         * 匿名化戦略
+         */
+        "anonymousStrategy": string;
     };
     "_menuDisplay": {
         /**

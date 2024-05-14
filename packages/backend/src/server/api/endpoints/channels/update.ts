@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import crypto from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import type { DriveFilesRepository, ChannelsRepository } from '@/models/_.js';
+import type { DriveFilesRepository, ChannelsRepository, ChannelAnonymousSaltsRepository } from '@/models/_.js';
 import { ChannelEntityService } from '@/core/entities/ChannelEntityService.js';
 import { DI } from '@/di-symbols.js';
+import { IdService } from '@/core/IdService.js';
 import { RoleService } from '@/core/RoleService.js';
 import { ApiError } from '../../error.js';
 
@@ -53,6 +55,8 @@ export const paramDef = {
 		description: { type: 'string', nullable: true, minLength: 1, maxLength: 2048 },
 		bannerId: { type: 'string', format: 'misskey:id', nullable: true },
 		isArchived: { type: 'boolean', nullable: true },
+		requirePublicWriteAccess: { type: 'boolean', nullable: true },
+		regenerateAnonymousSalt: { type: 'boolean', default: false },
 		pinnedNoteIds: {
 			type: 'array',
 			items: {
@@ -72,11 +76,15 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.channelsRepository)
 		private channelsRepository: ChannelsRepository,
 
+		@Inject(DI.channelAnonymousSaltsRepository)
+		private channelAnonymousSaltsRepository: ChannelAnonymousSaltsRepository,
+
 		@Inject(DI.driveFilesRepository)
 		private driveFilesRepository: DriveFilesRepository,
 
 		private channelEntityService: ChannelEntityService,
 
+		private idService: IdService,
 		private roleService: RoleService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
@@ -108,12 +116,22 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				banner = null;
 			}
 
+			if (ps.regenerateAnonymousSalt && channel.anonymousStrategy === 'manual') {
+				await this.channelAnonymousSaltsRepository.insert({
+					channelId: channel.id,
+					since: this.idService.gen(undefined, true),
+					until: null,
+					salt: crypto.getRandomValues(new BigUint64Array(1))[0].toString(),
+				});
+			}
+
 			await this.channelsRepository.update(channel.id, {
 				...(ps.name !== undefined ? { name: ps.name } : {}),
 				...(ps.description !== undefined ? { description: ps.description } : {}),
 				...(ps.pinnedNoteIds !== undefined ? { pinnedNoteIds: ps.pinnedNoteIds } : {}),
 				...(ps.color !== undefined ? { color: ps.color } : {}),
 				...(typeof ps.isArchived === 'boolean' ? { isArchived: ps.isArchived } : {}),
+				...(typeof ps.requirePublicWriteAccess === 'boolean' ? { requirePublicWriteAccess: ps.requirePublicWriteAccess } : {}),
 				...(banner ? { bannerId: banner.id } : {}),
 				...(typeof ps.isSensitive === 'boolean' ? { isSensitive: ps.isSensitive } : {}),
 				...(typeof ps.allowRenoteToExternal === 'boolean' ? { allowRenoteToExternal: ps.allowRenoteToExternal } : {}),

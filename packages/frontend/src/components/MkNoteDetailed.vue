@@ -19,13 +19,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 	</div>
 	<MkNoteSub v-if="appearNote.reply" :note="appearNote.reply" :class="$style.replyTo"/>
 	<div v-if="isRenote" :class="$style.renote">
-		<MkAvatar :class="$style.renoteAvatar" :user="note.user" link preview/>
+		<MkAvatar :class="$style.renoteAvatar" :user="userOf(note)" link preview/>
 		<i class="ti ti-repeat" style="margin-right: 4px;"></i>
 		<span :class="$style.renoteText">
 			<I18n :src="i18n.ts.renotedBy" tag="span">
 				<template #user>
 					<MkA v-user-preview="note.userId" :class="$style.renoteName" :to="userPage(note.user)">
-						<MkUserName :user="note.user"/>
+						<MkUserName :user="userOf(note)"/>
 					</MkA>
 				</template>
 			</I18n>
@@ -48,19 +48,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<span :class="$style.noteHeaderName">
 				<I18n :src="i18n.ts.anonymouslySendToUser" tag="span">
 					<template #user>
-						<MkA v-user-preview="note.anonymouslySendToUser.id" :to="userPage(note.anonymouslySendToUser)">
-							<MkUserName :user="note.anonymouslySendToUser"/>
+						<MkA v-user-preview="appearNote.anonymouslySendToUser.id" :to="userPage(appearNote.anonymouslySendToUser)">
+							<MkUserName :user="appearNote.anonymouslySendToUser"/>
 						</MkA>
 					</template>
 				</I18n>
 			</span>
 		</header>
 		<header v-else :class="$style.noteHeader">
-			<MkAvatar :class="$style.noteHeaderAvatar" :user="appearNote.user" indicator link preview/>
+			<MkAvatar :class="$style.noteHeaderAvatar" :user="userOf(appearNote)" indicator link preview/>
 			<div :class="$style.noteHeaderBody">
 				<div>
-					<MkA v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote.user)">
-						<MkUserName :nowrap="false" :user="appearNote.user"/>
+					<MkA v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(userOf(appearNote))">
+						<MkUserName :nowrap="false" :user="userOf(appearNote)"/>
 					</MkA>
 					<span v-if="appearNote.user.isBot" :class="$style.isBot">bot</span>
 					<div :class="$style.noteHeaderInfo">
@@ -72,7 +72,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<span v-if="appearNote.localOnly" style="margin-left: 0.5em;" :title="i18n.ts._visibility['disableFederation']"><i class="ti ti-rocket-off"></i></span>
 					</div>
 				</div>
-				<div :class="$style.noteHeaderUsername"><MkAcct :user="appearNote.user"/></div>
+				<div v-if="!appearNote.anonymousChannelUsername" :class="$style.noteHeaderUsername"><MkAcct :user="appearNote.user"/></div>
 				<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>
 			</div>
 		</header>
@@ -173,7 +173,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<template #default="{ items }">
 					<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); grid-gap: 12px;">
 						<MkA v-for="item in items" :key="item.id" :to="userPage(item.user)">
-							<MkUserCardMini :user="item.user" :withChart="false"/>
+							<MkUserCardMini :user="userOf(item)" :withChart="false"/>
 						</MkA>
 					</div>
 				</template>
@@ -236,6 +236,7 @@ import { defaultStore, noteViewInterruptors } from '@/store.js';
 import { reactionPicker } from '@/scripts/reaction-picker.js';
 import { extractUrlFromMfm } from '@/scripts/extract-url-from-mfm.js';
 import { $i } from '@/account.js';
+import { hostname } from '@/config.js';
 import { i18n } from '@/i18n.js';
 import { getNoteClipMenu, getNoteMenu, getRenoteMenu } from '@/scripts/get-note-menu.js';
 import { useNoteCapture } from '@/scripts/use-note-capture.js';
@@ -262,6 +263,10 @@ const props = withDefaults(defineProps<{
 const inChannel = inject('inChannel', null);
 
 const note = ref(deepClone(props.note));
+
+function userOf(note: Misskey.entities.Note): Misskey.entities.User {
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+}
 
 // plugin
 if (noteViewInterruptors.length > 0) {
@@ -298,6 +303,7 @@ const renoteTime = shallowRef<HTMLElement>();
 const reactButton = shallowRef<HTMLElement>();
 const clipButton = shallowRef<HTMLElement>();
 const appearNote = computed(() => isRenote ? note.value.renote as Misskey.entities.Note : note.value);
+const appearUser = computed(() => appearNote.value.anonymousChannelUsername ? { ...appearNote.value.user, username: appearNote.value.anonymousChannelUsername, avatarUrl: `/identicon/@${appearNote.value.anonymousChannelUsername}@${hostname}` } : appearNote.value.user);
 const isMyRenote = $i && ($i.id === note.value.userId);
 const showContent = ref(appearNote.value.cw != null && defaultStore.state.autoOpenCws.some((word) => appearNote.value.cw!.includes(word)));
 const isDeleted = ref(false);
@@ -322,9 +328,19 @@ const keymap = {
 };
 
 provide('react', (reaction: string) => {
-	misskeyApi('notes/reactions/create', {
-		noteId: appearNote.value.id,
-		reaction: reaction,
+	const confirm = appearNote.value.anonymousChannelUsername
+		? os.confirm({
+				type: 'warning',
+				title: i18n.ts.reactionsAreNotAnonymized,
+				text: i18n.ts.areYouSure,
+			})
+		: Promise.resolve({ canceled: false })
+	confirm.then(({ canceled }) => {
+		if (canceled) return;
+		misskeyApi('notes/reactions/create', {
+			noteId: appearNote.value.id,
+			reaction: reaction,
+		});
 	});
 });
 
@@ -445,9 +461,19 @@ function reply(viaKeyboard = false): void {
 	});
 }
 
-function react(viaKeyboard = false): void {
+async function react(viaKeyboard = false): void {
 	pleaseLogin();
 	showMovedDialog();
+	if (appearNote.value.anonymousChannelUsername) {
+		const { canceled } = await os.confirm({
+			type: 'warning',
+			title: i18n.ts.reactionsAreNotAnonymized,
+			text: i18n.ts.areYouSure,
+		});
+		if (canceled) {
+			return;
+		}
+	}
 	if (appearNote.value.reactionAcceptance === 'likeOnly') {
 		sound.playMisskeySfx('reaction');
 

@@ -1,6 +1,7 @@
 import { Ref, readonly, ref } from 'vue';
 import { misskeyApi } from './misskey-api.js';
 import type * as Misskey from 'misskey-js';
+import { hostname } from '@/config.js';
 
 export type AvatarsMap = Map<Misskey.entities.User['id'], Pick<Misskey.entities.User, 'id' | 'name' | 'username' | 'host' | 'avatarBlurhash'> & { [T in keyof Misskey.entities.User & 'avatarUrl']: NonNullable<Misskey.entities.User[T]> } | null | undefined>;
 
@@ -11,11 +12,17 @@ export const usernameAndHostToIdMap = readonly(usernameAndHostToIdMapRaw);
 export const avatarsMap = readonly(avatarsMapRaw);
 
 export function usernameAndHostToKey(username: string, host: string | null) {
+	if (host === hostname) {
+		host = null;
+	}
 	return `${username}@${host ?? '.'}`;
 }
 
 export function loadUsers(...specifiers: readonly Readonly<Pick<Misskey.entities.User, 'id'> | Pick<Misskey.entities.User, 'username' | 'host'>>[]) {
-	const users = specifiers.filter(user => {
+	const users = specifiers.map(user => ('id' in user ? user : {
+		username: user.username,
+		host: user.host === hostname ? null : user.host,
+	})).filter(user => {
 		if ('id' in user) {
 			return !avatarsMapRaw.value.has(user.id);
 		} else {

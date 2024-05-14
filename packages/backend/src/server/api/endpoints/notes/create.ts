@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import crypto from 'node:crypto';
 import ms from 'ms';
-import { In } from 'typeorm';
+import { FindOneOptions, In, LessThan, MoreThanOrEqual } from 'typeorm';
 import { Inject, Injectable } from '@nestjs/common';
 import type { MiUser } from '@/models/User.js';
-import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository } from '@/models/_.js';
+import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository, ChannelAnonymousSaltsRepository, MiChannelAnonymousSalt } from '@/models/_.js';
 import type { MiDriveFile } from '@/models/DriveFile.js';
 import type { MiNote } from '@/models/Note.js';
 import type { MiChannel } from '@/models/Channel.js';
@@ -20,6 +21,7 @@ import { isQuote, isRenote } from '@/misc/is-renote.js';
 import { MetaService } from '@/core/MetaService.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
+import { IdService } from '@/core/IdService.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -241,6 +243,10 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.channelsRepository)
 		private channelsRepository: ChannelsRepository,
 
+		@Inject(DI.channelAnonymousSaltsRepository)
+		private channelAnonymousSaltsRepository: ChannelAnonymousSaltsRepository,
+
+		private idService: IdService,
 		private noteEntityService: NoteEntityService,
 		private noteCreateService: NoteCreateService,
 	) {
@@ -281,7 +287,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				}
 
 				// Check blocking
-				if (renote.userId !== me.id && !renote.anonymouslySendToUserId) {
+				if (renote.userId !== me.id && !renote.anonymouslySendToUserId && !renote.anonymousChannelUsername) {
 					const blockExist = await this.blockingsRepository.exists({
 						where: {
 							blockerId: renote.userId,
@@ -331,7 +337,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				}
 
 				// Check blocking
-				if (reply.userId !== me.id && !reply.anonymouslySendToUserId) {
+				if (reply.userId !== me.id && !reply.anonymouslySendToUserId && !reply.anonymousChannelUsername) {
 					const blockExist = await this.blockingsRepository.exists({
 						where: {
 							blockerId: reply.userId,
@@ -384,10 +390,74 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				}
 			}
 
+			const createdAt = new Date();
+			let anonymousChannelUsername: string | null = null;
+			if (channel?.anonymousStrategy) {
+				let since: Date | null = new Date(Math.floor(createdAt.valueOf() / 864e5) * 864e5);
+				switch (channel.anonymousStrategy) {
+					case 'weekly':
+						since = new Date(since.valueOf() - since.getDay() * 864e5);
+						break;
+					case 'monthly':
+						since = new Date(since.valueOf() - (since.getDate() - 1) * 864e5);
+						break;
+					case 'yearly':
+						since = new Date(since.valueOf() - (since.getDate() - 1) * 864e5);
+						since.setMonth(0);
+						break;
+					case 'manual':
+						since = null;
+						break;
+				}
+				let until: Date | null = since && new Date(since.valueOf());
+				/* eslint-disable @typescript-eslint/no-non-null-assertion */
+				switch (channel.anonymousStrategy) {
+					case 'daily':
+						until = new Date(until!.valueOf() + 864e5);
+						break;
+					case 'weekly':
+						until = new Date(until!.valueOf() + 7 * 864e5);
+						break;
+					case 'monthly':
+						until!.setMonth(until!.getMonth() + 1);
+						break;
+					case 'yearly':
+						until!.setFullYear(until!.getFullYear() + 1);
+						break;
+				}
+				/* eslint-enable @typescript-eslint/no-non-null-assertion */
+				const options = {
+					where: {
+						channelId: channel.id,
+						...since && { since: MoreThanOrEqual(this.idService.gen(since.valueOf(), true)) },
+						...until && { until: LessThan(this.idService.gen(until.valueOf(), true)) },
+					},
+					order: {
+						since: 'ASC',
+						until: {
+							direction: 'ASC',
+							nulls: 'FIRST',
+						},
+					},
+				} satisfies FindOneOptions<MiChannelAnonymousSalt>;
+				let saltModel = await this.channelAnonymousSaltsRepository.findOne(options);
+				if (!saltModel) {
+					saltModel = await this.channelAnonymousSaltsRepository.insert({
+						channelId: channel.id,
+						since: this.idService.gen(since ? since.valueOf() : 0, true),
+						until: until && this.idService.gen(until.valueOf(), true),
+						salt: crypto.getRandomValues(new BigUint64Array(1))[0].toString(),
+					}).catch(() => null).then(() => this.channelAnonymousSaltsRepository.findOneOrFail(options));
+				}
+				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+				const salt = BigInt(saltModel!.salt);
+				anonymousChannelUsername = `${channel.anonymousStrategy === 'manual' ? 'x' : channel.anonymousStrategy[0]}.${crypto.createHash('shake256').update(me.id + salt.toString(16).padStart(16, '0')).copy({ outputLength: 6 }).digest('base64url')}`;
+			}
+
 			// 投稿を作成
 			try {
 				const note = await this.noteCreateService.create(me, {
-					createdAt: new Date(),
+					createdAt,
 					files: files,
 					poll: ps.poll ? {
 						choices: ps.poll.choices,
@@ -404,6 +474,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					visibleUsers,
 					channel,
 					anonymouslySendToUser,
+					anonymousChannelUsername,
 					apMentions: ps.noExtractMentions ? [] : undefined,
 					apHashtags: ps.noExtractHashtags ? [] : undefined,
 					apEmojis: ps.noExtractEmojis ? [] : undefined,

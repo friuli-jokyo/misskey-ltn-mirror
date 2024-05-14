@@ -65,7 +65,7 @@ export class NoteReadService implements OnApplicationShutdown {
 			userId: userId,
 			isSpecified: params.isSpecified,
 			isMentioned: params.isMentioned,
-			noteUserId: note.anonymouslySendToUserId ? (await this.instanceActorService.getInstanceActor()).id : note.userId,
+			noteUserId: note.anonymouslySendToUserId || note.anonymousChannelUsername ? (await this.instanceActorService.getInstanceActor()).id : note.userId,
 		};
 
 		await this.noteUnreadsRepository.insert(unread);
