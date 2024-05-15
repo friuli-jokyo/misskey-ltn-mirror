@@ -46,6 +46,7 @@ export type RolePolicies = {
 	canUseTranslator: boolean;
 	canHideAds: boolean;
 	driveCapacityMb: number;
+	driveUploadBandwidthDurationHrCapacityMbPairs: [durationHr: number, capacityMb: number][];
 	alwaysMarkNsfw: boolean;
 	pinLimit: number;
 	antennaLimit: number;
@@ -74,6 +75,7 @@ export const DEFAULT_POLICIES: RolePolicies = {
 	canUseTranslator: true,
 	canHideAds: false,
 	driveCapacityMb: 100,
+	driveUploadBandwidthDurationHrCapacityMbPairs: [],
 	alwaysMarkNsfw: false,
 	pinLimit: 5,
 	antennaLimit: 5,
@@ -375,6 +377,7 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
 			canUseTranslator: calc('canUseTranslator', vs => vs.some(v => v === true)),
 			canHideAds: calc('canHideAds', vs => vs.some(v => v === true)),
 			driveCapacityMb: calc('driveCapacityMb', vs => Math.max(...vs)),
+			driveUploadBandwidthDurationHrCapacityMbPairs: calc('driveUploadBandwidthDurationHrCapacityMbPairs', vs => vs.flat()),
 			alwaysMarkNsfw: calc('alwaysMarkNsfw', vs => vs.some(v => v === true)),
 			pinLimit: calc('pinLimit', vs => Math.max(...vs)),
 			antennaLimit: calc('antennaLimit', vs => Math.max(...vs)),

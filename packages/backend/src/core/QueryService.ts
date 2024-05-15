@@ -52,14 +52,14 @@ export class QueryService {
 			q.andWhere(`${q.alias}.id < :untilId`, { untilId: untilId });
 			q.orderBy(`${q.alias}.id`, 'DESC');
 		} else if (sinceDate && untilDate) {
-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: this.idService.gen(sinceDate) });
-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: this.idService.gen(untilDate) });
+			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: this.idService.gen(sinceDate, true) });
+			q.andWhere(`${q.alias}.id < :untilId`, { untilId: this.idService.gen(untilDate, true) });
 			q.orderBy(`${q.alias}.id`, 'DESC');
 		} else if (sinceDate) {
-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: this.idService.gen(sinceDate) });
+			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: this.idService.gen(sinceDate, true) });
 			q.orderBy(`${q.alias}.id`, 'ASC');
 		} else if (untilDate) {
-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: this.idService.gen(untilDate) });
+			q.andWhere(`${q.alias}.id < :untilId`, { untilId: this.idService.gen(untilDate, true) });
 			q.orderBy(`${q.alias}.id`, 'DESC');
 		} else {
 			q.orderBy(`${q.alias}.id`, 'DESC');

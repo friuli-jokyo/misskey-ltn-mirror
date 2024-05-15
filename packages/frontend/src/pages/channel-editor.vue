@@ -32,7 +32,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<template #label>{{ i18n.ts._channel.requirePublicWriteAccess }}</template>
 			</MkSwitch>
 
-			<MkSelect v-model="anonymousStrategy" :disabled="channelId != null" :readonly="channelId != null">
+			<MkSelect v-model="anonymousStrategy" :readonly="channelId != null">
 				<template #label>{{ i18n.ts._channel.anonymousStrategy }}</template>
 				<option v-for="item in ['none', 'daily', 'weekly', 'monthly', 'yearly', 'manual']" :key="item" :value="item">{{ i18n.ts[item] }}</option>
 			</MkSelect>

@@ -224,6 +224,25 @@ export const packedRolePoliciesSchema = {
 			type: 'integer',
 			optional: false, nullable: false,
 		},
+		driveUploadBandwidthDurationHrCapacityMbPairs: {
+			type: 'array',
+			optional: false, nullable: false,
+			items: {
+				type: 'array',
+				optional: false, nullable: false,
+				prefixItems: [
+					{
+						type: 'integer',
+						optional: false, nullable: false,
+					},
+					{
+						type: 'integer',
+						optional: false, nullable: false,
+					},
+				],
+				items: false,
+			},
+		},
 		alwaysMarkNsfw: {
 			type: 'boolean',
 			optional: false, nullable: false,

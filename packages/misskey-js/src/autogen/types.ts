@@ -4691,6 +4691,7 @@ export type components = {
       canUseTranslator: boolean;
       canHideAds: boolean;
       driveCapacityMb: number;
+      driveUploadBandwidthDurationHrCapacityMbPairs: [number, number][];
       alwaysMarkNsfw: boolean;
       pinLimit: number;
       antennaLimit: number;

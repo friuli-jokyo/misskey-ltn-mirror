@@ -50,7 +50,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	</div>
 	<article v-else :class="$style.article" @contextmenu.stop="onContextmenu">
 		<div v-if="appearNote.channel" :class="$style.colorBar" :style="{ background: appearNote.channel.color }"></div>
-		<MkAvatar :class="$style.avatar" :user="userOf(appearNote)" :link="!mock && !appearNote.anonymouslySendToUser && !appearNote.anonymousChannelUsername" :preview="!mock"/>
+		<MkAvatar v-if="!appearNote.anonymouslySendToUser" :class="$style.avatar" :user="userOf(appearNote)" :link="!mock && !appearNote.anonymousChannelUsername" :preview="!mock"/>
 		<div :class="$style.main">
 			<MkNoteHeader :note="appearNote" :mini="true"/>
 			<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>

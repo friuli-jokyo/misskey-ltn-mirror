@@ -201,6 +201,10 @@ onMounted(() => {
 	text-align: center;
 	border-top: solid 1px var(--divider);
 	border-bottom: solid 1px var(--divider);
+
+	&:only-child {
+		border: 0;
+	}
 }
 
 .mfm {

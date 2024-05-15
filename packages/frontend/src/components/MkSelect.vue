@@ -126,6 +126,7 @@ onMounted(() => {
 });
 
 function show() {
+	if (props.readonly || props.disabled) return;
 	focused.value = true;
 	opening.value = true;
 

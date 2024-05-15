@@ -4,7 +4,8 @@
  */
 
 import { forwardRef, Inject, Injectable } from '@nestjs/common';
-import { In } from 'typeorm';
+import * as Redis from 'ioredis';
+import { DataSource, In, Repository } from 'typeorm';
 import { DI } from '@/di-symbols.js';
 import type { DriveFilesRepository } from '@/models/_.js';
 import type { Config } from '@/config.js';
@@ -31,9 +32,17 @@ type PackOptions = {
 
 @Injectable()
 export class DriveFileEntityService {
+	private chartPerUserDrivesRepository: Repository<never>;
+
 	constructor(
 		@Inject(DI.config)
 		private config: Config,
+
+		@Inject(DI.db)
+		private db: DataSource,
+
+		@Inject(DI.redis)
+		private redisClient: Redis.Redis,
 
 		@Inject(DI.driveFilesRepository)
 		private driveFilesRepository: DriveFilesRepository,
@@ -47,6 +56,7 @@ export class DriveFileEntityService {
 		private videoProcessingService: VideoProcessingService,
 		private idService: IdService,
 	) {
+		this.chartPerUserDrivesRepository = db.getRepository('__chart__per_user_drive');
 	}
 
 	@bindThis
@@ -146,6 +156,22 @@ export class DriveFileEntityService {
 			.getRawOne();
 
 		return parseInt(sum, 10) || 0;
+	}
+
+	@bindThis
+	public async calcDriveBandwidthOf(user: MiUser['id'] | { id: MiUser['id'] }, durationHr: number): Promise<number> {
+		const id = typeof user === 'object' ? user.id : user;
+
+		const { sum } = await this.chartPerUserDrivesRepository
+			.createQueryBuilder('chart')
+			.where('chart.group = :id', { id })
+			.andWhere('chart.date >= :date', { date: Math.floor(Date.now() / 36e5 - durationHr) * 36e5 })
+			.select('SUM(chart.___incSize)', 'sum')
+			.getRawOne();
+
+		const add = await this.redisClient.get(`driveubh:${id}`);
+
+		return parseInt(sum || '0', 10) + parseInt(add || '0', 10);
 	}
 
 	@bindThis
