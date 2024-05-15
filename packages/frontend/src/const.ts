@@ -86,6 +86,7 @@ export const ROLE_POLICIES = [
 	'canUseTranslator',
 	'canHideAds',
 	'driveCapacityMb',
+	'driveUploadBandwidthDurationHrCapacityMbPairs',
 	'alwaysMarkNsfw',
 	'pinLimit',
 	'antennaLimit',

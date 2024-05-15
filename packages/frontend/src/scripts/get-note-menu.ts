@@ -375,7 +375,7 @@ export function getNoteMenu(props: {
 				text: i18n.ts.pin,
 				action: () => togglePin(true),
 			} : undefined,
-			{
+			...(appearNote.user.username !== 'instance.actor' ? [{
 				type: 'parent' as const,
 				icon: 'ti ti-user',
 				text: i18n.ts.user,
@@ -385,7 +385,7 @@ export function getNoteMenu(props: {
 					cleanups.push(cleanup);
 					return menu;
 				},
-			},
+			}] : []),
 			/*
 		...($i.isModerator || $i.isAdmin ? [
 			{ type: 'divider' },

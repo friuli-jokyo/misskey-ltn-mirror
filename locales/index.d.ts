@@ -6591,6 +6591,10 @@ export interface Locale extends ILocale {
              */
             "driveCapacity": string;
             /**
+             * ドライブアップロード帯域
+             */
+            "driveUploadBandwidth": string;
+            /**
              * ファイルにNSFWを常に付与
              */
             "alwaysMarkNsfw": string;

@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
 import sharp from 'sharp';
 import { sharpBmp } from '@misskey-dev/sharp-read-bmp';
+import * as Redis from 'ioredis';
 import { IsNull } from 'typeorm';
 import { DeleteObjectCommandInput, PutObjectCommandInput, NoSuchKey } from '@aws-sdk/client-s3';
 import { DI } from '@/di-symbols.js';
@@ -97,6 +98,9 @@ export class DriveService {
 	constructor(
 		@Inject(DI.config)
 		private config: Config,
+
+		@Inject(DI.redis)
+		private redisClient: Redis.Redis,
 
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
@@ -527,6 +531,12 @@ export class DriveService {
 				}
 				await this.expireOldFile(await this.usersRepository.findOneByOrFail({ id: user.id }) as MiRemoteUser, driveCapacity - info.size);
 			}
+
+			for (const [usage, capacityMb] of await Promise.all(policies.driveUploadBandwidthDurationHrCapacityMbPairs.map(([durationHr, capacityMb]) => Promise.all([this.driveFileEntityService.calcDriveBandwidthOf(user, durationHr), capacityMb])))) {
+				if (capacityMb * 1024 * 1024 < usage + info.size) {
+					throw new IdentifiableError('c6244ed2-a39a-4e1c-bf93-f0fbd7764fa6', 'No free bandwidth.');
+				}
+			}
 		}
 		//#endregion
 
@@ -642,6 +652,14 @@ export class DriveService {
 		if (file.userHost == null) {
 			// ローカルユーザーのみ
 			this.perUserDriveChart.update(file, true);
+
+			if (user) {
+				const key = `driveubh:${user.id}`;
+				this.redisClient.multi()
+					.incrby(key, info.size)
+					.expireat(key, (Math.floor(Date.now() / 36e5) + 1) * 36e2)
+					.exec();
+			}
 		} else {
 			if ((await this.metaService.fetch()).enableChartsForFederatedInstances) {
 				this.instanceChart.updateDrive(file, true);

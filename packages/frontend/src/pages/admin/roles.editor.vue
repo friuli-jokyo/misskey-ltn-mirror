@@ -358,6 +358,24 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 			</MkFolder>
 
+			<MkFolder v-if="matchQuery([i18n.ts._role._options.driveUploadBandwidth, 'driveUploadBandwidthDurationMsCapacityMbPairs'])">
+				<template #label>{{ i18n.ts._role._options.driveUploadBandwidth }}</template>
+				<template #suffix>
+					<span v-if="role.policies.driveUploadBandwidthDurationMsCapacityMbPairs.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
+					<span v-else>{{ JSON.stringify(role.policies.driveUploadBandwidthDurationMsCapacityMbPairs.value) }}</span>
+					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.driveUploadBandwidthDurationMsCapacityMbPairs)"></i></span>
+				</template>
+				<div class="_gaps">
+					<MkSwitch v-model="role.policies.driveUploadBandwidthDurationMsCapacityMbPairs.useDefault" :readonly="readonly">
+						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
+					</MkSwitch>
+					<MkCodeEditor v-model="driveUploadBandwidthDurationMsCapacityMbPairs" lang="json5"/>
+					<MkRange v-model="role.policies.driveUploadBandwidthDurationMsCapacityMbPairs.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
+						<template #label>{{ i18n.ts._role.priority }}</template>
+					</MkRange>
+				</div>
+			</MkFolder>
+
 			<MkFolder v-if="matchQuery([i18n.ts._role._options.alwaysMarkNsfw, 'alwaysMarkNsfw'])">
 				<template #label>{{ i18n.ts._role._options.alwaysMarkNsfw }}</template>
 				<template #suffix>
@@ -577,9 +595,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { watch, ref, computed } from 'vue';
+import JSON5 from 'json5';
 import { throttle } from 'throttle-debounce';
 import RolesEditorFormula from './RolesEditorFormula.vue';
 import MkInput from '@/components/MkInput.vue';
+import MkCodeEditor from '@/components/MkCodeEditor.vue';
 import MkColorInput from '@/components/MkColorInput.vue';
 import MkSelect from '@/components/MkSelect.vue';
 import MkTextarea from '@/components/MkTextarea.vue';
@@ -602,6 +622,15 @@ const props = defineProps<{
 }>();
 
 const role = ref(deepClone(props.modelValue));
+
+const driveUploadBandwidthDurationMsCapacityMbPairs = computed({
+	get() {
+		return JSON5.stringify(role.value.policies.driveUploadBandwidthDurationMsCapacityMbPairs.value, null, 2);
+	},
+	set(value) {
+		role.value.policies.driveUploadBandwidthDurationMsCapacityMbPairs.value = JSON5.parse(value);
+	},
+});
 
 // fill missing policy
 for (const ROLE_POLICY of ROLE_POLICIES) {

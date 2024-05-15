@@ -62,10 +62,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<div v-if="appearNote.anonymouslySendToUser || appearNote.anonymousChannelUsername" v-user-preview="appearNote.user.id" :class="$style.noteHeaderName">
 						<MkUserName :nowrap="false" :user="userOf(appearNote)"/>
 					</div>
-					<MkA v-else v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote)">
+					<MkA v-else v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote.user)">
 						<MkUserName :nowrap="false" :user="userOf(appearNote)"/>
 					</MkA>
-					<span v-if="appearNote.user.isBot" :class="$style.isBot">bot</span>
+					<span v-if="appearNote.user.isBot" :class="$style.isBot">{{ note.user.username === 'instance.actor' && note.user.host === null ? 'system' : 'bot' }}</span>
 					<div :class="$style.noteHeaderInfo">
 						<span v-if="appearNote.visibility !== 'public'" style="margin-left: 0.5em;" :title="i18n.ts._visibility[appearNote.visibility]">
 							<i v-if="appearNote.visibility === 'home'" class="ti ti-home"></i>
