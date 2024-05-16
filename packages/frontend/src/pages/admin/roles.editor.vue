@@ -358,19 +358,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 			</MkFolder>
 
-			<MkFolder v-if="matchQuery([i18n.ts._role._options.driveUploadBandwidth, 'driveUploadBandwidthDurationMsCapacityMbPairs'])">
+			<MkFolder v-if="matchQuery([i18n.ts._role._options.driveUploadBandwidth, 'driveUploadBandwidthDurationHrCapacityMbPairs'])">
 				<template #label>{{ i18n.ts._role._options.driveUploadBandwidth }}</template>
 				<template #suffix>
-					<span v-if="role.policies.driveUploadBandwidthDurationMsCapacityMbPairs.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
-					<span v-else>{{ JSON.stringify(role.policies.driveUploadBandwidthDurationMsCapacityMbPairs.value) }}</span>
-					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.driveUploadBandwidthDurationMsCapacityMbPairs)"></i></span>
+					<span v-if="role.policies.driveUploadBandwidthDurationHrCapacityMbPairs.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
+					<span v-else>{{ JSON.stringify(role.policies.driveUploadBandwidthDurationHrCapacityMbPairs.value) }}</span>
+					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.driveUploadBandwidthDurationHrCapacityMbPairs)"></i></span>
 				</template>
 				<div class="_gaps">
-					<MkSwitch v-model="role.policies.driveUploadBandwidthDurationMsCapacityMbPairs.useDefault" :readonly="readonly">
+					<MkSwitch v-model="role.policies.driveUploadBandwidthDurationHrCapacityMbPairs.useDefault" :readonly="readonly">
 						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
 					</MkSwitch>
-					<MkCodeEditor v-model="driveUploadBandwidthDurationMsCapacityMbPairs" lang="json5"/>
-					<MkRange v-model="role.policies.driveUploadBandwidthDurationMsCapacityMbPairs.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
+					<MkCodeEditor v-model="driveUploadBandwidthDurationHrCapacityMbPairs" lang="json5"/>
+					<MkRange v-model="role.policies.driveUploadBandwidthDurationHrCapacityMbPairs.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
 						<template #label>{{ i18n.ts._role.priority }}</template>
 					</MkRange>
 				</div>
@@ -623,12 +623,12 @@ const props = defineProps<{
 
 const role = ref(deepClone(props.modelValue));
 
-const driveUploadBandwidthDurationMsCapacityMbPairs = computed({
+const driveUploadBandwidthDurationHrCapacityMbPairs = computed({
 	get() {
-		return JSON5.stringify(role.value.policies.driveUploadBandwidthDurationMsCapacityMbPairs.value, null, 2);
+		return JSON5.stringify(role.value.policies.driveUploadBandwidthDurationHrCapacityMbPairs.value, null, 2);
 	},
 	set(value) {
-		role.value.policies.driveUploadBandwidthDurationMsCapacityMbPairs.value = JSON5.parse(value);
+		role.value.policies.driveUploadBandwidthDurationHrCapacityMbPairs.value = JSON5.parse(value);
 	},
 });
 

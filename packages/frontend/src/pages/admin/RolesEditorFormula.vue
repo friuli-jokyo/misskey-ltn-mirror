@@ -14,6 +14,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<option value="isBot">{{ i18n.ts._role._condition.isBot }}</option>
 			<option value="isCat">{{ i18n.ts._role._condition.isCat }}</option>
 			<option value="isExplorable">{{ i18n.ts._role._condition.isExplorable }}</option>
+			<option value="isEmailVerified">{{ i18n.ts._role._condition.isEmailVerified }}</option>
+			<option value="isTwoFactorEnabled">{{ i18n.ts._role._condition.isTwoFactorEnabled }}</option>
+			<option value="isPasswordLessLoginEnabled">{{ i18n.ts._role._condition.isPasswordLessLoginEnabled }}</option>
 			<option value="roleAssignedTo">{{ i18n.ts._role._condition.roleAssignedTo }}</option>
 			<option value="createdLessThan">{{ i18n.ts._role._condition.createdLessThan }}</option>
 			<option value="createdMoreThan">{{ i18n.ts._role._condition.createdMoreThan }}</option>

@@ -23,6 +23,38 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</MkKeyValue>
 			</FormSplit>
 		</div>
+
+		<div v-for="uploadBandwidth, i in uploadBandwidths" :key="i" class="_gaps_m">
+			<div>
+				<div :class="$style.meter">
+					<div
+						:class="$style.meterValue"
+						:style="{
+							width: `${uploadBandwidth.usage / uploadBandwidth.capacity * 100}%`,
+							background: tinycolor({
+								h: 180 - (uploadBandwidth.usage / uploadBandwidth.capacity * 180),
+								s: 0.7,
+								l: 0.5,
+							}).toString(),
+						}"
+					/>
+				</div>
+			</div>
+			<FormSplit>
+				<MkKeyValue>
+					<template #key>{{ i18n.ts._poll.duration }}</template>
+					<template #value>{{ hms(uploadBandwidth.duration, { textFormat: 'locale' }) }}</template>
+				</MkKeyValue>
+				<MkKeyValue>
+					<template #key>{{ i18n.ts.capacity }}</template>
+					<template #value>{{ bytes(uploadBandwidth.capacity, 1) }}</template>
+				</MkKeyValue>
+				<MkKeyValue>
+					<template #key>{{ i18n.ts.inUse }}</template>
+					<template #value>{{ bytes(uploadBandwidth.usage, 1) }}</template>
+				</MkKeyValue>
+			</FormSplit>
+		</div>
 	</FormSection>
 
 	<FormSection>
@@ -72,6 +104,7 @@ import FormSplit from '@/components/form/split.vue';
 import * as os from '@/os.js';
 import { misskeyApi } from '@/scripts/misskey-api.js';
 import bytes from '@/filters/bytes.js';
+import { hms } from '@/filters/hms.js';
 import { defaultStore } from '@/store.js';
 import MkChart from '@/components/MkChart.vue';
 import { i18n } from '@/i18n.js';
@@ -83,6 +116,7 @@ const $i = signinRequired();
 const fetching = ref(true);
 const usage = ref<number | null>(null);
 const capacity = ref<number | null>(null);
+const uploadBandwidths = ref<Misskey.entities.DriveResponse['uploadBandwidths'] | null>(null);
 const uploadFolder = ref<Misskey.entities.DriveFolder | null>(null);
 const alwaysMarkNsfw = ref($i.alwaysMarkNsfw);
 const autoSensitive = ref($i.autoSensitive);
@@ -95,7 +129,7 @@ const meterStyle = computed(() => {
 			h: 180 - (usage.value / capacity.value * 180),
 			s: 0.7,
 			l: 0.5,
-		}),
+		}).toString(),
 	};
 });
 
@@ -105,6 +139,7 @@ const keepOriginalFilename = computed(defaultStore.makeGetterSetter('keepOrigina
 misskeyApi('drive').then(info => {
 	capacity.value = info.capacity;
 	usage.value = info.usage;
+	uploadBandwidths.value = info.uploadBandwidths;
 	fetching.value = false;
 });
 

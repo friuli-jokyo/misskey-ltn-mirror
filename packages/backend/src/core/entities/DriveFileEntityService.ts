@@ -165,13 +165,13 @@ export class DriveFileEntityService {
 		const { sum } = await this.chartPerUserDrivesRepository
 			.createQueryBuilder('chart')
 			.where('chart.group = :id', { id })
-			.andWhere('chart.date >= :date', { date: Math.floor(Date.now() / 36e5 - durationHr) * 36e5 })
+			.andWhere('chart.date >= :date', { date: Math.floor(Date.now() / 36e5 - durationHr) * 36e2 })
 			.select('SUM(chart.___incSize)', 'sum')
 			.getRawOne();
 
 		const add = await this.redisClient.get(`driveubh:${id}`);
 
-		return parseInt(sum || '0', 10) + parseInt(add || '0', 10);
+		return parseInt(sum || '0', 10) * 1024 + parseInt(add || '0', 10);
 	}
 
 	@bindThis

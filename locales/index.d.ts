@@ -6689,6 +6689,18 @@ export interface Locale extends ILocale {
              */
             "isExplorable": string;
             /**
+             * メールアドレスが確認済み
+             */
+            "isEmailVerified": string;
+            /**
+             * 2要素認証が有効
+             */
+            "isTwoFactorEnabled": string;
+            /**
+             * パスワードレスログインが有効
+             */
+            "isPasswordLessLoginEnabled": string;
+            /**
              * アカウント作成から～以内
              */
             "createdLessThan": string;

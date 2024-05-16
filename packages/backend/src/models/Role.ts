@@ -91,6 +91,27 @@ type CondFormulaValueIsExplorable = {
 };
 
 /**
+ * メールアドレスが認証済みの場合のみ成立とする
+ */
+type CondFormulaValueIsEmailVerified = {
+	type: 'isEmailVerified';
+};
+
+/**
+ * 2FAを有効にしている場合のみ成立とする
+ */
+type CondFormulaValueIsTwoFactorEnabled = {
+	type: 'isTwoFactorEnabled';
+};
+
+/**
+ * パスワードレスログインを有効にしている場合のみ成立とする
+ */
+type CondFormulaValueIsPasswordLessLoginEnabled = {
+	type: 'isPasswordLessLoginEnabled';
+};
+
+/**
  * ユーザが作成されてから指定期間経過した場合のみ成立とする
  */
 type CondFormulaValueCreatedLessThan = {
@@ -165,6 +186,9 @@ export type RoleCondFormulaValue = { id: string } & (
 	CondFormulaValueIsBot |
 	CondFormulaValueIsCat |
 	CondFormulaValueIsExplorable |
+	CondFormulaValueIsEmailVerified |
+	CondFormulaValueIsTwoFactorEnabled |
+	CondFormulaValueIsPasswordLessLoginEnabled |
 	CondFormulaValueRoleAssignedTo |
 	CondFormulaValueCreatedLessThan |
 	CondFormulaValueCreatedMoreThan |
