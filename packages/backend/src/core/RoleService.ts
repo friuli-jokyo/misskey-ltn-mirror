@@ -10,6 +10,7 @@ import { ModuleRef } from '@nestjs/core';
 import type {
 	MiRole,
 	MiRoleAssignment,
+	MiUserProfile,
 	RoleAssignmentsRepository,
 	RolesRepository,
 	UsersRepository,
@@ -204,20 +205,20 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
 	}
 
 	@bindThis
-	private evalCond(user: MiUser, roles: MiRole[], value: RoleCondFormulaValue): boolean {
+	private evalCond(user: MiUser, userProfile: MiUserProfile, roles: MiRole[], value: RoleCondFormulaValue): boolean {
 		try {
 			switch (value.type) {
 				// ～かつ～
 				case 'and': {
-					return value.values.every(v => this.evalCond(user, roles, v));
+					return value.values.every(v => this.evalCond(user, userProfile, roles, v));
 				}
 				// ～または～
 				case 'or': {
-					return value.values.some(v => this.evalCond(user, roles, v));
+					return value.values.some(v => this.evalCond(user, userProfile, roles, v));
 				}
 				// ～ではない
 				case 'not': {
-					return !this.evalCond(user, roles, value.value);
+					return !this.evalCond(user, userProfile, roles, value.value);
 				}
 				// マニュアルロールがアサインされている
 				case 'roleAssignedTo': {
@@ -250,6 +251,15 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
 				// 「ユーザを見つけやすくする」が有効なアカウント
 				case 'isExplorable': {
 					return user.isExplorable;
+				}
+				case 'isEmailVerified': {
+					return userProfile.emailVerified;
+				}
+				case 'isTwoFactorEnabled': {
+					return userProfile.twoFactorEnabled;
+				}
+				case 'isPasswordLessLoginEnabled': {
+					return userProfile.usePasswordLessLogin;
 				}
 				// ユーザが作成されてから指定期間経過した
 				case 'createdLessThan': {
@@ -308,12 +318,24 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
 	}
 
 	@bindThis
+	private hasSpecificCondFormula(condFormula: RoleCondFormulaValue, ...types: readonly Omit<RoleCondFormulaValue['type'], 'and' | 'or' | 'not'>[]): boolean {
+		if (condFormula.type === 'and' || condFormula.type === 'or') {
+			return condFormula.values.some((value) => this.hasSpecificCondFormula(value, ...types));
+		}
+		if (condFormula.type === 'not') {
+			return this.hasSpecificCondFormula(condFormula.value, ...types);
+		}
+		return types.some((type) => condFormula.type === type);
+	}
+
+	@bindThis
 	public async getUserRoles(userId: MiUser['id']) {
 		const roles = await this.rolesCache.fetch(() => this.rolesRepository.findBy({}));
 		const assigns = await this.getUserAssigns(userId);
 		const assignedRoles = roles.filter(r => assigns.map(x => x.roleId).includes(r.id));
 		const user = roles.some(r => r.target === 'conditional') ? await this.cacheService.findUserById(userId) : null;
-		const matchedCondRoles = roles.filter(r => r.target === 'conditional' && this.evalCond(user!, assignedRoles, r.condFormula));
+		const userProfile = roles.some(r => r.target === 'conditional' && this.hasSpecificCondFormula(r.condFormula, 'isEmailVerified', 'isTwoFactorEnabled', 'isPasswordLessLoginEnabled')) && await this.cacheService.userProfileCache.get(userId) || null;
+		const matchedCondRoles = roles.filter(r => r.target === 'conditional' && this.evalCond(user!, userProfile!, assignedRoles, r.condFormula));
 		return [...assignedRoles, ...matchedCondRoles];
 	}
 
@@ -332,7 +354,8 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
 		const badgeCondRoles = roles.filter(r => r.asBadge && (r.target === 'conditional'));
 		if (badgeCondRoles.length > 0) {
 			const user = roles.some(r => r.target === 'conditional') ? await this.cacheService.findUserById(userId) : null;
-			const matchedBadgeCondRoles = badgeCondRoles.filter(r => this.evalCond(user!, assignedRoles, r.condFormula));
+			const userProfile = roles.some(r => r.target === 'conditional' && this.hasSpecificCondFormula(r.condFormula, 'isEmailVerified', 'isTwoFactorEnabled', 'isPasswordLessLoginEnabled')) && await this.cacheService.userProfileCache.get(userId) || null;
+			const matchedBadgeCondRoles = badgeCondRoles.filter(r => this.evalCond(user!, userProfile!, assignedRoles, r.condFormula));
 			return [...assignedBadgeRoles, ...matchedBadgeCondRoles];
 		} else {
 			return assignedBadgeRoles;

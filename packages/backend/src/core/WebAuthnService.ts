@@ -153,7 +153,8 @@ export class WebAuthnService {
 
 		const authenticationOptions = await generateAuthenticationOptions({
 			allowCredentials: keys.map(key => ({
-				id: key.id,
+				id: Buffer.from(key.id, 'base64url'),
+				type: 'public-key',
 				transports: (key.transports as AuthenticatorTransportFuture[] | null) ?? undefined,
 			})),
 			userVerification: 'required',

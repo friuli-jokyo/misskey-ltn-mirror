@@ -4607,7 +4607,7 @@ export type components = {
     RoleCondFormulaValueUserSettingBooleanSchema: {
       id: string;
       /** @enum {string} */
-      type: 'isSuspended' | 'isLocked' | 'isBot' | 'isCat' | 'isExplorable';
+      type: 'isSuspended' | 'isLocked' | 'isBot' | 'isCat' | 'isExplorable' | 'isEmailVerified' | 'isTwoFactorEnabled' | 'isPasswordLessLoginEnabled';
     };
     RoleCondFormulaValueAssignedRole: {
       id: string;
@@ -12882,6 +12882,11 @@ export type operations = {
           'application/json': {
             capacity: number;
             usage: number;
+            uploadBandwidths: {
+                duration: number;
+                capacity: number;
+                usage: number;
+              }[];
           };
         };
       };

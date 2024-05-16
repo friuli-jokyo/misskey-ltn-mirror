@@ -28,6 +28,28 @@ export const meta = {
 				type: 'number',
 				optional: false, nullable: false,
 			},
+			uploadBandwidths: {
+				type: 'array',
+				optional: false, nullable: false,
+				items: {
+					type: 'object',
+					optional: false, nullable: false,
+					properties: {
+						duration: {
+							type: 'number',
+							optional: false, nullable: false,
+						},
+						capacity: {
+							type: 'number',
+							optional: false, nullable: false,
+						},
+						usage: {
+							type: 'number',
+							optional: false, nullable: false,
+						},
+					},
+				},
+			},
 		},
 	},
 } as const;
@@ -49,13 +71,19 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			const instance = await this.metaService.fetch(true);
 
 			// Calculate drive usage
-			const usage = await this.driveFileEntityService.calcDriveUsageOf(me.id);
-
-			const policies = await this.roleService.getUserPolicies(me.id);
+			const [usage, policies] = await Promise.all([
+				this.driveFileEntityService.calcDriveUsageOf(me.id),
+				this.roleService.getUserPolicies(me.id),
+			]);
 
 			return {
 				capacity: 1024 * 1024 * policies.driveCapacityMb,
-				usage: usage,
+				uploadBandwidths: await Promise.all(policies.driveUploadBandwidthDurationHrCapacityMbPairs.map(async ([duration, capacity]) => ({
+					duration: duration * 36e5,
+					capacity: capacity * 1024 * 1024,
+					usage: await this.driveFileEntityService.calcDriveBandwidthOf(me.id, duration),
+				}))),
+				usage,
 			};
 		});
 	}

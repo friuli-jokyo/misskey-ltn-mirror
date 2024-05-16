@@ -126,6 +126,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 							</MkInput>
 						</MkFolder>
 
+						<MkFolder v-if="matchQuery([i18n.ts._role._options.driveCapacity, 'driveCapacityMb'])">
+							<template #label>{{ i18n.ts._role._options.driveUploadBandwidth }}</template>
+							<template #suffix>#{{ policies.driveUploadBandwidthDurationHrCapacityMbPairs.length }}</template>
+							<MkCodeEditor v-model="driveUploadBandwidthDurationHrCapacityMbPairs" lang="json5"/>
+						</MkFolder>
+
 						<MkFolder v-if="matchQuery([i18n.ts._role._options.alwaysMarkNsfw, 'alwaysMarkNsfw'])">
 							<template #label>{{ i18n.ts._role._options.alwaysMarkNsfw }}</template>
 							<template #suffix>{{ policies.alwaysMarkNsfw ? i18n.ts.yes : i18n.ts.no }}</template>
@@ -233,6 +239,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { computed, reactive, ref } from 'vue';
 import XHeader from './_header_.vue';
+import MkCodeEditor from '@/components/MkCodeEditor.vue';
 import MkInput from '@/components/MkInput.vue';
 import MkFolder from '@/components/MkFolder.vue';
 import MkSwitch from '@/components/MkSwitch.vue';
@@ -257,6 +264,15 @@ const policies = reactive<Record<typeof ROLE_POLICIES[number], any>>({});
 for (const ROLE_POLICY of ROLE_POLICIES) {
 	policies[ROLE_POLICY] = instance.policies[ROLE_POLICY];
 }
+
+const driveUploadBandwidthDurationHrCapacityMbPairs = computed({
+	get() {
+		return JSON.stringify(policies.driveUploadBandwidthDurationHrCapacityMbPairs, null, 2);
+	},
+	set(value) {
+		policies.driveUploadBandwidthDurationHrCapacityMbPairs = JSON.parse(value);
+	},
+});
 
 function matchQuery(keywords: string[]): boolean {
 	if (baseRoleQ.value.trim().length === 0) return true;
