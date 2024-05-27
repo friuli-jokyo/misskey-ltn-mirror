@@ -346,6 +346,14 @@ export const defaultStore = markRaw(new Storage('base', {
 		where: 'device',
 		default: true,
 	},
+	localNeighborNotes: {
+		where: 'device',
+		default: true,
+	},
+	globalNeighborNotes: {
+		where: 'device',
+		default: false,
+	},
 	postFormWithHashtags: {
 		where: 'device',
 		default: false,

@@ -11,12 +11,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<Transition :name="defaultStore.state.animation ? 'fade' : ''" mode="out-in">
 				<div v-if="note">
 					<div v-if="showNext" class="_margin">
-						<MkNotes class="" :pagination="showNext === 'channel' ? nextChannelPagination : nextUserPagination" :noGap="true" :disableAutoLoad="true"/>
+						<MkNotes class="" :pagination="nextPagination" :noGap="true" :disableAutoLoad="true"/>
 					</div>
 
 					<div class="_margin">
 						<div v-if="!showNext" class="_buttons" :class="$style.loadNext">
 							<MkButton v-if="note.channelId" rounded :class="$style.loadButton" @click="showNext = 'channel'"><i class="ti ti-chevron-up"></i> <i class="ti ti-device-tv"></i></MkButton>
+							<template v-else-if="note.visibility === 'public'">
+								<MkButton v-if="defaultStore.state.localNeighborNotes" rounded :class="$style.loadButton" @click="showNext = 'local'"><i class="ti ti-chevron-up"></i> <i class="ti ti-planet"></i></MkButton>
+								<MkButton v-if="defaultStore.state.globalNeighborNotes" rounded :class="$style.loadButton" @click="showNext = 'global'"><i class="ti ti-chevron-up"></i> <i class="ti ti-whirl"></i></MkButton>
+							</template>
 							<MkButton rounded :class="$style.loadButton" @click="showNext = 'user'"><i class="ti ti-chevron-up"></i> <i class="ti ti-user"></i></MkButton>
 						</div>
 						<div class="_margin _gaps_s">
@@ -31,12 +35,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 						</div>
 						<div v-if="!showPrev" class="_buttons" :class="$style.loadPrev">
 							<MkButton v-if="note.channelId" rounded :class="$style.loadButton" @click="showPrev = 'channel'"><i class="ti ti-chevron-down"></i> <i class="ti ti-device-tv"></i></MkButton>
+							<template v-else-if="note.visibility === 'public'">
+								<MkButton v-if="defaultStore.state.localNeighborNotes" rounded :class="$style.loadButton" @click="showPrev = 'local'"><i class="ti ti-chevron-down"></i> <i class="ti ti-planet"></i></MkButton>
+								<MkButton v-if="defaultStore.state.globalNeighborNotes" rounded :class="$style.loadButton" @click="showPrev = 'global'"><i class="ti ti-chevron-down"></i> <i class="ti ti-whirl"></i></MkButton>
+							</template>
 							<MkButton rounded :class="$style.loadButton" @click="showPrev = 'user'"><i class="ti ti-chevron-down"></i> <i class="ti ti-user"></i></MkButton>
 						</div>
 					</div>
 
 					<div v-if="showPrev" class="_margin">
-						<MkNotes class="" :pagination="showPrev === 'channel' ? prevChannelPagination : prevUserPagination" :noGap="true"/>
+						<MkNotes class="" :pagination="prevPagination" :noGap="true"/>
 					</div>
 				</div>
 				<MkError v-else-if="error" @retry="fetchNote()"/>
@@ -57,6 +65,7 @@ import MkRemoteCaution from '@/components/MkRemoteCaution.vue';
 import MkButton from '@/components/MkButton.vue';
 import { misskeyApi } from '@/scripts/misskey-api.js';
 import { definePageMetadata } from '@/scripts/page-metadata.js';
+import { hostname } from '@/config.js';
 import { i18n } from '@/i18n.js';
 import { dateString } from '@/filters/date.js';
 import MkClipPreview from '@/components/MkClipPreview.vue';
@@ -68,13 +77,31 @@ const props = defineProps<{
 }>();
 
 function userOf(note: Misskey.entities.Note): Misskey.entities.User {
-	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
 }
 
 const note = ref<null | Misskey.entities.Note>();
 const clips = ref<Misskey.entities.Clip[]>();
-const showPrev = ref<'user' | 'channel' | false>(false);
-const showNext = ref<'user' | 'channel' | false>(false);
+const showPrev = ref<'user' | 'global' | 'local' | 'channel' | false>(false);
+const showNext = ref<'user' | 'global' | 'local' | 'channel' | false>(false);
+const prevPagination = computed(() => {
+	switch (showPrev.value) {
+		case 'channel': return prevChannelPagination;
+		case 'local': return prevLocalPagination;
+		case 'global': return prevGlobalPagination;
+		case 'user': return prevUserPagination;
+		default: return undefined as never;
+	}
+});
+const nextPagination = computed(() => {
+	switch (showNext.value) {
+		case 'channel': return nextChannelPagination;
+		case 'local': return nextLocalPagination;
+		case 'global': return nextGlobalPagination;
+		case 'user': return nextUserPagination;
+		default: return undefined as never;
+	}
+});
 const error = ref();
 
 const prevUserPagination: Paging = {
@@ -92,6 +119,40 @@ const nextUserPagination: Paging = {
 	limit: 10,
 	params: computed(() => note.value ? ({
 		userId: note.value.userId,
+		sinceId: note.value.id,
+	}) : undefined),
+};
+
+const prevGlobalPagination: Paging = {
+	endpoint: 'notes/global-timeline',
+	limit: 10,
+	params: computed(() => note.value ? ({
+		untilId: note.value.id,
+	}) : undefined),
+};
+
+const nextGlobalPagination: Paging = {
+	reversed: true,
+	endpoint: 'notes/global-timeline',
+	limit: 10,
+	params: computed(() => note.value ? ({
+		sinceId: note.value.id,
+	}) : undefined),
+};
+
+const prevLocalPagination: Paging = {
+	endpoint: 'notes/local-timeline',
+	limit: 10,
+	params: computed(() => note.value ? ({
+		untilId: note.value.id,
+	}) : undefined),
+};
+
+const nextLocalPagination: Paging = {
+	reversed: true,
+	endpoint: 'notes/local-timeline',
+	limit: 10,
+	params: computed(() => note.value ? ({
 		sinceId: note.value.id,
 	}) : undefined),
 };

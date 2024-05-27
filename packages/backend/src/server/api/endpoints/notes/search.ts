@@ -5,6 +5,7 @@
 
 import { Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
+import { IdService } from '@/core/IdService.js';
 import { SearchService } from '@/core/SearchService.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { RoleService } from '@/core/RoleService.js';
@@ -40,6 +41,8 @@ export const paramDef = {
 		query: { type: 'string' },
 		sinceId: { type: 'string', format: 'misskey:id' },
 		untilId: { type: 'string', format: 'misskey:id' },
+		sinceDate: { type: 'integer' },
+		untilDate: { type: 'integer' },
 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
 		offset: { type: 'integer', default: 0 },
 		host: {
@@ -58,6 +61,7 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		private idService: IdService,
 		private noteEntityService: NoteEntityService,
 		private searchService: SearchService,
 		private roleService: RoleService,
@@ -68,14 +72,17 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw new ApiError(meta.errors.unavailable);
 			}
 
+			const untilId = ps.untilId ?? (ps.untilDate != null ? this.idService.gen(ps.untilDate) : undefined);
+			const sinceId = ps.sinceId ?? (ps.sinceDate != null ? this.idService.gen(ps.sinceDate) : undefined);
+
 			const notes = await this.searchService.searchNote(ps.query, me, {
 				userId: ps.userId,
 				channelId: ps.channelId,
 				host: ps.host,
 				internal: ps.internal,
 			}, {
-				untilId: ps.untilId,
-				sinceId: ps.sinceId,
+				untilId,
+				sinceId,
 				limit: ps.limit,
 			});
 

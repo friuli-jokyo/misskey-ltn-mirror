@@ -71,7 +71,7 @@ const props = withDefaults(defineProps<{
 });
 
 function userOf(note: Misskey.entities.Note): Misskey.entities.User {
-	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
 }
 
 const muted = ref($i ? checkWordMute(props.note, $i, $i.mutedWords) : false);
