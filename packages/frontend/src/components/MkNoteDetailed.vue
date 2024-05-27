@@ -56,7 +56,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</span>
 		</header>
 		<header v-else :class="$style.noteHeader">
-			<MkAvatar :class="$style.noteHeaderAvatar" :user="userOf(appearNote)" indicator link preview/>
+			<MkAvatar :class="$style.noteHeaderAvatar" :user="userOf(appearNote)" indicator :link="!appearNote.anonymousChannelUsername" preview/>
 			<div :class="$style.noteHeaderBody">
 				<div>
 					<div v-if="appearNote.anonymouslySendToUser || appearNote.anonymousChannelUsername" v-user-preview="appearNote.user.id" :class="$style.noteHeaderName">
@@ -268,7 +268,7 @@ const inChannel = inject('inChannel', null);
 const note = ref(deepClone(props.note));
 
 function userOf(note: Misskey.entities.Note): Misskey.entities.User {
-	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
 }
 
 // plugin

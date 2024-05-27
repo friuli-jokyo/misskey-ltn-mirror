@@ -28,6 +28,21 @@ SPDX-License-Identifier: AGPL-3.0-only
 						</div>
 					</div>
 				</MkFolder>
+
+				<MkFolder :defaultOpen="true">
+					<template #label>{{ i18n.ts._poll.duration }}</template>
+					<template v-if="user" #suffix>
+						<MkTime v-if="sinceDate" :time="sinceDate" mode="absolute"/>
+						-
+						<MkTime v-if="untilDate" :time="untilDate" mode="absolute"/>
+					</template>
+
+					<div class="_gaps" :class="$style.range">
+						<MkInput v-model="sinceDate" :class="$style.dtl" type="datetime-local"/>
+						-
+						<MkInput v-model="untilDate" :class="$style.dtl" type="datetime-local"/>
+					</div>
+				</MkFolder>
 			</div>
 		</MkFolder>
 		<div>
@@ -64,6 +79,8 @@ const notePagination = ref();
 const user = ref<any>(null);
 const isLocalOnly = ref(false);
 const internal = ref(false);
+const sinceDate = ref('');
+const untilDate = ref('');
 
 function selectUser() {
 	os.selectUser({ includeSelf: true }).then(_user => {
@@ -101,6 +118,8 @@ async function search() {
 			query: searchQuery.value,
 			userId: user.value ? user.value.id : null,
 			internal: internal.value,
+			sinceDate: sinceDate.value ? new Date(sinceDate.value).valueOf() : undefined,
+			untilDate: untilDate.value ? new Date(untilDate.value).valueOf() : undefined,
 		},
 	};
 
@@ -109,3 +128,15 @@ async function search() {
 	key.value++;
 }
 </script>
+
+<style lang="scss" module>
+.range {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.dtl {
+	flex: 1;
+}
+</style>

@@ -149,7 +149,7 @@ export class ApiServerService {
 			const instances = await this.instancesRepository.find({
 				select: ['host'],
 				where: {
-					isSuspended: false,
+					suspensionState: 'none',
 				},
 			});
 

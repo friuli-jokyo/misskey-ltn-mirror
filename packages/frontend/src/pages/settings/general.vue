@@ -51,6 +51,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 		<div class="_gaps_m">
 			<div class="_gaps_s">
+				<MkSwitch v-model="collapseRenotes">
+					<template #label>{{ i18n.ts.collapseRenotes }}</template>
+					<template #caption>{{ i18n.ts.collapseRenotesDescription }}</template>
+				</MkSwitch>
 				<MkSwitch v-model="showNoteActionsOnlyHover">{{ i18n.ts.showNoteActionsOnlyHover }}</MkSwitch>
 				<MkSwitch v-model="showClipButtonInNoteFooter">{{ i18n.ts.showClipButtonInNoteFooter }}</MkSwitch>
 				<MkSwitch v-model="showTranslateButtonInNoteFooter">{{ i18n.ts.showTranslateButtonInNoteFooter }}</MkSwitch>
@@ -132,6 +136,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkSwitch v-model="highlightSensitiveMedia">{{ i18n.ts.highlightSensitiveMedia }}</MkSwitch>
 				<MkSwitch v-model="squareAvatars">{{ i18n.ts.squareAvatars }}</MkSwitch>
 				<MkSwitch v-model="showAvatarDecorations">{{ i18n.ts.showAvatarDecorations }}</MkSwitch>
+				<MkSwitch v-model="localNeighborNotes">{{ i18n.ts.localNeighborNotes }}</MkSwitch>
+				<MkSwitch v-model="globalNeighborNotes">{{ i18n.ts.globalNeighborNotes }}</MkSwitch>
 				<MkSwitch v-model="useSystemFont">{{ i18n.ts.useSystemFont }}</MkSwitch>
 				<MkSwitch v-model="disableDrawer">{{ i18n.ts.disableDrawer }}</MkSwitch>
 				<MkSwitch v-model="forceShowAds">{{ i18n.ts.forceShowAds }}</MkSwitch>
@@ -313,6 +319,8 @@ const enableInfiniteScroll = computed(defaultStore.makeGetterSetter('enableInfin
 const useReactionPickerForContextMenu = computed(defaultStore.makeGetterSetter('useReactionPickerForContextMenu'));
 const squareAvatars = computed(defaultStore.makeGetterSetter('squareAvatars'));
 const showAvatarDecorations = computed(defaultStore.makeGetterSetter('showAvatarDecorations'));
+const localNeighborNotes = computed(defaultStore.makeGetterSetter('localNeighborNotes'));
+const globalNeighborNotes = computed(defaultStore.makeGetterSetter('globalNeighborNotes'));
 const mediaListWithOneImageAppearance = computed(defaultStore.makeGetterSetter('mediaListWithOneImageAppearance'));
 const notificationPosition = computed(defaultStore.makeGetterSetter('notificationPosition'));
 const notificationStackAxis = computed(defaultStore.makeGetterSetter('notificationStackAxis'));

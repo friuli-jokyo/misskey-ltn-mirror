@@ -361,7 +361,15 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 
 			let channel: MiChannel | null = null;
-			if (ps.channelId != null) {
+			if (reply != null) {
+				if (reply.channelId != null) {
+					channel = await this.channelsRepository.findOneBy({ id: reply.channelId, isArchived: false });
+
+					if (channel == null) {
+						throw new ApiError(meta.errors.noSuchChannel);
+					}
+				}
+			} else if (ps.channelId != null) {
 				channel = await this.channelsRepository.findOneBy({ id: ps.channelId, isArchived: false });
 
 				if (channel == null) {

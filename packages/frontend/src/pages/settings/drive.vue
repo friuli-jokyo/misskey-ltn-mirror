@@ -22,38 +22,37 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<template #value>{{ bytes(usage, 1) }}</template>
 				</MkKeyValue>
 			</FormSplit>
-		</div>
-
-		<div v-for="uploadBandwidth, i in uploadBandwidths" :key="i" class="_gaps_m">
-			<div>
-				<div :class="$style.meter">
-					<div
-						:class="$style.meterValue"
-						:style="{
-							width: `${uploadBandwidth.usage / uploadBandwidth.capacity * 100}%`,
-							background: tinycolor({
-								h: 180 - (uploadBandwidth.usage / uploadBandwidth.capacity * 180),
-								s: 0.7,
-								l: 0.5,
-							}).toString(),
-						}"
-					/>
+			<template v-for="uploadBandwidth, i in uploadBandwidths" :key="i">
+				<div>
+					<div :class="$style.meter">
+						<div
+							:class="$style.meterValue"
+							:style="{
+								width: `${uploadBandwidth.usage / uploadBandwidth.capacity * 100}%`,
+								background: tinycolor({
+									h: 180 - (uploadBandwidth.usage / uploadBandwidth.capacity * 180),
+									s: 0.7,
+									l: 0.5,
+								}).toString(),
+							}"
+						/>
+					</div>
 				</div>
-			</div>
-			<FormSplit>
-				<MkKeyValue>
-					<template #key>{{ i18n.ts._poll.duration }}</template>
-					<template #value>{{ hms(uploadBandwidth.duration, { textFormat: 'locale' }) }}</template>
-				</MkKeyValue>
-				<MkKeyValue>
-					<template #key>{{ i18n.ts.capacity }}</template>
-					<template #value>{{ bytes(uploadBandwidth.capacity, 1) }}</template>
-				</MkKeyValue>
-				<MkKeyValue>
-					<template #key>{{ i18n.ts.inUse }}</template>
-					<template #value>{{ bytes(uploadBandwidth.usage, 1) }}</template>
-				</MkKeyValue>
-			</FormSplit>
+				<FormSplit :minWidth="144">
+					<MkKeyValue>
+						<template #key>{{ i18n.ts._poll.duration }}</template>
+						<template #value>{{ hms(uploadBandwidth.duration, { textFormat: 'locale' }) }}</template>
+					</MkKeyValue>
+					<MkKeyValue>
+						<template #key>{{ i18n.ts.capacity }}</template>
+						<template #value>{{ bytes(uploadBandwidth.capacity, 1) }}</template>
+					</MkKeyValue>
+					<MkKeyValue>
+						<template #key>{{ i18n.ts.inUse }}</template>
+						<template #value>{{ bytes(uploadBandwidth.usage, 1) }}</template>
+					</MkKeyValue>
+				</FormSplit>
+			</template>
 		</div>
 	</FormSection>
 

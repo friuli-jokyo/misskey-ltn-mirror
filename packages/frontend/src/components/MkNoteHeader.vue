@@ -17,6 +17,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</template>
 		</I18n>
 	</div>
+	<div v-else-if="note.anonymousChannelUsername" v-user-preview="note.user.id" :class="$style.name">
+		<MkUserName :user="userOf(note)"/>
+	</div>
 	<MkA v-else v-user-preview="note.user.id" :class="$style.name" :to="userPage(note.user)">
 		<MkUserName :user="userOf(note)"/>
 	</MkA>
@@ -56,7 +59,7 @@ defineProps<{
 }>();
 
 function userOf(note: Misskey.entities.Note): Misskey.entities.User {
-	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
 }
 
 const mock = inject<boolean>('mock', false);
