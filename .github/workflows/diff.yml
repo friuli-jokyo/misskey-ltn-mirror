@@ -35,9 +35,8 @@ jobs:
                   curl -sL 'https://live-theater.net/tarball/misskey-${{ env.ltn_version }}.tar.gz' > '${{ env.ltn_version }}.tar.gz'
                   mkdir '${{ env.ltn_version }}' && tar -xf '${{ env.ltn_version }}.tar.gz' -C '${{ env.ltn_version }}' && cd '${{ env.ltn_version }}'
                   rm -rf .git
-                  mv .github/workflows .github/workflows_orig
-                  mv .github/dependabot.yml .github/dependabot_orig.yml
-                  mv .github/FUNDING.yml .github/FUNDING_orig.yml
+                  mv .github/workflows .github/workflows_orig || echo 'No workflows file'
+                  mv .github/dependabot.yml .github/dependabot_orig.yml || echo 'No dependabot file'
                   shopt -s dotglob
                   cp -r * -t '${{ github.workspace }}'
                   cd '${{ github.workspace }}'
