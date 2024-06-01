@@ -51,7 +51,7 @@ export const paramDef = {
 		color: { type: 'string', minLength: 1, maxLength: 16 },
 		isSensitive: { type: 'boolean', nullable: true },
 		anonymousStrategy: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'manual'], nullable: true },
-		requirePublicWriteAccess: { type: 'boolean', default: false },
+		requirePublicWriteAccess: { type: 'boolean', default: true },
 		allowRenoteToExternal: { type: 'boolean', nullable: true },
 	},
 	required: ['name'],
