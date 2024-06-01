@@ -111,7 +111,7 @@ const bannerId = ref<string | null>(null);
 const color = ref('#000');
 const isSensitive = ref(false);
 const allowRenoteToExternal = ref(true);
-const requirePublicWriteAccess = ref(false);
+const requirePublicWriteAccess = ref(true);
 const anonymousStrategy = ref<'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'manual'>('none');
 const pinnedNotes = ref<{ id: Misskey.entities.Note['id'] }[]>([]);
 

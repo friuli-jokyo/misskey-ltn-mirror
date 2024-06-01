@@ -154,7 +154,7 @@ export class WebAuthnService {
 		const authenticationOptions = await generateAuthenticationOptions({
 			rpID: relyingParty.rpId,
 			allowCredentials: keys.map(key => ({
-				id: Buffer.from(key.id, 'base64url'),
+				id: key.id,
 				type: 'public-key',
 				transports: (key.transports as AuthenticatorTransportFuture[] | null) ?? undefined,
 			})),
@@ -168,7 +168,9 @@ export class WebAuthnService {
 
 	@bindThis
 	public async initiateAnonymousAuthentication(): Promise<[string, PublicKeyCredentialRequestOptionsJSON]> {
+		const relyingParty = await this.getRelyingParty();
 		const authenticationOptions = await generateAuthenticationOptions({
+			rpID: relyingParty.rpId,
 			allowCredentials: [],
 			userVerification: 'required',
 		});

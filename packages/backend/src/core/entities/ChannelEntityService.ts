@@ -86,6 +86,7 @@ export class ChannelEntityService {
 			usersCount: channel.usersCount,
 			notesCount: channel.notesCount,
 			isSensitive: channel.isSensitive,
+			requirePublicWriteAccess: channel.requirePublicWriteAccess,
 			allowRenoteToExternal: channel.allowRenoteToExternal,
 
 			...(me ? {

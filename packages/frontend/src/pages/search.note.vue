@@ -131,7 +131,7 @@ async function search() {
 
 <style lang="scss" module>
 .range {
-	display: flex;
+	flex-flow: row;
 	align-items: center;
 	justify-content: space-between;
 }
