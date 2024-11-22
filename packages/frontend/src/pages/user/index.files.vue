@@ -25,6 +25,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<!-- TODO: 画像以外のファイルに対応 -->
 					<ImgWithBlurhash :hash="file.file.blurhash" :src="thumbnail(file.file)" :title="file.file.name"/>
 				</MkA>
+				<MkA v-else-if="user.pinnedGalleryPost" :class="$style.img" :to="`/gallery/${user.pinnedGalleryPost.id}`">
+					<!-- TODO: 画像以外のファイルに対応 -->
+					<ImgWithBlurhash :hash="file.file.blurhash" :src="thumbnail(file.file)" :title="file.file.name"/>
+				</MkA>
 				<span v-else :class="$style.img">
 					<!-- TODO: 画像以外のファイルに対応 -->
 					<ImgWithBlurhash :hash="file.file.blurhash" :src="thumbnail(file.file)" :title="file.file.name"/>

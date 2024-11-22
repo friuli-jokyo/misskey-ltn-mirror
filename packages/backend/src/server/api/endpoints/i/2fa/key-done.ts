@@ -4,6 +4,7 @@
  */
 
 import bcrypt from 'bcryptjs';
+import * as Redis from 'ioredis';
 import { Inject, Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
@@ -49,6 +50,7 @@ export const paramDef = {
 	properties: {
 		password: { type: 'string' },
 		token: { type: 'string', nullable: true },
+		state: { type: 'string', nullable: true },
 		name: { type: 'string', minLength: 1, maxLength: 30 },
 		credential: { type: 'object' },
 	},
@@ -65,6 +67,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 		@Inject(DI.userSecurityKeysRepository)
 		private userSecurityKeysRepository: UserSecurityKeysRepository,
 
+		@Inject(DI.redis)
+		private redisClient: Redis.Redis,
+
 		private webAuthnService: WebAuthnService,
 		private userAuthService: UserAuthService,
 		private userEntityService: UserEntityService,
@@ -73,22 +78,29 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 		super(meta, paramDef, async (ps, me) => {
 			const token = ps.token;
 			const profile = await this.userProfilesRepository.findOneByOrFail({ userId: me.id });
+			const verifiedByState = !!ps.state && await this.redisClient.getdel(`webauthn:conditionalCreateState:${me.id}:${ps.state}`) === '1';
 
-			if (profile.twoFactorEnabled) {
-				if (token == null) {
+			if (!verifiedByState) {
+				if (profile.twoFactorEnabled) {
+					if (token == null) {
+						throw new Error('authentication failed');
+					}
+
+					try {
+						await this.userAuthService.twoFactorAuthenticate(profile, token);
+					} catch (e) {
+						throw new Error('authentication failed');
+					}
+				}
+
+				if (!profile.password) {
 					throw new Error('authentication failed');
 				}
 
-				try {
-					await this.userAuthService.twoFactorAuthenticate(profile, token);
-				} catch (e) {
-					throw new Error('authentication failed');
+				const passwordMatched = await bcrypt.compare(ps.password, profile.password);
+				if (!passwordMatched) {
+					throw new ApiError(meta.errors.incorrectPassword);
 				}
-			}
-
-			const passwordMatched = await bcrypt.compare(ps.password, profile.password ?? '');
-			if (!passwordMatched) {
-				throw new ApiError(meta.errors.incorrectPassword);
 			}
 
 			/*

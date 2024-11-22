@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<MkA v-user-preview="canonical" :class="[$style.root, { [$style.isMe]: isMe }]" :to="url" :style="{ background: bgCss }" :behavior="navigationBehavior">
+<MkA v-user-preview="canonical" :class="[$style.root, { [$style.isMe]: isMe }]" :to="url" :behavior="navigationBehavior">
 	<img :class="$style.icon" :src="avatarUrl" alt="">
 	<span>
 		<span>@{{ username }}</span>
@@ -17,7 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { toUnicode } from 'punycode';
 import { computed } from 'vue';
 import tinycolor from 'tinycolor2';
-import { host as localHost } from '@/config.js';
+import { host as localHost } from '@@/js/config.js';
 import { $i } from '@/account.js';
 import { defaultStore } from '@/store.js';
 import { avatarsMap, loadUsers, usernameAndHostToIdMap, usernameAndHostToKey } from '@/scripts/avatars.js';
@@ -56,7 +56,7 @@ const baseUrl = computed(() => {
 	return '/static-assets/user-unknown.png';
 });
 
-const avatarUrl = computed(() => defaultStore.state.disableShowingAnimatedImages ? getStaticImageUrl(baseUrl.value) : baseUrl.value);
+const avatarUrl = computed(() => defaultStore.state.disableShowingAnimatedImages || defaultStore.state.dataSaver.avatar ? getStaticImageUrl(baseUrl.value) : baseUrl.value);
 </script>
 
 <style lang="scss" module>
@@ -64,10 +64,12 @@ const avatarUrl = computed(() => defaultStore.state.disableShowingAnimatedImages
 	display: inline-block;
 	padding: 4px 8px 4px 4px;
 	border-radius: 999px;
-	color: var(--mention);
+	color: var(--MI_THEME-mention);
+	background: color(from var(--MI_THEME-mention) srgb r g b / 0.1);
 
 	&.isMe {
-		color: var(--mentionMe);
+		color: var(--MI_THEME-mentionMe);
+		background: color(from var(--MI_THEME-mentionMe) srgb r g b / 0.1);
 	}
 }
 

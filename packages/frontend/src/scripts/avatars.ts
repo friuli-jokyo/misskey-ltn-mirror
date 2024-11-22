@@ -1,7 +1,7 @@
 import { Ref, readonly, ref } from 'vue';
 import { misskeyApi } from './misskey-api.js';
 import type * as Misskey from 'misskey-js';
-import { hostname } from '@/config.js';
+import { hostname } from '@@/js/config.js';
 
 export type AvatarsMap = Map<Misskey.entities.User['id'], Pick<Misskey.entities.User, 'id' | 'name' | 'username' | 'host' | 'avatarBlurhash'> & { [T in keyof Misskey.entities.User & 'avatarUrl']: NonNullable<Misskey.entities.User[T]> } | null | undefined>;
 

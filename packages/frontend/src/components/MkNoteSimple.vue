@@ -17,6 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkSubNoteContent :class="$style.text" :note="note"/>
 			</div>
 		</div>
+		<MkA v-if="note.channel && note.channel.id !== inChannel" :class="$style.channel" :to="`/channels/${note.channel.id}`"><i class="ti ti-device-tv"></i> {{ notechannel.name }}</MkA>
 	</div>
 </div>
 </template>
@@ -24,10 +25,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { ref } from 'vue';
 import * as Misskey from 'misskey-js';
+import { hostname } from '@@/js/config.js';
 import MkNoteHeader from '@/components/MkNoteHeader.vue';
 import MkSubNoteContent from '@/components/MkSubNoteContent.vue';
 import MkCwButton from '@/components/MkCwButton.vue';
-import { hostname } from '@/config.js';
 
 const props = withDefaults(defineProps<{
 	note: Misskey.entities.Note;
@@ -59,7 +60,7 @@ const showContent = ref(false);
 	height: 34px;
 	border-radius: 8px;
 	position: sticky !important;
-	top: calc(16px + var(--stickyTop, 0px));
+	top: calc(16px + var(--MI-stickyTop, 0px));
 	left: 0;
 }
 
@@ -84,6 +85,11 @@ const showContent = ref(false);
 	cursor: default;
 	margin: 0;
 	padding: 0;
+}
+
+.channel {
+	opacity: 0.7;
+	font-size: 80%;
 }
 
 @container (min-width: 250px) {

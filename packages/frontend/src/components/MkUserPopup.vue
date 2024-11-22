@@ -16,12 +16,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<div :class="$style.description">{{ i18n.ts.isSystemAccount }}</div>
 		</div>
 		<div v-else-if="user != null">
-			<div :class="$style.banner" :style="user.bannerUrl ? `background-image: url(${user.bannerUrl})` : ''">
+			<div :class="$style.banner" :style="user.bannerUrl ? `background-image: url(${defaultStore.state.disableShowingAnimatedImages ? getStaticImageUrl(user.bannerUrl) : user.bannerUrl})` : ''">
 				<span v-if="$i && $i.id != user.id && user.isFollowed" :class="$style.followed">{{ i18n.ts.followsYou }}</span>
 			</div>
 			<svg viewBox="0 0 128 128" :class="$style.avatarBack">
 				<g transform="matrix(1.6,0,0,1.6,-38.4,-51.2)">
-					<path d="M64,32C81.661,32 96,46.339 96,64C95.891,72.184 104,72 104,72C104,72 74.096,80 64,80C52.755,80 24,72 24,72C24,72 31.854,72.018 32,64C32,46.339 46.339,32 64,32Z" style="fill: var(--popup);"/>
+					<path d="M64,32C81.661,32 96,46.339 96,64C95.891,72.184 104,72 104,72C104,72 74.096,80 64,80C52.755,80 24,72 24,72C24,72 31.854,72.018 32,64C32,46.339 46.339,32 64,32Z" style="fill: var(--MI_THEME-popup);"/>
 				</g>
 			</svg>
 			<MkAvatar :class="$style.avatar" :user="user" indicator/>
@@ -70,6 +70,7 @@ import { i18n } from '@/i18n.js';
 import { defaultStore } from '@/store.js';
 import { $i } from '@/account.js';
 import { isFollowingVisibleForMe, isFollowersVisibleForMe } from '@/scripts/isFfVisibleForMe.js';
+import { getStaticImageUrl } from '@/scripts/media-proxy.js';
 
 const props = defineProps<{
 	showing: boolean;
@@ -199,8 +200,8 @@ onMounted(() => {
 	padding: 16px 26px;
 	font-size: 0.8em;
 	text-align: center;
-	border-top: solid 1px var(--divider);
-	border-bottom: solid 1px var(--divider);
+	border-top: solid 1px var(--MI_THEME-divider);
+	border-bottom: solid 1px var(--MI_THEME-divider);
 
 	&:only-child {
 		border: 0;
@@ -226,7 +227,7 @@ onMounted(() => {
 
 .statusItemLabel {
 	font-size: 0.7em;
-	color: var(--fgTransparentWeak);
+	color: var(--MI_THEME-fgTransparentWeak);
 }
 
 .menu {
@@ -234,7 +235,7 @@ onMounted(() => {
 	top: 8px;
 	right: 44px;
 	padding: 6px;
-	background: var(--panel);
+	background: var(--MI_THEME-panel);
 	border-radius: 999px;
 }
 

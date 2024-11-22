@@ -32,6 +32,41 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<MkNote v-for="note in channel.pinnedNotes" :key="note.id" class="_panel" :note="note"/>
 					</div>
 				</MkFoldableSection>
+				<MkFoldableSection :expanded="false">
+					<template #header><i class="ti ti-info-circle ti-fw" style="margin-right: 0.5em;"></i>{{ i18n.ts.info }}</template>
+					<FormSuspense v-slot="{ result: info }" :p="initInfo">
+						<FormSection>
+							<FormSplit>
+								<MkKeyValue>
+									<template #key>{{ i18n.ts.author }}</template>
+									<template #value>
+										<MkUserCardMini :user="info.user"/>
+									</template>
+								</MkKeyValue>
+								<MkKeyValue>
+									<template #key>{{ i18n.ts.createdAt }}</template>
+									<template #value><MkTime :time="channel.createdAt" colored/></template>
+								</MkKeyValue>
+								<MkKeyValue>
+									<template #key>{{ i18n.ts.updatedAt }}</template>
+									<template #value><MkTime :time="channel.lastNotedAt" colored/></template>
+								</MkKeyValue>
+								<MkKeyValue>
+									<template #key>{{ i18n.ts._channel.anonymousStrategy }}</template>
+									<template #value>{{ i18n.ts[channel.anonymousStrategy] }}</template>
+								</MkKeyValue>
+								<MkKeyValue>
+									<template #key>{{ i18n.ts._channel.requirePublicWriteAccess }}</template>
+									<template #value>{{ channel.requirePublicWriteAccess ? i18n.ts.yes : i18n.ts.no }}</template>
+								</MkKeyValue>
+								<MkKeyValue>
+									<template #key>{{ i18n.ts._channel.allowRenoteToExternal }}</template>
+									<template #value>{{ channel.allowRenoteToExternal ? i18n.ts.yes : i18n.ts.no }}</template>
+								</MkKeyValue>
+							</FormSplit>
+						</FormSection>
+					</FormSuspense>
+				</MkFoldableSection>
 			</div>
 			<div v-if="channel && tab === 'timeline'" key="timeline" class="_gaps">
 				<MkInfo v-if="channel.isArchived" warn>{{ i18n.ts.thisChannelArchived }}</MkInfo>
@@ -81,8 +116,13 @@ import { $i, iAmModerator } from '@/account.js';
 import { i18n } from '@/i18n.js';
 import { definePageMetadata } from '@/scripts/page-metadata.js';
 import { deviceKind } from '@/scripts/device-kind.js';
+import FormSection from '@/components/form/section.vue';
+import FormSplit from '@/components/form/split.vue';
+import FormSuspense from '@/components/form/suspense.vue';
+import MkKeyValue from '@/components/MkKeyValue.vue';
+import MkUserCardMini from '@/components/MkUserCardMini.vue';
 import MkNotes from '@/components/MkNotes.vue';
-import { url } from '@/config.js';
+import { url } from '@@/js/config.js';
 import { favoritedChannelsCache } from '@/cache.js';
 import MkButton from '@/components/MkButton.vue';
 import MkInput from '@/components/MkInput.vue';
@@ -93,7 +133,7 @@ import MkFoldableSection from '@/components/MkFoldableSection.vue';
 import MkHorizontalSwipe from '@/components/MkHorizontalSwipe.vue';
 import { PageHeaderItem } from '@/types/page-header.js';
 import { isSupportShare } from '@/scripts/navigator.js';
-import copyToClipboard from '@/scripts/copy-to-clipboard.js';
+import { copyToClipboard } from '@/scripts/copy-to-clipboard.js';
 import { miLocalStorage } from '@/local-storage.js';
 import { useRouter } from '@/router/supplier.js';
 
@@ -116,6 +156,9 @@ const featuredPagination = computed(() => ({
 	params: {
 		channelId: props.channelId,
 	},
+}));
+const initInfo = () => misskeyApi('users/show', { userId: channel.value?.userId }).then(user => ({
+	user,
 }));
 
 watch(() => props.channelId, async () => {
@@ -270,14 +313,14 @@ definePageMetadata(() => ({
 
 <style lang="scss" module>
 .main {
-	min-height: calc(100cqh - (var(--stickyTop, 0px) + var(--stickyBottom, 0px)));
+	min-height: calc(100cqh - (var(--MI-stickyTop, 0px) + var(--MI-stickyBottom, 0px)));
 }
 
 .footer {
-	-webkit-backdrop-filter: var(--blur, blur(15px));
-	backdrop-filter: var(--blur, blur(15px));
-	background: var(--acrylicBg);
-	border-top: solid 0.5px var(--divider);
+	-webkit-backdrop-filter: var(--MI-blur, blur(15px));
+	backdrop-filter: var(--MI-blur, blur(15px));
+	background: var(--MI_THEME-acrylicBg);
+	border-top: solid 0.5px var(--MI_THEME-divider);
 }
 
 .bannerContainer {
@@ -311,7 +354,7 @@ definePageMetadata(() => ({
 	left: 0;
 	width: 100%;
 	height: 64px;
-	background: linear-gradient(0deg, var(--panel), var(--X15));
+	background: linear-gradient(0deg, var(--MI_THEME-panel), color(from var(--MI_THEME-panel) srgb r g b / 0));
 }
 
 .bannerStatus {
@@ -336,7 +379,7 @@ definePageMetadata(() => ({
 	bottom: 16px;
 	left: 16px;
 	background: rgba(0, 0, 0, 0.7);
-	color: var(--warn);
+	color: var(--MI_THEME-warn);
 	border-radius: 6px;
 	font-weight: bold;
 	font-size: 1em;

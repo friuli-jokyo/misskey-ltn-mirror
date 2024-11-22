@@ -5,9 +5,8 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { NotBrackets } from 'typeorm';
-import type { UsersRepository } from '@/models/_.js';
+import type { MiMeta, UsersRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import { MetaService } from '@/core/MetaService.js';
 import { QueryService } from '@/core/QueryService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import * as Acct from '@/misc/acct.js';
@@ -51,11 +50,13 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.meta)
+		private serverSettings: MiMeta,
+
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
 
 		private userEntityService: UserEntityService,
-		private metaService: MetaService,
 		private queryService: QueryService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
@@ -77,9 +78,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 
 			if (ps.excludePinned) {
-				const meta = await this.metaService.fetch();
 				const pinnedAccts = new Map<string | null, string[]>();
-				for (const acct of meta.pinnedUsers) {
+				for (const acct of serverSettings.pinnedUsers) {
 					const { host, username } = Acct.parse(acct);
 					if (host && ps.origin === 'local') continue;
 					if (!host && ps.origin === 'remote') continue;
