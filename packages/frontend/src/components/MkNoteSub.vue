@@ -7,6 +7,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 <div v-if="!muted" :class="[$style.root, { [$style.children]: depth > 1 }]">
 	<div :class="$style.main">
 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
+		<div v-if="note.visibility === 'followers'" :class="$style.followersBar"></div>
+		<div v-if="note.visibility === 'specified'" :class="$style.specifiedBar"></div>
 		<MkAvatar :class="$style.avatar" :user="userOf(note)" :link="!note.anonymouslySendToUser && !note.anonymousChannelUsername" small/>
 		<div :class="$style.body">
 			<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
@@ -49,12 +51,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { ref } from 'vue';
 import * as Misskey from 'misskey-js';
+import { hostname } from '@@/js/config.js';
 import MkNoteHeader from '@/components/MkNoteHeader.vue';
 import MkSubNoteContent from '@/components/MkSubNoteContent.vue';
 import MkCwButton from '@/components/MkCwButton.vue';
 import { notePage } from '@/filters/note.js';
 import { misskeyApi } from '@/scripts/misskey-api.js';
-import { hostname } from '@/config.js';
 import { i18n } from '@/i18n.js';
 import { $i } from '@/account.js';
 import { userPage } from '@/filters/user.js';
@@ -115,6 +117,25 @@ if (props.detail) {
 	pointer-events: none;
 }
 
+.followersBar {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	height: calc(100% - 16px);
+	pointer-events: none;
+	border-right: 5px dotted;
+}
+
+.specifiedBar {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	height: calc(100% - 16px);
+	pointer-events: none;
+	border-right: 5px solid;
+	border-radius: 2.5px;
+}
+
 .avatar {
 	flex-shrink: 0;
 	display: block;
@@ -147,7 +168,7 @@ if (props.detail) {
 }
 
 .reply, .more {
-	border-left: solid 0.5px var(--divider);
+	border-left: solid 0.5px var(--MI_THEME-divider);
 	margin-top: 10px;
 }
 
@@ -168,7 +189,7 @@ if (props.detail) {
 .muted {
 	text-align: center;
 	padding: 8px !important;
-	border: 1px solid var(--divider);
+	border: 1px solid var(--MI_THEME-divider);
 	margin: 8px 8px 0 8px;
 	border-radius: 8px;
 }

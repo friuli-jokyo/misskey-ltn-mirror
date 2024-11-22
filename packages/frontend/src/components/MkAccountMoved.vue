@@ -16,7 +16,7 @@ import { ref, watch } from 'vue';
 import * as Misskey from 'misskey-js';
 import MkMention from './MkMention.vue';
 import { i18n } from '@/i18n.js';
-import { host as localHost } from '@/config.js';
+import { host as localHost } from '@@/js/config.js';
 import { loadUsers } from '@/scripts/avatars.js';
 import { misskeyApi } from '@/scripts/misskey-api.js';
 
@@ -36,9 +36,9 @@ watch(() => props.movedTo, () => {
 .root {
 	padding: 16px;
 	font-size: 90%;
-	background: var(--infoWarnBg);
-	color: var(--error);
-	border-radius: var(--radius);
+	background: var(--MI_THEME-infoWarnBg);
+	color: var(--MI_THEME-error);
+	border-radius: var(--MI-radius);
 }
 
 .link {

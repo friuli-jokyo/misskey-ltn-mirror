@@ -5,7 +5,7 @@
 
 import crypto from 'node:crypto';
 import ms from 'ms';
-import { In, LessThanOrEqual, Not } from 'typeorm';
+import { In, IsNull, LessThanOrEqual, Not, Or } from 'typeorm';
 import { Inject, Injectable } from '@nestjs/common';
 import type { MiUser } from '@/models/User.js';
 import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository, ChannelAnonymousSaltsRepository } from '@/models/_.js';
@@ -18,8 +18,6 @@ import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { NoteCreateService } from '@/core/NoteCreateService.js';
 import { DI } from '@/di-symbols.js';
 import { isQuote, isRenote } from '@/misc/is-renote.js';
-import { MetaService } from '@/core/MetaService.js';
-import { UtilityService } from '@/core/UtilityService.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { IdService } from '@/core/IdService.js';
 import { ApiError } from '../../error.js';
@@ -438,13 +436,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					where: {
 						channelId: channel.id,
 						since: LessThanOrEqual(this.idService.gen(createdAt.valueOf(), true)),
-						until: Not(LessThanOrEqual(this.idService.gen(createdAt.valueOf(), true))),
+						until: Or(Not(LessThanOrEqual(this.idService.gen(createdAt.valueOf(), true))), IsNull()),
 					},
 					order: {
 						since: 'DESC',
 						until: {
 							direction: 'ASC',
-							nulls: 'FIRST',
+							nulls: 'LAST',
 						},
 					},
 				});
