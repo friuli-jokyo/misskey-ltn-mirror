@@ -40,7 +40,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 								<MkKeyValue>
 									<template #key>{{ i18n.ts.author }}</template>
 									<template #value>
-										<MkUserCardMini :user="info.user"/>
+										<MkA :to="userPage(info.user)">
+											<MkUserCardMini :user="info.user"/>
+										</MkA>
 									</template>
 								</MkKeyValue>
 								<MkKeyValue>
@@ -53,7 +55,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 								</MkKeyValue>
 								<MkKeyValue>
 									<template #key>{{ i18n.ts._channel.anonymousStrategy }}</template>
-									<template #value>{{ i18n.ts[channel.anonymousStrategy] }}</template>
+									<template #value>{{ channel.anonymousStrategy ? i18n.ts[channel.anonymousStrategy] : i18n.ts.none }}</template>
 								</MkKeyValue>
 								<MkKeyValue>
 									<template #key>{{ i18n.ts._channel.requirePublicWriteAccess }}</template>
@@ -111,6 +113,7 @@ import MkPostForm from '@/components/MkPostForm.vue';
 import MkTimeline from '@/components/MkTimeline.vue';
 import XChannelFollowButton from '@/components/MkChannelFollowButton.vue';
 import * as os from '@/os.js';
+import { userPage } from '@/filters/user.js';
 import { misskeyApi } from '@/scripts/misskey-api.js';
 import { $i, iAmModerator } from '@/account.js';
 import { i18n } from '@/i18n.js';
