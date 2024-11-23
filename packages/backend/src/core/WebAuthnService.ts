@@ -236,8 +236,7 @@ export class WebAuthnService {
 		}
 
 		if (!authenticationInfo.userVerified) {
-			// UV なしの場合は CYK で継続するのでチャレンジを入れ直しておく
-			await this.redisClient.setex(`webauthn:challenge:${context}`, 90, challenge);
+			await this.redisClient.setex(`webauthn:challenge:${key.userId}`, 90, challenge);
 			return { userId: key.userId, finished: false };
 		}
 

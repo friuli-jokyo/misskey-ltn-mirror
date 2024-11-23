@@ -21,9 +21,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 			:message="message"
 			:openOnRemote="openOnRemote"
 
+			@passwordProvided="onPasswordProvided"
 			@usernameSubmitted="onUsernameSubmitted"
 			@passkeyClick="onPasskeyLogin"
-			@done="onPasskeyDone"
+			@done="onConditionalMediationDone"
 		/>
 
 		<!-- 2. パスワード入力 -->
@@ -130,6 +131,12 @@ function onPasskeyLogin(): void {
 	}
 }
 
+function onConditionalMediationDone(response: { context: string, credential: AuthenticationPublicKeyCredential }): void {
+	doingPasskeyFromInputPage.value = true;
+	passkeyContext.value = response.context;
+	onPasskeyDone(response.credential);
+}
+
 function onPasskeyDone(response: AuthenticationPublicKeyCredential): void {
 	waiting.value = true;
 
@@ -175,7 +182,12 @@ async function onUsernameSubmitted(username: string) {
 
 	await tryLogin({
 		username,
+		password: password.value || undefined,
 	});
+}
+
+function onPasswordProvided(pw: string) {
+	password.value = pw;
 }
 
 async function onPasswordSubmitted(pw: PwResponse) {

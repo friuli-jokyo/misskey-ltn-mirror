@@ -36,6 +36,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<template #prefix>@</template>
 				<template #suffix>@{{ host }}</template>
 			</MkInput>
+			<!-- some user-agents cannot initiate conditional mediation without a password field -->
+			<input type="text" autocomplete="password webauthn" style="display: none;" @input="emit('passwordProvided', $event.target.value)" />
 			<MkButton type="submit" large primary rounded style="margin: 0 auto;" data-cy-signin-page-input-continue>{{ i18n.ts.continue }} <i class="ti ti-arrow-right"></i></MkButton>
 		</form>
 
@@ -78,8 +80,9 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
 	(ev: 'usernameSubmitted', v: string): void;
+	(ev: 'passwordProvided', v: string): void;
 	(ev: 'passkeyClick', v: MouseEvent): void;
-	(ev: 'done', v: AuthenticationPublicKeyCredential): void;
+	(ev: 'done', v: { context: string, credential: AuthenticationPublicKeyCredential }): void;
 }>();
 
 const host = toUnicode(configHost);
@@ -102,8 +105,8 @@ onMounted(() => {
 							abortSignal: abortController.signal,
 						});
 						webAuthnRequest(options)
-							.then(response => {
-								emit('done', response);
+							.then(credential => {
+								emit('done', { context: response.context, credential });
 							})
 							.catch(err => {
 								console.error(err);
