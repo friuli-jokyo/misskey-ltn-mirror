@@ -165,7 +165,9 @@ const initInfo = () => channel.value?.userId
 	? misskeyApi('users/show', { userId: channel.value?.userId }).then(user => ({
 			user,
 		}))
-	: Promise.resolve(null);
+	: Promise.resolve({
+			user: null,
+		});
 
 watch(() => props.channelId, async () => {
 	channel.value = await misskeyApi('channels/show', {
