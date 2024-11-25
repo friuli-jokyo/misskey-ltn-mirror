@@ -28,7 +28,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 				<MkButton type="submit" rounded :disabled="processing" primary style="margin: 0 auto;">{{ i18n.ts.send }}</MkButton>
 
+				<!--
 				<MkInfo>{{ i18n.ts._forgotPassword.ifNoEmail }}</MkInfo>
+				-->
 			</div>
 		</form>
 		<div v-else>
