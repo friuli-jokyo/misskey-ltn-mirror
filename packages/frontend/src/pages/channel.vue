@@ -40,9 +40,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 								<MkKeyValue>
 									<template #key>{{ i18n.ts.author }}</template>
 									<template #value>
-										<MkA :to="userPage(info.user)">
+										<MkA v-if="info.user" :to="userPage(info.user)">
 											<MkUserCardMini :user="info.user"/>
 										</MkA>
+										<MkInfo v-else>{{ i18n.ts.none }}</MkInfo>
 									</template>
 								</MkKeyValue>
 								<MkKeyValue>
@@ -160,9 +161,11 @@ const featuredPagination = computed(() => ({
 		channelId: props.channelId,
 	},
 }));
-const initInfo = () => misskeyApi('users/show', { userId: channel.value?.userId }).then(user => ({
-	user,
-}));
+const initInfo = () => channel.value?.userId
+	? misskeyApi('users/show', { userId: channel.value?.userId }).then(user => ({
+			user,
+		}))
+	: Promise.resolve(null);
 
 watch(() => props.channelId, async () => {
 	channel.value = await misskeyApi('channels/show', {
