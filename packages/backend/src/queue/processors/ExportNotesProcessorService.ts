@@ -61,14 +61,12 @@ class NoteStream extends ReadableStream<Record<string, unknown>> {
 
 		super({
 			async pull(controller): Promise<void> {
-				const notes = await notesRepository.find({
-					where: {
-						userId,
-						...(cursor !== null ? { id: MoreThan(cursor) } : {}),
-					},
-					take: 10, // 10件ずつ取得
-					order: { id: 1 },
-				});
+				const notes = await notesRepository.createQueryBuilder('note')
+					.where('note.userId = :userId', { userId })
+					.andWhere(cursor !== null ? 'note.id || \'\' > :cursor' : '1 = 1', { cursor })
+					.orderBy('note.id')
+					.take(100)
+					.getMany();
 
 				if (notes.length === 0) {
 					job.updateProgress(100);
