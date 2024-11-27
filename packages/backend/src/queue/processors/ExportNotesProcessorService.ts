@@ -66,7 +66,7 @@ class NoteStream extends ReadableStream<Record<string, unknown>> {
 						userId,
 						...(cursor !== null ? { id: MoreThan(cursor) } : {}),
 					},
-					take: 100, // 100件ずつ取得
+					take: 10, // 10件ずつ取得
 					order: { id: 1 },
 				});
 
