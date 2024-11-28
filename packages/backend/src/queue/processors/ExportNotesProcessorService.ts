@@ -62,19 +62,20 @@ class NoteStream extends ReadableStream<Record<string, unknown>> {
 
 		super({
 			async pull(controller): Promise<void> {
+				const next = idService.gen(idService.parse(cursor || userId.slice(0, 3).padEnd(userId.length - 3, '0')).date.valueOf() + 60466176, true);
 				const notes = await notesRepository.createQueryBuilder('note')
 					.where('note.userId = :userId', { userId })
-					.andWhere(cursor !== null ? 'note.id || \'\' > :cursor' : '1 = 1', { cursor })
+					.andWhere('note.id >= :since', { since: cursor || userId })
+					.andWhere('note.id < :until', { until: next })
 					.orderBy('note.id')
-					.take(100)
 					.getMany();
 
-				if (notes.length === 0) {
+				if (idService.parse(next).date.valueOf() > Date.now()) {
 					job.updateProgress(100);
 					controller.close();
 				}
 
-				cursor = notes.at(-1)?.id ?? null;
+				cursor = next;
 
 				for (const note of notes) {
 					const poll = note.hasPoll
