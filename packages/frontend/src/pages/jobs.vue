@@ -18,6 +18,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { i18n } from '@/i18n.js';
 import { misskeyApi } from '@/scripts/misskey-api.js';
 import { definePageMetadata } from '@/scripts/page-metadata.js';
 import XPie from '@/widgets/server-metric/pie.vue';
@@ -32,7 +33,7 @@ onMounted(() => {
 		abortController.abort();
 		abortController = new AbortController();
 		misskeyApi('i/jobs', {}, undefined, abortController.signal).then((res: any) => {
-			jobs.value = res.jobs;
+			jobs.value = res;
 		});
 	}, 1000);
 });
