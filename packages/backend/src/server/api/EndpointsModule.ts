@@ -235,6 +235,7 @@ import * as ep___i_importFollowing from './endpoints/i/import-following.js';
 import * as ep___i_importMuting from './endpoints/i/import-muting.js';
 import * as ep___i_importUserLists from './endpoints/i/import-user-lists.js';
 import * as ep___i_importAntennas from './endpoints/i/import-antennas.js';
+import * as ep___i_jobs from './endpoints/i/jobs.js';
 import * as ep___i_notifications from './endpoints/i/notifications.js';
 import * as ep___i_notificationsGrouped from './endpoints/i/notifications-grouped.js';
 import * as ep___i_pageLikes from './endpoints/i/page-likes.js';
@@ -624,6 +625,7 @@ const $i_importFollowing: Provider = { provide: 'ep:i/import-following', useClas
 const $i_importMuting: Provider = { provide: 'ep:i/import-muting', useClass: ep___i_importMuting.default };
 const $i_importUserLists: Provider = { provide: 'ep:i/import-user-lists', useClass: ep___i_importUserLists.default };
 const $i_importAntennas: Provider = { provide: 'ep:i/import-antennas', useClass: ep___i_importAntennas.default };
+const $i_jobs: Provider = { provide: 'ep:i/jobs', useClass: ep___i_jobs.default };
 const $i_notifications: Provider = { provide: 'ep:i/notifications', useClass: ep___i_notifications.default };
 const $i_notificationsGrouped: Provider = { provide: 'ep:i/notifications-grouped', useClass: ep___i_notificationsGrouped.default };
 const $i_pageLikes: Provider = { provide: 'ep:i/page-likes', useClass: ep___i_pageLikes.default };
@@ -1017,6 +1019,7 @@ const $reversi_verify: Provider = { provide: 'ep:reversi/verify', useClass: ep__
 		$i_importMuting,
 		$i_importUserLists,
 		$i_importAntennas,
+		$i_jobs,
 		$i_notifications,
 		$i_notificationsGrouped,
 		$i_pageLikes,
@@ -1403,6 +1406,7 @@ const $reversi_verify: Provider = { provide: 'ep:reversi/verify', useClass: ep__
 		$i_importMuting,
 		$i_importUserLists,
 		$i_importAntennas,
+		$i_jobs,
 		$i_notifications,
 		$i_notificationsGrouped,
 		$i_pageLikes,

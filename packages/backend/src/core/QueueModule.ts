@@ -13,6 +13,8 @@ import {
 	DeliverJobData,
 	EndedPollNotificationJobData,
 	InboxJobData,
+	DbJobData,
+	DbJobMap,
 	RelationshipJobData,
 	UserWebhookDeliverJobData,
 	SystemWebhookDeliverJobData,
@@ -23,7 +25,7 @@ export type SystemQueue = Bull.Queue<Record<string, unknown>>;
 export type EndedPollNotificationQueue = Bull.Queue<EndedPollNotificationJobData>;
 export type DeliverQueue = Bull.Queue<DeliverJobData>;
 export type InboxQueue = Bull.Queue<InboxJobData>;
-export type DbQueue = Bull.Queue;
+export type DbQueue = Bull.Queue<DbJobData<keyof DbJobMap>>;
 export type RelationshipQueue = Bull.Queue<RelationshipJobData>;
 export type ObjectStorageQueue = Bull.Queue;
 export type UserWebhookDeliverQueue = Bull.Queue<UserWebhookDeliverJobData>;

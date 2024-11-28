@@ -31,6 +31,7 @@ class NoteStream extends ReadableStream<Record<string, unknown>> {
 		notesRepository: NotesRepository,
 		pollsRepository: PollsRepository,
 		driveFileEntityService: DriveFileEntityService,
+		usersRepository: UsersRepository,
 		idService: IdService,
 		userId: string,
 	) {
@@ -85,9 +86,8 @@ class NoteStream extends ReadableStream<Record<string, unknown>> {
 					controller.enqueue(content);
 					exportedNotesCount++;
 				}
-
-				const total = await notesRepository.countBy({ userId });
-				job.updateProgress(exportedNotesCount / total);
+				const user = await usersRepository.findOneByOrFail({ id: userId });
+				job.updateProgress(100 * exportedNotesCount / user.notesCount);
 			},
 		});
 	}
@@ -137,6 +137,7 @@ export class ExportNotesProcessorService {
 				this.notesRepository,
 				this.pollsRepository,
 				this.driveFileEntityService,
+				this.usersRepository,
 				this.idService,
 				user.id,
 			)

@@ -67,6 +67,10 @@ export class ImportFollowingProcessorService {
 		const user = job.data.user;
 
 		try {
+			if (job.data.remaining) {
+				this.queueService.createImportFollowingToDbJob(user, job.data.remaining, job.data.withReplies);
+			}
+
 			const acct = line.split(',')[0].trim();
 			const { username, host } = Acct.parse(acct);
 
