@@ -101,7 +101,7 @@ export class ExportBlockingProcessorService {
 					blockerId: user.id,
 				});
 
-				job.updateProgress(exportedCount / total);
+				job.updateProgress(100 * exportedCount / total);
 			}
 
 			stream.end();

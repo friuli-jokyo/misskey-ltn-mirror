@@ -94,6 +94,7 @@ export type DbUserImportToDbJobData = {
 	user: ThinUser;
 	target: string;
 	withReplies?: boolean;
+	remaining?: string[];
 };
 
 export type ObjectStorageJobData = ObjectStorageFileJobData | Record<string, unknown>;

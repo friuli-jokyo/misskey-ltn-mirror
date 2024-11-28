@@ -201,6 +201,7 @@ export class QueueService {
 		return this.dbQueue.add('exportCustomEmojis', {
 			user: { id: user.id },
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -211,6 +212,7 @@ export class QueueService {
 		return this.dbQueue.add('exportNotes', {
 			user: { id: user.id },
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -221,6 +223,7 @@ export class QueueService {
 		return this.dbQueue.add('exportClips', {
 			user: { id: user.id },
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -231,6 +234,7 @@ export class QueueService {
 		return this.dbQueue.add('exportFavorites', {
 			user: { id: user.id },
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -243,6 +247,7 @@ export class QueueService {
 			excludeMuting,
 			excludeInactive,
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -253,6 +258,7 @@ export class QueueService {
 		return this.dbQueue.add('exportMuting', {
 			user: { id: user.id },
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -263,6 +269,7 @@ export class QueueService {
 		return this.dbQueue.add('exportBlocking', {
 			user: { id: user.id },
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -273,6 +280,7 @@ export class QueueService {
 		return this.dbQueue.add('exportUserLists', {
 			user: { id: user.id },
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -283,6 +291,7 @@ export class QueueService {
 		return this.dbQueue.add('exportAntennas', {
 			user: { id: user.id },
 		}, {
+			attempts: 3,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
@@ -302,8 +311,17 @@ export class QueueService {
 
 	@bindThis
 	public createImportFollowingToDbJob(user: ThinUser, targets: string[], withReplies?: boolean) {
-		const jobs = targets.map(rel => this.generateToDbJobData('importFollowingToDb', { user, target: rel, withReplies }));
-		return this.dbQueue.addBulk(jobs);
+		if (targets.length === 0) return;
+		return this.dbQueue.add('importFollowingToDb', {
+			user: { id: user.id },
+			target: targets[0],
+			withReplies,
+			remaining: targets.slice(1),
+		}, {
+			removeOnComplete: true,
+			removeOnFail: true,
+			delay: 1000,
+		});
 	}
 
 	@bindThis

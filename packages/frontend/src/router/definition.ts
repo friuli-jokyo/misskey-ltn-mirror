@@ -265,6 +265,9 @@ const routes: RouteDef[] = [{
 	path: '/scratchpad',
 	component: page(() => import('@/pages/scratchpad.vue')),
 }, {
+	path: '/jobs',
+	component: page(() => import('@/pages/jobs.vue')),
+}, {
 	path: '/preview',
 	component: page(() => import('@/pages/preview.vue')),
 }, {
