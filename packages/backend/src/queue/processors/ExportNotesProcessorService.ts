@@ -65,15 +65,9 @@ class NoteStream extends ReadableStream<Record<string, unknown>> {
 				const next = idService.gen(idService.parse(cursor || userId.slice(0, 3).padEnd(userId.length - 3, '0')).date.valueOf() + 60466176, true);
 				const notes = await notesRepository.createQueryBuilder('note')
 					.where('note.userId = :userId', { userId })
-					.andWhere('note.id >= :since', { since: cursor || userId })
-					.andWhere('note.id < :until', { until: next })
+					.andWhere('note.id LIKE :range', { range: (cursor || userId).slice(0, 3) + '%' })
 					.orderBy('note.id')
 					.getMany();
-
-				if (idService.parse(next).date.valueOf() > Date.now()) {
-					job.updateProgress(100);
-					controller.close();
-				}
 
 				cursor = next;
 
@@ -89,6 +83,11 @@ class NoteStream extends ReadableStream<Record<string, unknown>> {
 				}
 				const user = await usersRepository.findOneByOrFail({ id: userId });
 				job.updateProgress(100 * exportedNotesCount / user.notesCount);
+
+				if (idService.parse(next).date.valueOf() > Date.now()) {
+					job.updateProgress(100);
+					controller.close();
+				}
 			},
 		});
 	}
