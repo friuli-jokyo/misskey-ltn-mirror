@@ -7,10 +7,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 <MkStickyContainer>
 	<template #header><MkPageHeader :actions="headerActions" :tabs="headerTabs"/></template>
 	<MkSpacer :contentMax="600" :marginMin="16" class="_gaps_s">
-		<div v-for="job in jobs" :class="$style.job" :key="job.id">
-			<div :class="$style.name">{{ job.name }}</div>
-			<MkTime :class="$style.timestamp" :time="job.timestamp"/>
-			<XPie :class="$style.progress" :value="job.progress / 100" class="_pie"/>
+		<div v-for="job in jobs" :key="job.id">
+			<div :class="$style.job" class="_panel">
+				<div :class="$style.name">{{ job.name }}</div>
+				<MkTime :class="$style.timestamp" :time="job.timestamp"/>
+				<XPie :class="$style.progress" :value="job.progress / 100" class="_pie"/>
+			</div>
 		</div>
 	</MkSpacer>
 </MkStickyContainer>

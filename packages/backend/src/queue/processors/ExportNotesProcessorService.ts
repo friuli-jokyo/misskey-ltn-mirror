@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { ReadableStream, TextEncoderStream } from 'node:stream/web';
+import { TextEncoderStream, TransformStream } from 'node:stream/web';
 import { Inject, Injectable } from '@nestjs/common';
-import { MoreThan } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { format as dateFormat } from 'date-fns';
 import { DI } from '@/di-symbols.js';
-import type { NotesRepository, PollsRepository, UsersRepository } from '@/models/_.js';
+import type { MiUser, NotesRepository, PollsRepository, UsersRepository } from '@/models/_.js';
 import type Logger from '@/logger.js';
 import { DriveService } from '@/core/DriveService.js';
 import { createTemp } from '@/misc/create-temp.js';
@@ -24,51 +24,52 @@ import { FileWriterStream } from '@/misc/FileWriterStream.js';
 import { QueueLoggerService } from '../QueueLoggerService.js';
 import type * as Bull from 'bullmq';
 import type { DbJobDataWithUser } from '../types.js';
+import { Readable } from 'node:stream';
 
-class NoteStream extends TransformStream<MiNote, Record<string, unknown>> {
+type MiNoteRaw = {
+	[T in keyof MiNote as `note_${T}`]: MiNote[T];
+};
+
+class NoteStream extends TransformStream<MiNoteRaw, Record<string, unknown>> {
 	constructor(
 		job: Bull.Job,
 		pollsRepository: PollsRepository,
 		driveFileEntityService: DriveFileEntityService,
-		usersRepository: UsersRepository,
 		idService: IdService,
-		userId: string,
+		user: MiUser,
 	) {
 		let exportedNotesCount = 0;
-		let cursor: MiNote['id'] | null = null;
 
 		const serialize = (
-			note: MiNote,
+			note: MiNoteRaw,
 			poll: MiPoll | null,
 			files: Packed<'DriveFile'>[],
 		): Record<string, unknown> => {
 			return {
-				id: note.id,
-				text: note.text,
-				createdAt: idService.parse(note.id).date.toISOString(),
-				fileIds: note.fileIds,
+				id: note.note_id,
+				text: note.note_text,
+				createdAt: idService.parse(note.note_id).date.toISOString(),
+				fileIds: note.note_fileIds,
 				files: files,
-				replyId: note.replyId,
-				renoteId: note.renoteId,
+				replyId: note.note_replyId,
+				renoteId: note.note_renoteId,
 				poll: poll,
-				cw: note.cw,
-				visibility: note.visibility,
-				visibleUserIds: note.visibleUserIds,
-				localOnly: note.localOnly,
-				reactionAcceptance: note.reactionAcceptance,
+				cw: note.note_cw,
+				visibility: note.note_visibility,
+				visibleUserIds: note.note_visibleUserIds,
+				localOnly: note.note_localOnly,
+				reactionAcceptance: note.note_reactionAcceptance,
 			};
 		};
 
 		super({
 			async transform(chunk, controller) {
-
-				const poll = chunk.hasPoll
-				? await pollsRepository.findOneByOrFail({ noteId: chunk.id }) // N+1
-				: null;
-				const files = await driveFileEntityService.packManyByIds(chunk.fileIds); // N+1
+				const poll = chunk.note_hasPoll
+					? await pollsRepository.findOneByOrFail({ noteId: chunk.note_id }) // N+1
+					: null;
+				const files = await driveFileEntityService.packManyByIds(chunk.note_fileIds); // N+1
 				const content = serialize(chunk, poll, files);
 				controller.enqueue(content);
-				const user = await usersRepository.findOneByOrFail({ id: userId });
 				job.updateProgress(100 * ++exportedNotesCount / user.notesCount);
 			},
 		});
@@ -80,6 +81,9 @@ export class ExportNotesProcessorService {
 	private logger: Logger;
 
 	constructor(
+		@Inject(DI.dbLong)
+		private dbLong: DataSource,
+
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
 
@@ -112,14 +116,16 @@ export class ExportNotesProcessorService {
 
 		this.logger.info(`Temp file is ${path}`);
 
+		const queryRunner = this.dbLong.createQueryRunner();
 		try {
 			// メモリが足りなくならないようにストリームで処理する
-			const stream = await this.notesRepository.createQueryBuilder('note')
-				.where('note.userId = :userId', { userId: user.id })
-				.orderBy('note.id')
-				.stream();
-			stream
-				.pipeThrough(new NoteStream(job, this.pollsRepository, this.driveFileEntityService, this.usersRepository, this.idService, user.id))
+			await Readable.toWeb(
+				await this.notesRepository.createQueryBuilder('note', queryRunner)
+					.where('note.userId = :userId', { userId: user.id })
+					.orderBy('note.id')
+					.stream(),
+			)
+				.pipeThrough(new NoteStream(job, this.pollsRepository, this.driveFileEntityService, this.idService, user))
 				.pipeThrough(new JsonArrayStream())
 				.pipeThrough(new TextEncoderStream())
 				.pipeTo(new FileWriterStream(path));
@@ -136,6 +142,7 @@ export class ExportNotesProcessorService {
 				fileId: driveFile.id,
 			});
 		} finally {
+			await queryRunner.release();
 			cleanup();
 		}
 	}
