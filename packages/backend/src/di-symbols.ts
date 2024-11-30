@@ -6,6 +6,7 @@
 export const DI = {
 	config: Symbol('config'),
 	db: Symbol('db'),
+	dbLong: Symbol('dbLong'),
 	meta: Symbol('meta'),
 	meilisearch: Symbol('meilisearch'),
 	redis: Symbol('redis'),

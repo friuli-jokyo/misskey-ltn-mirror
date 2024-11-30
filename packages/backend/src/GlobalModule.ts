@@ -30,6 +30,15 @@ const $db: Provider = {
 	inject: [DI.config],
 };
 
+const $dbLong: Provider = {
+	provide: DI.dbLong,
+	useFactory: async (config) => {
+		const db = createPostgresDataSource(config, true);
+		return await db.initialize();
+	},
+	inject: [DI.config],
+};
+
 const $meilisearch: Provider = {
 	provide: DI.meilisearch,
 	useFactory: (config: Config) => {
@@ -148,12 +157,13 @@ const $meta: Provider = {
 @Global()
 @Module({
 	imports: [RepositoryModule],
-	providers: [$config, $db, $meta, $meilisearch, $redis, $redisForPub, $redisForSub, $redisForTimelines, $redisForReactions],
-	exports: [$config, $db, $meta, $meilisearch, $redis, $redisForPub, $redisForSub, $redisForTimelines, $redisForReactions, RepositoryModule],
+	providers: [$config, $db, $dbLong, $meta, $meilisearch, $redis, $redisForPub, $redisForSub, $redisForTimelines, $redisForReactions],
+	exports: [$config, $db, $dbLong, $meta, $meilisearch, $redis, $redisForPub, $redisForSub, $redisForTimelines, $redisForReactions, RepositoryModule],
 })
 export class GlobalModule implements OnApplicationShutdown {
 	constructor(
 		@Inject(DI.db) private db: DataSource,
+		@Inject(DI.dbLong) private dbLong: DataSource,
 		@Inject(DI.redis) private redisClient: Redis.Redis,
 		@Inject(DI.redisForPub) private redisForPub: Redis.Redis,
 		@Inject(DI.redisForSub) private redisForSub: Redis.Redis,
@@ -167,6 +177,7 @@ export class GlobalModule implements OnApplicationShutdown {
 		// And then disconnect from DB
 		await Promise.all([
 			this.db.destroy(),
+			this.dbLong.destroy(),
 			this.redisClient.disconnect(),
 			this.redisForPub.disconnect(),
 			this.redisForSub.disconnect(),

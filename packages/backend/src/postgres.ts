@@ -205,7 +205,7 @@ export const entities = [
 
 const log = process.env.NODE_ENV !== 'production';
 
-export function createPostgresDataSource(config: Config) {
+export function createPostgresDataSource(config: Config, long = false) {
 	return new DataSource({
 		type: 'postgres',
 		host: config.db.host,
@@ -214,7 +214,7 @@ export function createPostgresDataSource(config: Config) {
 		password: config.db.pass,
 		database: config.db.db,
 		extra: {
-			statement_timeout: 1000 * 10,
+			statement_timeout: long ? 0 : 32768,
 			...config.db.extra,
 		},
 		...(config.dbReplications ? {

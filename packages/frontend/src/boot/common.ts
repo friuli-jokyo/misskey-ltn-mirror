@@ -61,7 +61,7 @@ export async function common(createVue: () => App<Element>) {
 		});
 	}
 
-	let isClientUpdated = false;
+	let isClientUpdated: boolean | null = null;
 
 	//#region クライアントが更新されたかチェック
 	const lastVersion = miLocalStorage.getItem('lastVersion');
@@ -73,7 +73,7 @@ export async function common(createVue: () => App<Element>) {
 
 		try { // 変なバージョン文字列来るとcompareVersionsでエラーになるため
 			if (lastVersion != null && compareVersions(version, lastVersion) === 1) {
-				isClientUpdated = true;
+				isClientUpdated = version.split('-')[0] !== lastVersion.split('-')[0];
 			}
 		} catch (err) { /* empty */ }
 	}
