@@ -25,10 +25,9 @@ import { QueueLoggerService } from '../QueueLoggerService.js';
 import type * as Bull from 'bullmq';
 import type { DbJobDataWithUser } from '../types.js';
 
-class NoteStream extends ReadableStream<Record<string, unknown>> {
+class NoteStream extends TransformStream<MiNote, Record<string, unknown>> {
 	constructor(
 		job: Bull.Job,
-		notesRepository: NotesRepository,
 		pollsRepository: PollsRepository,
 		driveFileEntityService: DriveFileEntityService,
 		usersRepository: UsersRepository,
@@ -61,33 +60,16 @@ class NoteStream extends ReadableStream<Record<string, unknown>> {
 		};
 
 		super({
-			async pull(controller): Promise<void> {
-				const next = idService.gen(idService.parse(cursor || userId.slice(0, 3).padEnd(userId.length - 3, '0')).date.valueOf() + 60466176, true);
-				const notes = await notesRepository.createQueryBuilder('note')
-					.where('note.userId = :userId', { userId })
-					.andWhere('note.id LIKE :range', { range: (cursor || userId).slice(0, 3) + '%' })
-					.orderBy('note.id')
-					.getMany();
+			async transform(chunk, controller) {
 
-				cursor = next;
-
-				for (const note of notes) {
-					const poll = note.hasPoll
-						? await pollsRepository.findOneByOrFail({ noteId: note.id }) // N+1
-						: null;
-					const files = await driveFileEntityService.packManyByIds(note.fileIds); // N+1
-					const content = serialize(note, poll, files);
-
-					controller.enqueue(content);
-					exportedNotesCount++;
-				}
+				const poll = chunk.hasPoll
+				? await pollsRepository.findOneByOrFail({ noteId: chunk.id }) // N+1
+				: null;
+				const files = await driveFileEntityService.packManyByIds(chunk.fileIds); // N+1
+				const content = serialize(chunk, poll, files);
+				controller.enqueue(content);
 				const user = await usersRepository.findOneByOrFail({ id: userId });
-				job.updateProgress(100 * exportedNotesCount / user.notesCount);
-
-				if (idService.parse(next).date.valueOf() > Date.now()) {
-					job.updateProgress(100);
-					controller.close();
-				}
+				job.updateProgress(100 * ++exportedNotesCount / user.notesCount);
 			},
 		});
 	}
@@ -132,15 +114,12 @@ export class ExportNotesProcessorService {
 
 		try {
 			// メモリが足りなくならないようにストリームで処理する
-			await new NoteStream(
-				job,
-				this.notesRepository,
-				this.pollsRepository,
-				this.driveFileEntityService,
-				this.usersRepository,
-				this.idService,
-				user.id,
-			)
+			const stream = await this.notesRepository.createQueryBuilder('note')
+				.where('note.userId = :userId', { userId: user.id })
+				.orderBy('note.id')
+				.stream();
+			stream
+				.pipeThrough(new NoteStream(job, this.pollsRepository, this.driveFileEntityService, this.usersRepository, this.idService, user.id))
 				.pipeThrough(new JsonArrayStream())
 				.pipeThrough(new TextEncoderStream())
 				.pipeTo(new FileWriterStream(path));
