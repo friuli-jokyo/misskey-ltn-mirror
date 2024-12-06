@@ -36,7 +36,7 @@ export async function mainBoot() {
 	reactionPicker.init();
 	emojiPicker.init();
 
-	if (isClientUpdated && $i) {
+	if (isClientUpdated != null && $i) {
 		const { dispose } = popup(defineAsyncComponent(() => import('@/components/MkUpdated.vue')), {
 			showAsModal: isClientUpdated,
 		}, {
