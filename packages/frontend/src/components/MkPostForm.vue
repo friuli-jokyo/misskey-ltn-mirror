@@ -280,6 +280,12 @@ watch(visibleUsers, () => {
 	deep: true,
 });
 
+watch([defaultStore.reactiveState.rememberNoteVisibility, defaultStore.reactiveState.visibility], ([rememberNoteVisibilityValue, visibilityValue]) => {
+	if (rememberNoteVisibilityValue) {
+		visibility.value = visibilityValue;
+	}
+});
+
 if (props.mention) {
 	text.value = props.mention.host ? `@${props.mention.username}@${toASCII(props.mention.host)}` : `@${props.mention.username}`;
 	text.value += ' ';
