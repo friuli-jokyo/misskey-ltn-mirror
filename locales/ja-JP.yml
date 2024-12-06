@@ -138,6 +138,7 @@ overwriteFromPinnedEmojisForReaction: "リアクション設定から上書き�
 overwriteFromPinnedEmojis: "全般設定から上書きする"
 reactionSettingDescription2: "ドラッグして並び替え、クリックして削除、＋を押して追加します。"
 rememberNoteVisibility: "公開範囲を記憶する"
+showNoteVisibilityDial: "公開範囲ダイアルを表示"
 attachCancel: "添付取り消し"
 deleteFile: "ファイルを削除"
 markAsSensitive: "センシティブとして設定"

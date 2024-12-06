@@ -571,6 +571,10 @@ export interface Locale extends ILocale {
      */
     "rememberNoteVisibility": string;
     /**
+     * 公開範囲ダイアルを表示
+     */
+    "showNoteVisibilityDial": string;
+    /**
      * 添付取り消し
      */
     "attachCancel": string;

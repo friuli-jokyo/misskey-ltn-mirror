@@ -151,6 +151,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<MkSwitch v-model="defaultNoteLocalOnly">{{ i18n.ts._visibility.disableFederation }}</MkSwitch>
 				</div>
 			</MkFolder>
+			<MkSwitch v-else v-model="showNoteVisibilityDial" @update:modelValue="save()">{{ i18n.ts.showNoteVisibilityDial }}</MkSwitch>
 		</div>
 	</FormSection>
 
@@ -192,6 +193,7 @@ const followersVisibility = ref($i.followersVisibility);
 const defaultNoteVisibility = computed(defaultStore.makeGetterSetter('defaultNoteVisibility'));
 const defaultNoteLocalOnly = computed(defaultStore.makeGetterSetter('defaultNoteLocalOnly'));
 const rememberNoteVisibility = computed(defaultStore.makeGetterSetter('rememberNoteVisibility'));
+const showNoteVisibilityDial = computed(defaultStore.makeGetterSetter('showNoteVisibilityDial'));
 const keepCw = computed(defaultStore.makeGetterSetter('keepCw'));
 
 const makeNotesFollowersOnlyBefore_type = computed(() => {

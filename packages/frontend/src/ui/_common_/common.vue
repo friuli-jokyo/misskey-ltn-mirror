@@ -37,6 +37,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <XStreamIndicator/>
 
+<MkVisibilityDial v-if="showNoteVisibilityDial" :class="$style.dial"/>
+
 <div v-if="pendingApiRequestsCount > 0" id="wait"></div>
 
 <div v-if="dev" id="devTicker"><span style="animation: dev-ticker-blink 2s infinite;">DEV BUILD</span></div>
@@ -58,12 +60,14 @@ import { useStream } from '@/stream.js';
 import { i18n } from '@/i18n.js';
 import { defaultStore } from '@/store.js';
 import { globalEvents } from '@/events.js';
+import MkVisibilityDial from '@/components/MkVisibilityDial.vue';
 
 const XStreamIndicator = defineAsyncComponent(() => import('./stream-indicator.vue'));
 const XUpload = defineAsyncComponent(() => import('./upload.vue'));
 
 const dev = _DEV_;
 
+const showNoteVisibilityDial = defaultStore.reactiveState.showNoteVisibilityDial;
 const notifications = ref<Misskey.entities.Notification[]>([]);
 
 function onNotification(notification: Misskey.entities.Notification, isClient = false) {
@@ -196,6 +200,13 @@ if ($i) {
 			flex-shrink: 0;
 		}
 	}
+}
+
+.dial {
+	position: fixed;
+	inset: 0 0 0 auto;
+	z-index: 1;
+	margin: auto 0;
 }
 
 .notification {
