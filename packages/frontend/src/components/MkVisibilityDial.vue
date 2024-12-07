@@ -154,7 +154,7 @@ const mouseup = (ev: MouseEvent) => {
 		transition: opacity 0.2s;
 	}
 
-	&:hover::after {
+	&.active::after {
 		border-top-color: var(--MI_THEME-accent);
 	}
 
