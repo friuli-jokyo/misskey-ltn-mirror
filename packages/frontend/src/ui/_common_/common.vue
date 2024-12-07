@@ -60,10 +60,10 @@ import { useStream } from '@/stream.js';
 import { i18n } from '@/i18n.js';
 import { defaultStore } from '@/store.js';
 import { globalEvents } from '@/events.js';
-import MkVisibilityDial from '@/components/MkVisibilityDial.vue';
 
 const XStreamIndicator = defineAsyncComponent(() => import('./stream-indicator.vue'));
 const XUpload = defineAsyncComponent(() => import('./upload.vue'));
+const MkVisibilityDial = defineAsyncComponent(() => import('@/components/MkVisibilityDial.vue'));
 
 const dev = _DEV_;
 

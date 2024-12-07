@@ -85,6 +85,7 @@ export const ROLE_POLICIES = [
 	'inviteExpirationTime',
 	'canManageCustomEmojis',
 	'canManageAvatarDecorations',
+	'canManageAds',
 	'canSearchNotes',
 	'canUseTranslator',
 	'canHideAds',
