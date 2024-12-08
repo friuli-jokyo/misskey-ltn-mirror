@@ -11,6 +11,7 @@ import { DI } from '@/di-symbols.js';
 import { readyRef } from '@/boot/ready.js';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import type { MeiliSearch } from 'meilisearch';
+import { ApiLoggerService } from '@/server/api/ApiLoggerService.js';
 
 @Injectable()
 export class HealthServerService {
@@ -35,12 +36,14 @@ export class HealthServerService {
 
 		@Inject(DI.meilisearch)
 		private meilisearch: MeiliSearch | null,
+
+		private apiLoggerService: ApiLoggerService,
 	) {}
 
 	@bindThis
 	public createServer(fastify: FastifyInstance, options: FastifyPluginOptions, done: (err?: Error) => void) {
 		fastify.get('/', async (request, reply) => {
-			reply.code(await Promise.all([
+			reply.code(await Promise.allSettled([
 				new Promise<void>((resolve, reject) => readyRef.value ? resolve() : reject()),
 				this.redis.ping(),
 				this.redisForPub.ping(),
@@ -49,7 +52,19 @@ export class HealthServerService {
 				this.redisForReactions.ping(),
 				this.db.query('SELECT 1'),
 				...(this.meilisearch ? [this.meilisearch.health()] : []),
-			]).then(() => 200, () => 503));
+			]).then((result) => {
+				this.apiLoggerService.logger.info('Health:', {
+					server: result[0].status,
+					redis: result[1].status,
+					redisForPub: result[2].status,
+					redisForSub: result[3].status,
+					redisForTimelines: result[4].status,
+					redisForReactions: result[5].status,
+					db: result[6].status,
+					meilisearch: result[7]?.status,
+				});
+				return result.every((r) => r.status === 'fulfilled') ? 200 : 503;
+			}));
 			reply.header('Cache-Control', 'no-store');
 		});
 
