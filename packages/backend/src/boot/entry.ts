@@ -11,7 +11,9 @@ import cluster from 'node:cluster';
 import { EventEmitter } from 'node:events';
 import chalk from 'chalk';
 import Xev from 'xev';
+import type { INestApplicationContext } from '@nestjs/common';
 import Logger from '@/logger.js';
+import { ServerService } from '@/server/ServerService.js';
 import { envOption } from '../env.js';
 import { masterMain } from './master.js';
 import { workerMain } from './worker.js';
@@ -68,8 +70,16 @@ process.on('exit', code => {
 
 //#endregion
 
+let server: INestApplicationContext | undefined;
+let jobQueue: INestApplicationContext | undefined;
 if (cluster.isPrimary || envOption.disableClustering) {
-	await masterMain();
+	const apps = await masterMain();
+	if (apps.server) {
+		server = apps.server;
+	}
+	if (apps.jobQueue) {
+		jobQueue = apps.jobQueue;
+	}
 
 	if (cluster.isPrimary) {
 		ev.mount();
@@ -77,10 +87,18 @@ if (cluster.isPrimary || envOption.disableClustering) {
 }
 
 if (cluster.isWorker || envOption.disableClustering) {
-	await workerMain();
+	const apps = await workerMain();
+	if (apps.server) {
+		server = apps.server;
+	}
+	if (apps.jobQueue) {
+		jobQueue = apps.jobQueue;
+	}
 }
 
 readyRef.value = true;
+
+await server?.get(ServerService)?.ready();
 
 // ユニットテスト時にMisskeyが子プロセスで起動された時のため
 // それ以外のときは process.send は使えないので弾く

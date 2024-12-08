@@ -10,6 +10,7 @@ import * as os from 'node:os';
 import cluster from 'node:cluster';
 import chalk from 'chalk';
 import chalkTemplate from 'chalk-template';
+import type { INestApplicationContext } from '@nestjs/common';
 import * as Sentry from '@sentry/node';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
 import Logger from '@/logger.js';
@@ -91,14 +92,16 @@ export async function masterMain() {
 		});
 	}
 
+	let serverApp: INestApplicationContext | undefined;
+	let jobQueueApp: INestApplicationContext | undefined;
 	if (envOption.disableClustering) {
 		if (envOption.onlyServer) {
-			await server();
+			serverApp = await server();
 		} else if (envOption.onlyQueue) {
-			await jobQueue();
+			jobQueueApp = await jobQueue();
 		} else {
-			await server();
-			await jobQueue();
+			serverApp = await server();
+			jobQueueApp = await jobQueue();
 		}
 	} else {
 		if (envOption.onlyServer) {
@@ -106,7 +109,7 @@ export async function masterMain() {
 		} else if (envOption.onlyQueue) {
 			// nop
 		} else {
-			await server();
+			serverApp = await server();
 		}
 
 		await spawnWorkers(config.clusterLimit);
@@ -116,6 +119,10 @@ export async function masterMain() {
 		bootLogger.succ('Queue started', null, true);
 	} else {
 		bootLogger.succ(config.socket ? `Now listening on socket ${config.socket} on ${config.url}` : `Now listening on port ${config.port} on ${config.url}`, null, true);
+	}
+	return {
+		server: serverApp,
+		jobQueue: jobQueueApp,
 	}
 }
 

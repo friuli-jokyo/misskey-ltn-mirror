@@ -111,7 +111,7 @@ const mouseup = (ev: MouseEvent) => {
 	grid: 1fr / 1fr;
 	grid-area: 1 / 1 / 2 / 2;
 	background: var(--MI_THEME-panel);
-	border: solid 1px var(--MI_THEME-divider);
+	border: dashed 1px var(--MI_THEME-divider);
 	border-radius: 128px;
 	box-shadow: 0 0 8px #0003;
 }

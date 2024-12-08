@@ -9,6 +9,7 @@ import { nodeProfilingIntegration } from '@sentry/profiling-node';
 import { envOption } from '@/env.js';
 import { loadConfig } from '@/config.js';
 import { jobQueue, server } from './common.js';
+import { INestApplicationContext } from '@nestjs/common';
 
 /**
  * Init worker process
@@ -34,16 +35,22 @@ export async function workerMain() {
 		});
 	}
 
+	let serverApp: INestApplicationContext | undefined;
+	let jobQueueApp: INestApplicationContext | undefined;
 	if (envOption.onlyServer) {
-		await server();
+		serverApp = await server();
 	} else if (envOption.onlyQueue) {
-		await jobQueue();
+		jobQueueApp = await jobQueue();
 	} else {
-		await jobQueue();
+		jobQueueApp = await jobQueue();
 	}
 
 	if (cluster.isWorker) {
 		// Send a 'ready' message to parent process
 		process.send!('ready');
 	}
+	return {
+		server: serverApp,
+		jobQueue: jobQueueApp,
+	};
 }

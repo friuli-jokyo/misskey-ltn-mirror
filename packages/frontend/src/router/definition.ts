@@ -343,6 +343,9 @@ const routes: RouteDef[] = [{
 	path: '/channels',
 	component: page(() => import('@/pages/channels.vue')),
 }, {
+	path: '/ads-manager',
+	component: page(() => import('@/pages/admin/ads.vue')),
+}, {
 	path: '/custom-emojis-manager',
 	component: page(() => import('@/pages/custom-emojis-manager.vue')),
 }, {
