@@ -50,6 +50,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div :class="$style.item_content">
 					<span :class="$style.item_content_text">{{ item.text }}</span>
 					<span v-if="item.indicate" :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
+					<span v-if="item.suffixIcon" :class="$style.caret" style="pointer-events: none;"><i class="ti ti-fw" :class="item.suffixIcon"></i></span>
 				</div>
 			</MkA>
 			<a
@@ -69,6 +70,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div :class="$style.item_content">
 					<span :class="$style.item_content_text">{{ item.text }}</span>
 					<span v-if="item.indicate" :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
+					<span v-if="item.suffixIcon" :class="$style.caret" style="pointer-events: none;"><i class="ti ti-fw" :class="item.suffixIcon"></i></span>
 				</div>
 			</a>
 			<button
