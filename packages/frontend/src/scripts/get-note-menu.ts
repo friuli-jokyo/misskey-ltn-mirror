@@ -573,22 +573,22 @@ export async function getRenoteMenu(props: {
 	const appearNote = getAppearNote(props.note);
 	const favoritedChannels = await favoritedChannelsCache.fetch();
 	let items = [] as MenuItem[];
+	const configuredVisibility = defaultStore.state.rememberNoteVisibility ? defaultStore.state.visibility : defaultStore.state.defaultNoteVisibility;
+	const localOnly = defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
+
+	let visibility = appearNote.visibility;
+	visibility = smallerVisibility(visibility, configuredVisibility);
+	if (appearNote.channel?.isSensitive) {
+		visibility = smallerVisibility(visibility, 'home');
+	}
 
 	if (!appearNote.channel || appearNote.channel.allowRenoteToExternal) {
 		items = items.concat([{
 			text: i18n.ts.renote,
 			icon: 'ti ti-repeat',
+			suffixIcon: defaultStore.state.rememberNoteVisibility ? (visibility === 'public' ? 'ti-world' : visibility === 'home' ? 'ti-home' : visibility === 'followers' ? 'ti-lock' : 'ti-mail') : undefined,
 			action: () => {
 				renoteRipple(props.renoteButton);
-
-				const configuredVisibility = defaultStore.state.rememberNoteVisibility ? defaultStore.state.visibility : defaultStore.state.defaultNoteVisibility;
-				const localOnly = defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
-
-				let visibility = appearNote.visibility;
-				visibility = smallerVisibility(visibility, configuredVisibility);
-				if (appearNote.channel?.isSensitive) {
-					visibility = smallerVisibility(visibility, 'home');
-				}
 
 				if (!props.mock) {
 					misskeyApi('notes/create', {

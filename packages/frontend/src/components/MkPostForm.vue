@@ -716,6 +716,7 @@ function saveDraft() {
 	draftData[draftKey.value] = {
 		updatedAt: new Date(),
 		data: {
+			id: props.initialNote?.id,
 			text: text.value,
 			useCw: useCw.value,
 			cw: cw.value,
@@ -1044,7 +1045,7 @@ onMounted(() => {
 				text.value = draft.data.text;
 				useCw.value = draft.data.useCw;
 				cw.value = draft.data.cw;
-				visibility.value = draft.data.visibility;
+				visibility.value = draft.data.id || !defaultStore.state.rememberNoteVisibility ? draft.data.visibility : defaultStore.state.visibility;
 				localOnly.value = draft.data.localOnly;
 				files.value = (draft.data.files || []).filter(draftFile => draftFile);
 				if (draft.data.poll) {
