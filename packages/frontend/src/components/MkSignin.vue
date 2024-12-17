@@ -20,6 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			key="input"
 			:message="message"
 			:openOnRemote="openOnRemote"
+			:useConditionalMediation="useConditionalMediation"
 
 			@passwordProvided="onPasswordProvided"
 			@usernameSubmitted="onUsernameSubmitted"
@@ -68,7 +69,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef } from 'vue';
 import * as Misskey from 'misskey-js';
-import { supported as webAuthnSupported, create as webAuthnCreate, parseRequestOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
+import { parseRequestOptionsFromJSON, create as webAuthnCreate, get as webAuthnRequest, supported as webAuthnSupported } from '@github/webauthn-json/browser-ponyfill';
 
 import type { AuthenticationPublicKeyCredential } from '@github/webauthn-json/browser-ponyfill';
 import { nameKey } from '@/scripts/client-name';
@@ -103,6 +104,7 @@ const waiting = ref(false);
 
 const passwordPageEl = useTemplateRef('passwordPageEl');
 const needCaptcha = ref(false);
+const useConditionalMediation = ref(false);
 
 const userInfo = ref<null | Misskey.entities.UserDetailed>(null);
 const password = ref('');
@@ -112,6 +114,40 @@ const credential = ref<null | AuthenticationPublicKeyCredential>(null);
 const credentialRequest = shallowRef<CredentialRequestOptions | null>(null);
 const passkeyContext = ref('');
 const doingPasskeyFromInputPage = ref(false);
+
+const abortController = new AbortController();
+
+if (webAuthnSupported()) {
+	;(window.PublicKeyCredential?.getClientCapabilities?.().then(capabilities => capabilities.conditionalMediation) ?? window.PublicKeyCredential?.isConditionalMediationAvailable?.())
+		?.then(available => {
+			if (!available) return;
+			useConditionalMediation.value = true;
+			misskeyApi('signin-with-passkey', {}, null, abortController.signal)
+				.then((response) => {
+					if (abortController.signal.aborted) {
+						useConditionalMediation.value = false;
+						return;
+					}
+					const options = parseRequestOptionsFromJSON({
+						mediation: 'conditional',
+						publicKey: response.option,
+						abortSignal: abortController.signal,
+					});
+					webAuthnRequest(options)
+						.then(credential => {
+							onConditionalMediationDone({ context: response.context, credential });
+						})
+						.catch(err => {
+							useConditionalMediation.value = false;
+							console.error(err);
+							os.alert({
+								type: 'error',
+								text: i18n.ts.signinFailed,
+							});
+						});
+				});
+		});
+}
 
 function onPasskeyLogin(): void {
 	if (webAuthnSupported()) {
@@ -421,6 +457,7 @@ onBeforeUnmount(() => {
 	password.value = '';
 	needCaptcha.value = false;
 	userInfo.value = null;
+	abortController.abort();
 });
 </script>
 

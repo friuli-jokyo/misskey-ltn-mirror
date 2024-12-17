@@ -42,14 +42,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</form>
 
 		<!-- パスワードレスログイン -->
-		<div :class="$style.orHr">
-			<p :class="$style.orMsg">{{ i18n.ts.or }}</p>
-		</div>
-		<div>
-			<MkButton type="submit" style="margin: auto auto;" large rounded primary gradate @click="emit('passkeyClick', $event)">
-				<i class="ti ti-device-usb" style="font-size: medium;"></i>{{ i18n.ts.signinWithPasskey }}
-			</MkButton>
-		</div>
+		<template v-if="!useConditionalMediation">
+			<div :class="$style.orHr">
+				<p :class="$style.orMsg">{{ i18n.ts.or }}</p>
+			</div>
+			<div>
+				<MkButton type="submit" style="margin: auto auto;" large rounded primary gradate @click="emit('passkeyClick', $event)">
+					<i class="ti ti-device-usb" style="font-size: medium;"></i>{{ i18n.ts.signinWithPasskey }}
+				</MkButton>
+			</div>
+		</template>
 	</div>
 </div>
 </template>
@@ -73,9 +75,11 @@ import MkInfo from '@/components/MkInfo.vue';
 const props = withDefaults(defineProps<{
 	message?: string,
 	openOnRemote?: OpenOnRemoteOptions,
+	useConditionalMediation?: boolean,
 }>(), {
 	message: '',
 	openOnRemote: undefined,
+	useConditionalMediation: false,
 });
 
 const emit = defineEmits<{
@@ -88,41 +92,6 @@ const emit = defineEmits<{
 const host = toUnicode(configHost);
 
 const username = ref('');
-
-const abortController = new AbortController();
-
-onMounted(() => {
-	if (webAuthnSupported()) {
-		;(window.PublicKeyCredential?.getClientCapabilities?.().then(capabilities => capabilities.conditionalMediation) ?? window.PublicKeyCredential?.isConditionalMediationAvailable?.())
-			?.then(available => {
-				if (!available) return;
-				misskeyApi('signin-with-passkey', {}, null, abortController.signal)
-					.then((response) => {
-						if (abortController.signal.aborted) return;
-						const options = parseRequestOptionsFromJSON({
-							mediation: 'conditional',
-							publicKey: response.option,
-							abortSignal: abortController.signal,
-						});
-						webAuthnRequest(options)
-							.then(credential => {
-								emit('done', { context: response.context, credential });
-							})
-							.catch(err => {
-								console.error(err);
-								os.alert({
-									type: 'error',
-									text: i18n.ts.signinFailed,
-								});
-							});
-					});
-			});
-	}
-});
-
-onUnmounted(() => {
-	abortController.abort();
-});
 
 //#region Open on remote
 function openRemote(options: OpenOnRemoteOptions, targetHost?: string): void {
