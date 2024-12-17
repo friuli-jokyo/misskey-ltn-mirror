@@ -969,6 +969,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 			for (const following of followings) {
 				// 基本的にvisibleUserIdsには自身のidが含まれている前提であること
 				if (note.visibility === 'specified' && !note.visibleUserIds.some(v => v === following.followerId)) continue;
+				if (note.anonymousChannelUsername) continue;
 
 				// 「自分自身への返信 or そのフォロワーへの返信」のどちらでもない場合
 				if (isReply(note, following.followerId)) {
@@ -988,6 +989,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 					note.userId !== userListMembership.userListUserId &&
 					!note.visibleUserIds.some(v => v === userListMembership.userListUserId)
 				) continue;
+				if (note.anonymousChannelUsername) continue;
 
 				// 「自分自身への返信 or そのリストの作成者への返信」のどちらでもない場合
 				if (isReply(note, userListMembership.userListUserId)) {
@@ -1021,9 +1023,11 @@ export class NoteCreateService implements OnApplicationShutdown {
 					}
 				}
 			} else {
-				this.fanoutTimelineService.push(`userTimeline:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax : this.meta.perRemoteUserUserTimelineCacheMax, r);
-				if (note.fileIds.length > 0) {
-					this.fanoutTimelineService.push(`userTimelineWithFiles:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax / 2 : this.meta.perRemoteUserUserTimelineCacheMax / 2, r);
+				if (!note.anonymousChannelUsername) {
+					this.fanoutTimelineService.push(`userTimeline:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax : this.meta.perRemoteUserUserTimelineCacheMax, r);
+					if (note.fileIds.length > 0) {
+						this.fanoutTimelineService.push(`userTimelineWithFiles:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax / 2 : this.meta.perRemoteUserUserTimelineCacheMax / 2, r);
+					}
 				}
 
 				if (note.visibility === 'public' && note.userHost == null) {

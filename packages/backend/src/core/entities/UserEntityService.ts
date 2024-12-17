@@ -585,9 +585,7 @@ export class UserEntityService implements OnModuleInit {
 			...(isDetailed && (isMe || iAmModerator) ? {
 				twoFactorEnabled: profile!.twoFactorEnabled,
 				usePasswordLessLogin: profile!.usePasswordLessLogin,
-				securityKeys: profile!.twoFactorEnabled
-					? this.userSecurityKeysRepository.countBy({ userId: user.id }).then(result => result >= 1)
-					: false,
+				securityKeys: this.userSecurityKeysRepository.countBy({ userId: user.id }).then(result => result >= 1),
 			} : {}),
 
 			...(isDetailed && isMe ? {
