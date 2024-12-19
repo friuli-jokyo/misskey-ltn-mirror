@@ -174,30 +174,60 @@ export class SigninApiService {
 		if (!profile.twoFactorEnabled) {
 			if (process.env.NODE_ENV !== 'test') {
 				if (this.meta.enableHcaptcha && this.meta.hcaptchaSecretKey) {
+					if (!body['hcaptcha-response']) {
+						return {
+							finished: false,
+							next: 'captcha',
+						} satisfies Misskey.entities.SigninFlowResponse;
+					}
 					await this.captchaService.verifyHcaptcha(this.meta.hcaptchaSecretKey, body['hcaptcha-response']).catch(err => {
 						throw new FastifyReplyError(400, err);
 					});
 				}
 
 				if (this.meta.enableMcaptcha && this.meta.mcaptchaSecretKey && this.meta.mcaptchaSitekey && this.meta.mcaptchaInstanceUrl) {
+					if (!body['m-captcha-response']) {
+						return {
+							finished: false,
+							next: 'captcha',
+						} satisfies Misskey.entities.SigninFlowResponse;
+					}
 					await this.captchaService.verifyMcaptcha(this.meta.mcaptchaSecretKey, this.meta.mcaptchaSitekey, this.meta.mcaptchaInstanceUrl, body['m-captcha-response']).catch(err => {
 						throw new FastifyReplyError(400, err);
 					});
 				}
 
 				if (this.meta.enableRecaptcha && this.meta.recaptchaSecretKey) {
+					if (!body['g-recaptcha-response']) {
+						return {
+							finished: false,
+							next: 'captcha',
+						} satisfies Misskey.entities.SigninFlowResponse;
+					}
 					await this.captchaService.verifyRecaptcha(this.meta.recaptchaSecretKey, body['g-recaptcha-response']).catch(err => {
 						throw new FastifyReplyError(400, err);
 					});
 				}
 
 				if (this.meta.enableTurnstile && this.meta.turnstileSecretKey) {
+					if (!body['turnstile-response']) {
+						return {
+							finished: false,
+							next: 'captcha',
+						} satisfies Misskey.entities.SigninFlowResponse;
+					}
 					await this.captchaService.verifyTurnstile(this.meta.turnstileSecretKey, body['turnstile-response']).catch(err => {
 						throw new FastifyReplyError(400, err);
 					});
 				}
 
 				if (this.meta.enableTestcaptcha) {
+					if (!body['testcaptcha-response']) {
+						return {
+							finished: false,
+							next: 'captcha',
+						} satisfies Misskey.entities.SigninFlowResponse;
+					}
 					await this.captchaService.verifyTestcaptcha(body['testcaptcha-response']).catch(err => {
 						throw new FastifyReplyError(400, err);
 					});
@@ -230,28 +260,22 @@ export class SigninApiService {
 
 			return await this.signinService.signin(request, reply, user, body.capableConditionalCreate);
 		} else if (body.credential) {
-			if (!same && !profile.usePasswordLessLogin) {
-				return await fail(403, {
-					id: '932c904e-9460-45b7-9ce6-7ed33be7eb2c',
-				});
-			}
-
 			const authorized = await this.webAuthnService.verifyAuthentication(body.credential, user.id);
 
-			if (authorized) {
-				return await this.signinService.signin(request, reply, user, body.capableConditionalCreate);
+			if (authorized?.[0] === user.id) {
+				if (authorized[1] || same) {
+					return await this.signinService.signin(request, reply, user, body.capableConditionalCreate);
+				} else {
+					return await fail(403, {
+						id: '932c904e-9460-45b7-9ce6-7ed33be7eb2c',
+					});
+				}
 			} else {
 				return await fail(403, {
 					id: '93b86c4b-72f9-40eb-9815-798928603d1e',
 				});
 			}
-		} else if (securityKeysAvailable) {
-			if (!same && !profile.usePasswordLessLogin) {
-				return await fail(403, {
-					id: '932c904e-9460-45b7-9ce6-7ed33be7eb2c',
-				});
-			}
-
+		} else if (securityKeysAvailable && profile.usePasswordLessLogin) {
 			const authRequest = await this.webAuthnService.initiateAuthentication(user.id, 'discouraged');
 
 			reply.code(200);

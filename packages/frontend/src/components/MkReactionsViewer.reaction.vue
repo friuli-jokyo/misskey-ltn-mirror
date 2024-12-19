@@ -317,9 +317,9 @@ if (!mock) {
 .user {
 	width: 24px;
 	height: 24px;
-	outline: 3px var(--panel) solid;
+	outline: 3px var(--MI_THEME-panel) solid;
 	border-radius: 100%;
-	background: var(--panel) linear-gradient(0deg, var(--x-bg), var(--x-bg));
+	background: var(--MI_THEME-panel) linear-gradient(0deg, var(--x-bg), var(--x-bg));
 
 	&::before {
 		content: "";

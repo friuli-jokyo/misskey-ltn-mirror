@@ -36,6 +36,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 			:user="userInfo!"
 			:needCaptcha="needCaptcha"
+			:initialPassword="password"
 
 			@passwordSubmitted="onPasswordSubmitted"
 		/>
@@ -241,7 +242,7 @@ async function onPasswordSubmitted(pw: PwResponse) {
 	} else {
 		await tryLogin({
 			username: userInfo.value.username,
-			password: pw.password,
+			password: password.value,
 			'hcaptcha-response': pw.captcha.hCaptchaResponse,
 			'm-captcha-response': pw.captcha.mCaptchaResponse,
 			'g-recaptcha-response': pw.captcha.reCaptchaResponse,
@@ -437,7 +438,7 @@ function onSigninApiError(err?: any): void {
 			os.alert({
 				type: 'error',
 				title: i18n.ts.loginFailed,
-				text: JSON.stringify(err),
+				text: JSON.stringify(err instanceof Error ? err.message : err),
 			});
 		}
 	}

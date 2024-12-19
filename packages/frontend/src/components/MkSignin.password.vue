@@ -65,13 +65,14 @@ import MkCaptcha from '@/components/MkCaptcha.vue';
 const props = defineProps<{
 	user: Misskey.entities.UserDetailed;
 	needCaptcha: boolean;
+	initialPassword?: string;
 }>();
 
 const emit = defineEmits<{
 	(ev: 'passwordSubmitted', v: PwResponse): void;
 }>();
 
-const password = ref('');
+const password = ref(props.initialPassword ?? '');
 
 const hCaptcha = useTemplateRef('hcaptcha');
 const mCaptcha = useTemplateRef('mcaptcha');

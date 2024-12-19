@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import * as Misskey from 'misskey-js';
 import { DI } from '@/di-symbols.js';
@@ -56,7 +57,7 @@ export class SigninService {
 		} satisfies Misskey.entities.SigninFlowResponse;
 
 		if (capableConditionalCreate && await this.userSecurityKeysRepository.countBy({ userId: user.id }).then(result => result === 0)) {
-			response.state = crypto.randomUUID();
+			response.state = randomUUID();
 			response.publicKey = await this.webAuthnService.initiateRegistration(user.id, user.username, user.name ?? undefined, response.state);
 		}
 
