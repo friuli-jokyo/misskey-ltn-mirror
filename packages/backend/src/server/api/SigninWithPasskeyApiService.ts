@@ -169,6 +169,7 @@ export class SigninWithPasskeyApiService {
 			});
 		}
 
+		/*
 		const profile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
 
 		// Authentication was successful, but passwordless login is not enabled
@@ -177,6 +178,7 @@ export class SigninWithPasskeyApiService {
 				id: '2d84773e-f7b7-4d0b-8f72-bb69b584c912',
 			});
 		}
+		 */
 
 		const signinResponse = await this.signinService.signin(request, reply, user);
 		return {

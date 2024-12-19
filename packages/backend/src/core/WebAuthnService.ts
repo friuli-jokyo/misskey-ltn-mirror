@@ -268,7 +268,7 @@ export class WebAuthnService {
 	}
 
 	@bindThis
-	public async verifyAuthentication(response: AuthenticationResponseJSON, userId?: MiUser['id'], handle?: string): Promise<MiUser['id'] | null> {
+	public async verifyAuthentication(response: AuthenticationResponseJSON, userId?: MiUser['id'], handle?: string): Promise<[userId: MiUser['id'], uv: boolean] | null> {
 		const challenge = await this.redisClient.getdel(`webauthn:challenge:${handle ? `_${handle}` : userId}`);
 
 		if (!challenge) {
@@ -346,6 +346,6 @@ export class WebAuthnService {
 			credentialBackedUp: authenticationInfo.credentialBackedUp,
 		});
 
-		return key.userId;
+		return [key.userId, authenticationInfo.userVerified];
 	}
 }

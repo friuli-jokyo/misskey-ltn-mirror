@@ -37,7 +37,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<template #suffix>@{{ host }}</template>
 			</MkInput>
 			<!-- some user-agents cannot initiate conditional mediation without a password field -->
-			<input type="text" autocomplete="password webauthn" style="display: none;" @input="emit('passwordProvided', $event.target.value)" />
+			<input :class="$style.password" type="password" autocomplete="password webauthn" tabindex="-1" @input="emit('passwordProvided', $event.target.value)" />
 			<MkButton type="submit" large primary rounded style="margin: 0 auto;" data-cy-signin-page-input-continue>{{ i18n.ts.continue }} <i class="ti ti-arrow-right"></i></MkButton>
 		</form>
 
@@ -180,6 +180,18 @@ async function specifyHostAndOpenRemote(options: OpenOnRemoteOptions): Promise<v
 	font-size: 24px;
 	line-height: 64px;
 	border-radius: 50%;
+}
+
+.password {
+	clip: rect(1px, 1px, 1px, 1px);
+	clip-path: inset(50%);
+	contain: strict;
+	height: 1px;
+	overflow: clip;
+	padding: 0;
+	position: absolute;
+	white-space: nowrap;
+	width: 1px;
 }
 
 .instanceManualSelectButton {
