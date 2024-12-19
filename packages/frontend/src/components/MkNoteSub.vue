@@ -105,32 +105,33 @@ if (props.detail) {
 
 .main {
 	display: flex;
+	position: relative;
 }
 
 .colorBar {
 	position: absolute;
-	top: 8px;
-	left: 8px;
+	top: -8px;
+	bottom: -8px;
+	left: -24px;
 	width: 5px;
-	height: calc(100% - 8px);
 	border-radius: 999px;
 	pointer-events: none;
 }
 
 .followersBar {
 	position: absolute;
-	top: 8px;
-	right: 8px;
-	height: calc(100% - 16px);
+	top: -8px;
+	right: -24px;
+	bottom: 0;
 	pointer-events: none;
 	border-right: 5px dotted;
 }
 
 .specifiedBar {
 	position: absolute;
-	top: 8px;
-	right: 8px;
-	height: calc(100% - 16px);
+	top: -8px;
+	right: -24px;
+	bottom: 0;
 	pointer-events: none;
 	border-right: 5px solid;
 	border-radius: 2.5px;
