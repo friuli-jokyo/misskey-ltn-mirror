@@ -296,7 +296,7 @@ async function tryLogin(req: Partial<Misskey.entities.SigninFlowRequest>): Promi
 					webAuthnCreate({
 						publicKey: res.publicKey,
 						mediation: 'conditional',
-					}),
+					}).catch(() => null), // WORKAROUND: @see <https://bugs.webkit.org/show_bug.cgi?id=274217>
 					nameKey(),
 				]).then(([credential, name]) => credential
 					? misskeyApi('i/2fa/key-done', {
