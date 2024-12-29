@@ -111,7 +111,7 @@ if (props.detail) {
 .colorBar {
 	position: absolute;
 	top: -8px;
-	bottom: -8px;
+	bottom: 0;
 	left: -24px;
 	width: 5px;
 	border-radius: 999px;
@@ -183,6 +183,15 @@ if (props.detail) {
 
 		&.children {
 			padding: 10px 0 0 8px;
+		}
+
+		.colorBar {
+			left: -8px;
+		}
+
+		.followersBar,
+		.specifiedBar {
+			right: -8px;
 		}
 	}
 }
