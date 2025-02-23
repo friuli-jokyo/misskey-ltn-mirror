@@ -13,15 +13,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<template #header>{{ i18n.ts.options }}</template>
 
 			<div class="_gaps_m">
-				<MkRadios v-model="hostSelect">
-					<template #label>{{ i18n.ts.host }}</template>
-					<option value="all" default>{{ i18n.ts.all }}</option>
-					<option value="local">{{ i18n.ts.local }}</option>
-					<option v-if="noteSearchableScope === 'global'" value="specified">{{ i18n.ts.specifyHost }}</option>
-				</MkRadios>
-				<MkInput v-if="noteSearchableScope === 'global'" v-model="hostInput" :disabled="hostSelect !== 'specified'" :large="true" type="search">
-					<template #prefix><i class="ti ti-server"></i></template>
-				</MkInput>
+				<template v-if="instance.federation !== 'none'">
+					<MkRadios v-model="hostSelect">
+						<template #label>{{ i18n.ts.host }}</template>
+						<option value="all" default>{{ i18n.ts.all }}</option>
+						<option value="local">{{ i18n.ts.local }}</option>
+						<option v-if="noteSearchableScope === 'global'" value="specified">{{ i18n.ts.specifyHost }}</option>
+					</MkRadios>
+					<MkInput v-if="noteSearchableScope === 'global'" v-model="hostInput" :disabled="hostSelect !== 'specified'" :large="true" type="search">
+						<template #prefix><i class="ti ti-server"></i></template>
+					</MkInput>
+				</template>
 				<MkSwitch v-model="internal" style="display: none;">internal</MkSwitch>
 
 				<MkFolder :defaultOpen="true">
@@ -73,6 +75,7 @@ import type { Paging } from '@/components/MkPagination.vue';
 import MkNotes from '@/components/MkNotes.vue';
 import MkInput from '@/components/MkInput.vue';
 import MkButton from '@/components/MkButton.vue';
+import MkSwitch from '@/components/MkSwitch.vue';
 import { i18n } from '@/i18n.js';
 import * as os from '@/os.js';
 import { misskeyApi } from '@/scripts/misskey-api.js';
@@ -110,7 +113,7 @@ const noteSearchableScope = instance.noteSearchableScope ?? 'local';
 
 const hostSelect = ref<'all' | 'local' | 'specified'>('all');
 
-const setHostSelectWithInput = (after:string|undefined|null, before:string|undefined|null) => {
+const setHostSelectWithInput = (after: string | undefined | null, before: string | undefined | null) => {
 	if (before === after) return;
 	if (after === '') hostSelect.value = 'all';
 	else hostSelect.value = 'specified';
@@ -121,7 +124,7 @@ setHostSelectWithInput(hostInput.value, undefined);
 watch(hostInput, setHostSelectWithInput);
 
 const searchHost = computed(() => {
-	if (hostSelect.value === 'local') return '.';
+	if (hostSelect.value === 'local' || instance.federation === 'none') return '.';
 	if (hostSelect.value === 'specified') return hostInput.value;
 	return null;
 });

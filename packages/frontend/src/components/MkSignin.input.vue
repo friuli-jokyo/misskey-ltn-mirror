@@ -58,8 +58,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
-import { toUnicode } from 'punycode/';
-import { AuthenticationPublicKeyCredential, supported as webAuthnSupported, get as webAuthnRequest, parseRequestOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
+import { toUnicode } from 'punycode.js';
+import { supported as webAuthnSupported, get as webAuthnRequest, parseRequestOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
+import type { AuthenticationPublicKeyCredential } from '@github/webauthn-json/browser-ponyfill';
 
 import { query, extractDomain } from '@@/js/url.js';
 import { host as configHost } from '@@/js/config.js';

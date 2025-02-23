@@ -58,6 +58,7 @@ export class RoleEntityService {
 			updatedAt: role.updatedAt.toISOString(),
 			name: role.name,
 			description: role.description,
+			tags: role.tags,
 			color: role.color,
 			iconUrl: role.iconUrl,
 			target: role.target,

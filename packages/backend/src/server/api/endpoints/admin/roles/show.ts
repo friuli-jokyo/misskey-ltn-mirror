@@ -9,12 +9,12 @@ import type { RolesRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { ApiError } from '@/server/api/error.js';
 import { RoleEntityService } from '@/core/entities/RoleEntityService.js';
+import { RoleService } from '@/core/RoleService.js';
 
 export const meta = {
 	tags: ['admin', 'role'],
 
 	requireCredential: true,
-	requireModerator: true,
 	kind: 'read:admin:roles',
 
 	errors: {
@@ -49,13 +49,27 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private rolesRepository: RolesRepository,
 
 		private roleEntityService: RoleEntityService,
+		private roleService: RoleService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const role = await this.rolesRepository.findOneBy({ id: ps.roleId });
-			if (role == null) {
-				throw new ApiError(meta.errors.noSuchRole);
+			if (await this.roleService.isModerator(me)) {
+				const role = await this.rolesRepository.findOneBy({ id: ps.roleId });
+				if (role == null) {
+					throw new ApiError(meta.errors.noSuchRole);
+				}
+				return await this.roleEntityService.pack(role, me);
+			} else {
+				const policies = await this.roleService.getUserPolicies(me.id);
+				const role = await this.rolesRepository.createQueryBuilder()
+					.select()
+					.where('id = :id')
+					.andWhere('tags && :tags', { id: ps.roleId, tags: policies.selfAssignability.map(([roleTag]) => roleTag) })
+					.getOne();
+				if (role == null) {
+					throw new ApiError(meta.errors.noSuchRole);
+				}
+				return await this.roleEntityService.pack(role, me);
 			}
-			return await this.roleEntityService.pack(role, me);
 		});
 	}
 }
