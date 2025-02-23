@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { toUnicode } from 'punycode';
+import { toUnicode } from 'punycode.js';
 import { defineAsyncComponent, ref, watch } from 'vue';
 import * as Misskey from 'misskey-js';
 import { i18n } from '@/i18n.js';
@@ -14,7 +14,7 @@ import { misskeyApi } from '@/scripts/misskey-api.js';
 import { defaultStore, userActions } from '@/store.js';
 import { $i, iAmModerator } from '@/account.js';
 import { notesSearchAvailable, canSearchNonLocalNotes } from '@/scripts/check-permissions.js';
-import { IRouter } from '@/nirax.js';
+import type { IRouter } from '@/nirax.js';
 import { antennasCache, rolesCache, userListsCache } from '@/cache.js';
 import { mainRouter } from '@/router/main.js';
 import { genEmbedCode } from '@/scripts/get-embed-code.js';
@@ -293,49 +293,52 @@ export function getUserMenu(user: Misskey.entities.UserDetailed, router: IRouter
 		});
 	}
 
+	if ($i && (iAmModerator || meId === user.id)) {
+		menuItems.push({
+			type: 'parent',
+			icon: 'ti ti-badges',
+			text: i18n.ts.roles,
+			children: async () => {
+				const roles = await rolesCache.fetch();
+
+				return roles.filter(r => r.target === 'manual').map(r => ({
+					text: r.name,
+					action: async () => {
+						const { canceled, result: period = 'indefinitely' } = iAmModerator || $i!.policies.selfAssignability?.some(([t, u]) => u && r.tags?.includes(t)) ? await os.select({
+							title: i18n.ts.period + ': ' + r.name,
+							items: [{
+								value: 'indefinitely', text: i18n.ts.indefinitely,
+							}, {
+								value: 'oneHour', text: i18n.ts.oneHour,
+							}, {
+								value: 'oneDay', text: i18n.ts.oneDay,
+							}, {
+								value: 'oneWeek', text: i18n.ts.oneWeek,
+							}, {
+								value: 'oneMonth', text: i18n.ts.oneMonth,
+							}],
+							default: 'indefinitely',
+						}) : await os.confirm({
+							type: 'warning',
+							title: i18n.ts.areYouSure,
+						}) as { canceled: boolean, result?: string };
+						if (canceled) return;
+
+						const expiresAt = period === 'indefinitely' ? null
+							: period === 'oneHour' ? Date.now() + (1000 * 60 * 60)
+							: period === 'oneDay' ? Date.now() + (1000 * 60 * 60 * 24)
+							: period === 'oneWeek' ? Date.now() + (1000 * 60 * 60 * 24 * 7)
+							: period === 'oneMonth' ? Date.now() + (1000 * 60 * 60 * 24 * 30)
+							: null;
+
+						os.apiWithDialog('admin/roles/assign', { roleId: r.id, userId: user.id, expiresAt });
+					},
+				}));
+			},
+		});
+	}
+
 	if ($i && meId !== user.id) {
-		if (iAmModerator) {
-			menuItems.push({
-				type: 'parent',
-				icon: 'ti ti-badges',
-				text: i18n.ts.roles,
-				children: async () => {
-					const roles = await rolesCache.fetch();
-
-					return roles.filter(r => r.target === 'manual').map(r => ({
-						text: r.name,
-						action: async () => {
-							const { canceled, result: period } = await os.select({
-								title: i18n.ts.period + ': ' + r.name,
-								items: [{
-									value: 'indefinitely', text: i18n.ts.indefinitely,
-								}, {
-									value: 'oneHour', text: i18n.ts.oneHour,
-								}, {
-									value: 'oneDay', text: i18n.ts.oneDay,
-								}, {
-									value: 'oneWeek', text: i18n.ts.oneWeek,
-								}, {
-									value: 'oneMonth', text: i18n.ts.oneMonth,
-								}],
-								default: 'indefinitely',
-							});
-							if (canceled) return;
-
-							const expiresAt = period === 'indefinitely' ? null
-								: period === 'oneHour' ? Date.now() + (1000 * 60 * 60)
-								: period === 'oneDay' ? Date.now() + (1000 * 60 * 60 * 24)
-								: period === 'oneWeek' ? Date.now() + (1000 * 60 * 60 * 24 * 7)
-								: period === 'oneMonth' ? Date.now() + (1000 * 60 * 60 * 24 * 30)
-								: null;
-
-							os.apiWithDialog('admin/roles/assign', { roleId: r.id, userId: user.id, expiresAt });
-						},
-					}));
-				},
-			});
-		}
-
 		// フォローしたとしても user.isFollowing はリアルタイム更新されないので不便なため
 		//if (user.isFollowing) {
 		const withRepliesRef = ref(user.withReplies ?? false);

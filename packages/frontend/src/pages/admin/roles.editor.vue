@@ -396,6 +396,24 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 			</MkFolder>
 
+			<MkFolder v-if="matchQuery([i18n.ts._role._options.selfAssignability, 'selfAssignability'])">
+				<template #label>{{ i18n.ts._role._options.selfAssignability }}</template>
+				<template #suffix>
+					<span v-if="role.policies.selfAssignability.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
+					<span v-else>{{ JSON.stringify(role.policies.selfAssignability.value) }}</span>
+					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.selfAssignability)"></i></span>
+				</template>
+				<div class="_gaps">
+					<MkSwitch v-model="role.policies.selfAssignability.useDefault" :readonly="readonly">
+						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
+					</MkSwitch>
+					<MkCodeEditor v-model="selfAssignability" lang="json5"/>
+					<MkRange v-model="role.policies.selfAssignability.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
+						<template #label>{{ i18n.ts._role.priority }}</template>
+					</MkRange>
+				</div>
+			</MkFolder>
+
 			<MkFolder v-if="matchQuery([i18n.ts._role._options.alwaysMarkNsfw, 'alwaysMarkNsfw'])">
 				<template #label>{{ i18n.ts._role._options.alwaysMarkNsfw }}</template>
 				<template #suffix>
@@ -620,7 +638,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<MkSwitch v-model="role.policies.avatarDecorationLimit.useDefault" :readonly="readonly">
 						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
 					</MkSwitch>
-					<MkInput v-model="role.policies.avatarDecorationLimit.value" type="number" :min="0">
+					<MkInput v-model="role.policies.avatarDecorationLimit.value" type="number" :min="0" :max="16" @update:modelValue="updateAvatarDecorationLimit">
 						<template #label>{{ i18n.ts._role._options.avatarDecorationLimit }}</template>
 					</MkInput>
 					<MkRange v-model="role.policies.avatarDecorationLimit.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
@@ -737,6 +755,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { watch, ref, computed } from 'vue';
 import JSON5 from 'json5';
 import { throttle } from 'throttle-debounce';
+import { ROLE_POLICIES } from '@@/js/const.js';
 import RolesEditorFormula from './RolesEditorFormula.vue';
 import MkInput from '@/components/MkInput.vue';
 import MkCodeEditor from '@/components/MkCodeEditor.vue';
@@ -748,7 +767,6 @@ import MkSwitch from '@/components/MkSwitch.vue';
 import MkRange from '@/components/MkRange.vue';
 import FormSlot from '@/components/form/slot.vue';
 import { i18n } from '@/i18n.js';
-import { ROLE_POLICIES } from '@@/js/const.js';
 import { instance } from '@/instance.js';
 import { deepClone } from '@/scripts/clone.js';
 
@@ -772,6 +790,15 @@ const driveUploadBandwidthDurationHrCapacityMbPairs = computed({
 	},
 });
 
+const selfAssignability = computed({
+	get() {
+		return JSON5.stringify(role.value.policies.selfAssignability.value, null, 2);
+	},
+	set(value) {
+		role.value.policies.selfAssignability.value = JSON5.parse(value);
+	},
+});
+
 // fill missing policy
 for (const ROLE_POLICY of ROLE_POLICIES) {
 	if (role.value.policies[ROLE_POLICY] == null) {
@@ -781,6 +808,12 @@ for (const ROLE_POLICY of ROLE_POLICIES) {
 			value: instance.policies[ROLE_POLICY],
 		};
 	}
+}
+
+function updateAvatarDecorationLimit(value: string | number) {
+	const numValue = Number(value);
+	const limited = Math.min(16, Math.max(0, numValue));
+	role.value.policies.avatarDecorationLimit.value = limited;
 }
 
 const rolePermission = computed({

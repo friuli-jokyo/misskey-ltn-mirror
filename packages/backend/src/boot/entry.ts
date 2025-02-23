@@ -72,7 +72,32 @@ process.on('exit', code => {
 
 let server: INestApplicationContext | undefined;
 let jobQueue: INestApplicationContext | undefined;
-if (cluster.isPrimary || envOption.disableClustering) {
+if (!envOption.disableClustering) {
+	if (cluster.isPrimary) {
+		logger.info(`Start main process... pid: ${process.pid}`);
+		const apps = await masterMain();
+		if (apps.server) {
+			server = apps.server;
+		}
+		if (apps.jobQueue) {
+			jobQueue = apps.jobQueue;
+		}
+		ev.mount();
+	} else if (cluster.isWorker) {
+		logger.info(`Start worker process... pid: ${process.pid}`);
+		const apps = await workerMain();
+		if (apps.server) {
+			server = apps.server;
+		}
+		if (apps.jobQueue) {
+			jobQueue = apps.jobQueue;
+		}
+	} else {
+		throw new Error('Unknown process type');
+	}
+} else {
+	// 非clusterの場合はMasterのみが起動するため、Workerの処理は行わない(cluster.isWorker === trueの状態でこのブロックに来ることはない)
+	logger.info(`Start main process... pid: ${process.pid}`);
 	const apps = await masterMain();
 	if (apps.server) {
 		server = apps.server;
@@ -80,25 +105,12 @@ if (cluster.isPrimary || envOption.disableClustering) {
 	if (apps.jobQueue) {
 		jobQueue = apps.jobQueue;
 	}
-
-	if (cluster.isPrimary) {
-		ev.mount();
-	}
-}
-
-if (cluster.isWorker || envOption.disableClustering) {
-	const apps = await workerMain();
-	if (apps.server) {
-		server = apps.server;
-	}
-	if (apps.jobQueue) {
-		jobQueue = apps.jobQueue;
-	}
+	ev.mount();
 }
 
 readyRef.value = true;
 
-await server?.get(ServerService)?.ready();
+await server?.get(ServerService).ready();
 
 // ユニットテスト時にMisskeyが子プロセスで起動された時のため
 // それ以外のときは process.send は使えないので弾く

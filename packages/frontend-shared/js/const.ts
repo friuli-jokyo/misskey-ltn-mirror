@@ -69,6 +69,7 @@ export const notificationTypes = [
 	'achievementEarned',
 	'exportCompleted',
 	'login',
+	'createToken',
 	'test',
 	'app',
 ] as const;
@@ -91,6 +92,7 @@ export const ROLE_POLICIES = [
 	'canHideAds',
 	'driveCapacityMb',
 	'driveUploadBandwidthDurationHrCapacityMbPairs',
+	'selfAssignability',
 	'alwaysMarkNsfw',
 	'canUpdateBioMedia',
 	'pinLimit',

@@ -91,28 +91,39 @@ export async function masterMain() {
 			...config.sentryForBackend.options,
 		});
 	}
-
 	let serverApp: INestApplicationContext | undefined;
 	let jobQueueApp: INestApplicationContext | undefined;
-	if (envOption.disableClustering) {
+
+	bootLogger.info(
+		`mode: [disableClustering: ${envOption.disableClustering}, onlyServer: ${envOption.onlyServer}, onlyQueue: ${envOption.onlyQueue}]`,
+	);
+
+	if (!envOption.disableClustering) {
+		// clusterモジュール有効時
+
 		if (envOption.onlyServer) {
-			serverApp = await server();
+			// onlyServer かつ enableCluster な場合、メインプロセスはforkのみに制限する(listenしない)。
+			// ワーカープロセス側でlistenすると、メインプロセスでポートへの着信を受け入れてワーカープロセスへの分配を行う動作をする。
+			// そのため、メインプロセスでも直接listenするとポートの競合が発生して起動に失敗してしまう。
+			// see: https://nodejs.org/api/cluster.html#cluster
 		} else if (envOption.onlyQueue) {
 			jobQueueApp = await jobQueue();
-		} else {
-			serverApp = await server();
-			jobQueueApp = await jobQueue();
-		}
-	} else {
-		if (envOption.onlyServer) {
-			// nop
-		} else if (envOption.onlyQueue) {
-			// nop
 		} else {
 			serverApp = await server();
 		}
 
 		await spawnWorkers(config.clusterLimit);
+	} else {
+		// clusterモジュール無効時
+
+		if (envOption.onlyServer) {
+			serverApp = await server();
+		} else if (envOption.onlyQueue) {
+			jobQueueApp = await jobQueue();
+		} else {
+			serverApp = await server();
+			jobQueueApp = await jobQueue();
+		}
 	}
 
 	if (envOption.onlyQueue) {
@@ -123,7 +134,7 @@ export async function masterMain() {
 	return {
 		server: serverApp,
 		jobQueue: jobQueueApp,
-	}
+	};
 }
 
 function showEnvironment(): void {

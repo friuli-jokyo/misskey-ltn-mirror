@@ -14,7 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { toUnicode } from 'punycode';
+import { toUnicode } from 'punycode.js';
 import { computed } from 'vue';
 import tinycolor from 'tinycolor2';
 import { host as localHost } from '@@/js/config.js';
@@ -22,7 +22,7 @@ import { $i } from '@/account.js';
 import { defaultStore } from '@/store.js';
 import { avatarsMap, loadUsers, usernameAndHostToIdMap, usernameAndHostToKey } from '@/scripts/avatars.js';
 import { getStaticImageUrl } from '@/scripts/media-proxy.js';
-import { MkABehavior } from '@/components/global/MkA.vue';
+import type { MkABehavior } from '@/components/global/MkA.vue';
 
 const props = defineProps<{
 	username: string;

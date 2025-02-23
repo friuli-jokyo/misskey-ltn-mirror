@@ -49,6 +49,7 @@ export type RolePolicies = {
 	canHideAds: boolean;
 	driveCapacityMb: number;
 	driveUploadBandwidthDurationHrCapacityMbPairs: [durationHr: number, capacityMb: number][];
+	selfAssignability: [roleTag: string, isUnassignable: boolean, maximumAssigns: number][];
 	alwaysMarkNsfw: boolean;
 	canUpdateBioMedia: boolean;
 	pinLimit: number;
@@ -85,6 +86,7 @@ export const DEFAULT_POLICIES: RolePolicies = {
 	canHideAds: false,
 	driveCapacityMb: 100,
 	driveUploadBandwidthDurationHrCapacityMbPairs: [],
+	selfAssignability: [],
 	alwaysMarkNsfw: false,
 	canUpdateBioMedia: true,
 	pinLimit: 5,
@@ -322,12 +324,41 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
 	}
 
 	@bindThis
+	public async getRole(id: MiRole['id']) {
+		const roles = await this.getRoles();
+		return roles.find(r => r.id === id) ?? null;
+	}
+
+	@bindThis
 	public async getUserAssigns(userId: MiUser['id']) {
 		const now = Date.now();
 		let assigns = await this.roleAssignmentByUserIdCache.fetch(userId, () => this.roleAssignmentsRepository.findBy({ userId }));
 		// 期限切れのロールを除外
 		assigns = assigns.filter(a => a.expiresAt == null || (a.expiresAt.getTime() > now));
 		return assigns;
+	}
+
+	@bindThis
+	public async canSelfAssign(userId: MiUser['id'], roleId: MiRole['id']) {
+		const role = await this.getRole(roleId);
+		if (role?.target !== 'manual' || role.isAdministrator || role.isModerator) return false;
+		const roles = await this.getUserRoles(userId);
+		const policies = await this.getUserPolicies(userId);
+		for (const [roleTag, , maximumAssigns] of policies.selfAssignability) {
+			if (role.tags.includes(roleTag) || roles.filter(r => r.tags.includes(roleTag)).length < maximumAssigns) return true;
+		}
+		return false;
+	}
+
+	@bindThis
+	public async canSelfUnassign(userId: MiUser['id'], roleId: MiRole['id']) {
+		const role = await this.getRole(roleId);
+		if (role?.target !== 'manual') return false;
+		const policies = await this.getUserPolicies(userId);
+		for (const [roleTag, isUnassignable] of policies.selfAssignability) {
+			if (role.tags.includes(roleTag) || isUnassignable) return true;
+		}
+		return false;
 	}
 
 	@bindThis
@@ -414,6 +445,7 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
 			canHideAds: calc('canHideAds', vs => vs.some(v => v === true)),
 			driveCapacityMb: calc('driveCapacityMb', vs => Math.max(...vs)),
 			driveUploadBandwidthDurationHrCapacityMbPairs: calc('driveUploadBandwidthDurationHrCapacityMbPairs', vs => vs.flat()),
+			selfAssignability: calc('selfAssignability', vs => vs.flat()),
 			alwaysMarkNsfw: calc('alwaysMarkNsfw', vs => vs.some(v => v === true)),
 			canUpdateBioMedia: calc('canUpdateBioMedia', vs => vs.some(v => v === true)),
 			pinLimit: calc('pinLimit', vs => Math.max(...vs)),

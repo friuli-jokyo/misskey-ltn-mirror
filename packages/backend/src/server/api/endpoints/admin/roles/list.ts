@@ -8,12 +8,12 @@ import { Endpoint } from '@/server/api/endpoint-base.js';
 import type { RolesRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { RoleEntityService } from '@/core/entities/RoleEntityService.js';
+import { RoleService } from '@/core/RoleService.js';
 
 export const meta = {
 	tags: ['admin', 'role'],
 
 	requireCredential: true,
-	requireModerator: true,
 	kind: 'read:admin:roles',
 
 	res: {
@@ -42,12 +42,23 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private rolesRepository: RolesRepository,
 
 		private roleEntityService: RoleEntityService,
+		private roleService: RoleService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const roles = await this.rolesRepository.find({
-				order: { lastUsedAt: 'DESC' },
-			});
-			return await this.roleEntityService.packMany(roles, me);
+			if (await this.roleService.isModerator(me)) {
+				const roles = await this.rolesRepository.find({
+					order: { lastUsedAt: 'DESC' },
+				});
+				return await this.roleEntityService.packMany(roles, me);
+			} else {
+				const policies = await this.roleService.getUserPolicies(me.id);
+				const roles = await this.rolesRepository.createQueryBuilder()
+					.select()
+					.where('tags && :tags', { tags: policies.selfAssignability.map(([roleTag]) => roleTag) })
+					.orderBy('lastUsedAt', 'DESC')
+					.getMany();
+				return await this.roleEntityService.packMany(roles, me);
+			}
 		});
 	}
 }

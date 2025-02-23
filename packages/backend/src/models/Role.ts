@@ -226,6 +226,11 @@ export class MiRole {
 	public description: string;
 
 	@Column('varchar', {
+		length: 256, array: true, default: '{}',
+	})
+	public tags: string[];
+
+	@Column('varchar', {
 		length: 256, nullable: true,
 	})
 	public color: string | null;
