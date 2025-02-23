@@ -60,10 +60,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				return await this.roleEntityService.pack(role, me);
 			} else {
 				const policies = await this.roleService.getUserPolicies(me.id);
-				const role = await this.rolesRepository.createQueryBuilder()
-					.select()
-					.where('id = :id')
-					.andWhere('tags && :tags', { id: ps.roleId, tags: policies.selfAssignability.map(([roleTag]) => roleTag) })
+				const role = await this.rolesRepository.createQueryBuilder('r')
+					.where('r.id = :id')
+					.andWhere('r.tags && :tags', { id: ps.roleId, tags: policies.selfAssignability.map(([roleTag]) => roleTag) })
 					.getOne();
 				if (role == null) {
 					throw new ApiError(meta.errors.noSuchRole);

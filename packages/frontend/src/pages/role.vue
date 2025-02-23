@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <MkStickyContainer>
-	<template #header><MkPageHeader v-model:tab="tab" :tabs="headerTabs"/></template>
+	<template #header><MkPageHeader v-model:tab="tab" :tabs="headerTabs" :actions="headerActions"/></template>
 	<MkSpacer v-if="error != null" :contentMax="1200">
 		<div :class="$style.root">
 			<img :class="$style.img" :src="serverErrorImageUrl" class="_ghost"/>
@@ -38,10 +38,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { computed, watch, ref } from 'vue';
 import * as Misskey from 'misskey-js';
+import { $i } from '@/account.js';
 import { misskeyApi } from '@/scripts/misskey-api.js';
 import MkUserList from '@/components/MkUserList.vue';
 import { definePageMetadata } from '@/scripts/page-metadata.js';
 import { i18n } from '@/i18n.js';
+import * as os from '@/os.js';
 import MkTimeline from '@/components/MkTimeline.vue';
 import { instanceName } from '@@/js/config.js';
 import { serverErrorImageUrl, infoImageUrl } from '@/instance.js';
@@ -82,6 +84,80 @@ const users = computed(() => ({
 		roleId: props.roleId,
 	},
 }));
+
+const headerActions = computed(() =>
+	role.value?.target === 'manual'
+		? $i?.policies.selfAssignability?.some(([t, u]) => u && role.value.tags.includes(t))
+			? [
+					{
+						icon: 'ti ti-user-minus',
+						text: i18n.ts.unassign,
+						handler: unassign,
+					},
+					{
+						icon: 'ti ti-user-plus',
+						text: i18n.ts.assign,
+						handler: assign,
+					},
+				]
+			: $i?.policies.selfAssignability?.some(([t, u]) => role.value.tags.includes(t))
+				? [
+						{
+							icon: 'ti ti-user-plus',
+							text: i18n.ts.assign,
+							handler: assignIndefinetly,
+						},
+					]
+				: []
+		: []);
+
+async function assign() {
+	const { canceled, result: period } = await os.select({
+		title: i18n.ts.period + ': ' + role.value.name,
+		items: [{
+			value: 'indefinitely', text: i18n.ts.indefinitely,
+		}, {
+			value: 'oneHour', text: i18n.ts.oneHour,
+		}, {
+			value: 'oneDay', text: i18n.ts.oneDay,
+		}, {
+			value: 'oneWeek', text: i18n.ts.oneWeek,
+		}, {
+			value: 'oneMonth', text: i18n.ts.oneMonth,
+		}],
+		default: 'indefinitely',
+	});
+	if (canceled) return;
+
+	const expiresAt = period === 'indefinitely' ? null
+		: period === 'oneHour' ? Date.now() + (1000 * 60 * 60)
+		: period === 'oneDay' ? Date.now() + (1000 * 60 * 60 * 24)
+		: period === 'oneWeek' ? Date.now() + (1000 * 60 * 60 * 24 * 7)
+		: period === 'oneMonth' ? Date.now() + (1000 * 60 * 60 * 24 * 30)
+		: null;
+
+	os.apiWithDialog('admin/roles/assign', { roleId: role.value.id, userId: $i.id, expiresAt });
+}
+
+async function assignIndefinetly() {
+	const { canceled } = await os.confirm({
+		type: 'warning',
+		title: i18n.ts.areYouSure,
+	});
+	if (canceled) return;
+
+	os.apiWithDialog('admin/roles/assign', { roleId: role.value.id, userId: $i.id });
+}
+
+async function unassign() {
+	const { canceled } = await os.confirm({
+		type: 'warning',
+		title: i18n.ts.areYouSure,
+	});
+	if (canceled) return;
+
+	os.apiWithDialog('admin/roles/unassign', { roleId: role.value.id, userId: $i.id });
+}
 
 const headerTabs = computed(() => [{
 	key: 'users',

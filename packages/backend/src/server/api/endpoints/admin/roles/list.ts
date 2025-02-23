@@ -52,10 +52,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				return await this.roleEntityService.packMany(roles, me);
 			} else {
 				const policies = await this.roleService.getUserPolicies(me.id);
-				const roles = await this.rolesRepository.createQueryBuilder()
-					.select()
-					.where('tags && :tags', { tags: policies.selfAssignability.map(([roleTag]) => roleTag) })
-					.orderBy('lastUsedAt', 'DESC')
+				const roles = await this.rolesRepository.createQueryBuilder('r')
+					.where('r.tags && :tags', { tags: policies.selfAssignability.map(([roleTag]) => roleTag) })
+					.orderBy('r.lastUsedAt', 'DESC')
 					.getMany();
 				return await this.roleEntityService.packMany(roles, me);
 			}

@@ -221,9 +221,9 @@ export class SearchService {
 			.leftJoinAndSelect('renote.user', 'renoteUser');
 
 		if (this.config.fulltextSearch?.provider === 'sqlPgroonga') {
-			query.andWhere('concat_ws(\' \', note.cw, note.text) &@~ :q', { q });
+			query.andWhere('concat_ws_unsafe_immutable(\' \', note.cw, note.text) &@~ :q', { q });
 		} else {
-			query.andWhere('lower(concat_ws(\' \', note.cw, note.text)) LIKE :q', { q: `%${ sqlLikeEscape(q.toLowerCase()) }%` });
+			query.andWhere('lower(concat_ws_unsafe_immutable(\' \', note.cw, note.text)) LIKE :q', { q: `%${ sqlLikeEscape(q.toLowerCase()) }%` });
 		}
 
 		query
