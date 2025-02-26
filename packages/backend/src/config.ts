@@ -52,6 +52,8 @@ type Source = {
 	redisForReactions?: RedisOptionsSource;
 	fulltextSearch?: {
 		provider?: FulltextSearchProvider;
+		tableSample?: string;
+		commonTermThreshold?: number;
 	};
 	meilisearch?: {
 		host: string;
@@ -137,6 +139,8 @@ export type Config = {
 	}[] | undefined;
 	fulltextSearch?: {
 		provider?: FulltextSearchProvider;
+		tableSample?: string;
+		commonTermThreshold?: number;
 	};
 	meilisearch: {
 		host: string;
@@ -205,7 +209,7 @@ export type Config = {
 	pidFile: string;
 };
 
-export type FulltextSearchProvider = 'sqlLike' | 'sqlPgroonga' | 'meilisearch';
+export type FulltextSearchProvider = 'auto' | 'sqlLike' | 'sqlPgroonga' | 'meilisearch';
 
 const _filename = fileURLToPath(import.meta.url);
 const _dirname = dirname(_filename);

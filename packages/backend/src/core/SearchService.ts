@@ -4,12 +4,12 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { In } from 'typeorm';
+import { DataSource, In, SelectQueryBuilder } from 'typeorm';
 import { DI } from '@/di-symbols.js';
 import { type Config, FulltextSearchProvider } from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import { MiNote } from '@/models/Note.js';
-import type { NotesRepository } from '@/models/_.js';
+import type { FollowingsRepository, NotesRepository } from '@/models/_.js';
 import { MiUser } from '@/models/_.js';
 import { sqlLikeEscape } from '@/misc/sql-like-escape.js';
 import { isUserRelated } from '@/misc/is-user-related.js';
@@ -38,6 +38,15 @@ export type SearchOpts = {
 	userId?: MiNote['userId'] | null;
 	channelId?: MiNote['channelId'] | null;
 	host?: string | null;
+	onlyFollows?: boolean;
+	onlyMentioned?: boolean;
+	onlySpecified?: boolean;
+	minRenoteCount?: number | null;
+	maxRenoteCount?: number | null;
+	minRepliesCount?: number | null;
+	maxRepliesCount?: number | null;
+	minReactionsCount?: number | null;
+	maxReactionsCount?: number | null;
 };
 
 export type SearchPagination = {
@@ -84,11 +93,17 @@ export class SearchService {
 		@Inject(DI.config)
 		private config: Config,
 
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.meilisearch)
 		private meilisearch: MeiliSearch | null,
 
 		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
+
+		@Inject(DI.followingsRepository)
+		private followingsRepository: FollowingsRepository,
 
 		private cacheService: CacheService,
 		private queryService: QueryService,
@@ -125,7 +140,7 @@ export class SearchService {
 			this.meilisearchIndexScope = config.meilisearch.scope;
 		}
 
-		this.provider = config.fulltextSearch?.provider ?? 'sqlLike';
+		this.provider = config.fulltextSearch?.provider ?? 'auto';
 		this.loggerService.getLogger('SearchService').info(`-- Provider: ${this.provider}`);
 	}
 
@@ -181,11 +196,14 @@ export class SearchService {
 		pagination: SearchPagination,
 	): Promise<MiNote[]> {
 		switch (this.provider) {
-			case 'sqlLike':
-			case 'sqlPgroonga': {
-				// ほとんど内容に差がないのでsqlLikeとsqlPgroongaを同じ処理にしている.
-				// 今後の拡張で差が出る用であれば関数を分ける.
+			case 'auto': {
+				return this.searchNoteAuto(q, me, opts, pagination);
+			}
+			case 'sqlLike': {
 				return this.searchNoteByLike(q, me, opts, pagination);
+			}
+			case 'sqlPgroonga': {
+				return this.searchNoteByPgroonga(q, me, opts, pagination);
 			}
 			case 'meilisearch': {
 				return this.searchNoteByMeiliSearch(q, me, opts, pagination);
@@ -199,13 +217,123 @@ export class SearchService {
 	}
 
 	@bindThis
-	private async searchNoteByLike(
+	private async searchNoteAuto(
 		q: string,
 		me: MiUser | null,
 		opts: SearchOpts,
 		pagination: SearchPagination,
 	): Promise<MiNote[]> {
-		const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), pagination.sinceId, pagination.untilId);
+		const isPgroongaAvailable = (await this.db.query('SELECT 0 FROM pg_extension WHERE extname = \'pgroonga\'')).length > 0;
+		if (this.meilisearch) {
+			const commonTermThreshold = this.config.fulltextSearch?.commonTermThreshold;
+			if (Number.isSafeInteger(commonTermThreshold)) {
+				const sampling = this.queryNoteBySql(q, me, opts, isPgroongaAvailable);
+				const attributes: PropertyDescriptor = Object.create(null);
+				const tableSample = this.config.fulltextSearch?.tableSample;
+				if (tableSample?.includes(';')) {
+					throw new Error(`Invalid tableSample: ${tableSample}`);
+				}
+				attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
+					let expression = `SELECT COUNT(*) > ${commonTermThreshold} AS "isCommonTerm" FROM note note`;
+					if (tableSample) {
+						expression += ` TABLESAMPLE ${tableSample}`;
+					}
+					return expression;
+				};
+				Object.defineProperty(sampling, 'createSelectExpression', attributes);
+				const { isCommonTerm } = (await sampling.getRawOne<{ isCommonTerm: boolean }>())!;
+				if (isCommonTerm) {
+					return this.searchNoteByMeiliSearch(q, me, opts, pagination);
+				}
+			}
+		}
+		if (isPgroongaAvailable) {
+			return this.searchNoteByPgroonga(q, me, opts, pagination, !!this.meilisearch);
+		} else {
+			return this.searchNoteByLike(q, me, opts, pagination, !!this.meilisearch);
+		}
+	}
+
+	@bindThis
+	private async searchNoteByLike(
+		q: string,
+		me: MiUser | null,
+		opts: SearchOpts,
+		pagination: SearchPagination,
+		softLimit = false,
+	): Promise<MiNote[]> {
+		const cte = this.queryNoteBySql(q, me, opts, false);
+		const query = this.queryService.makePaginationQuery(
+			this.notesRepository.createQueryBuilder('note')
+				.addCommonTableExpression(cte.getQuery(), 'note')
+				.setParameters(cte.expressionMap.parameters),
+			pagination.sinceId,
+			pagination.untilId,
+			undefined,
+			undefined,
+			'_',
+		);
+		if (!softLimit) {
+			query.limit(pagination.limit);
+		}
+		query.expressionMap.selects = cte.expressionMap.selects;
+		const attributes: PropertyDescriptor = Object.create(null);
+		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
+			return 'SELECT * FROM note note'; // NOTE: selected columns in the cte are already transformed so just pass-through here
+		};
+		Object.defineProperty(query, 'createSelectExpression', attributes);
+		const result = await query.getMany();
+		if (softLimit) {
+			return result.slice(0, pagination.limit);
+		} else {
+			return result;
+		}
+	}
+
+	@bindThis
+	private async searchNoteByPgroonga(
+		q: string,
+		me: MiUser | null,
+		opts: SearchOpts,
+		pagination: SearchPagination,
+		softLimit = false,
+	): Promise<MiNote[]> {
+		const cte = this.queryNoteBySql(q, me, opts, true);
+		const query = this.queryService.makePaginationQuery(
+			this.notesRepository.createQueryBuilder('note')
+				.addCommonTableExpression(cte.getQuery(), 'note')
+				.setParameters(cte.expressionMap.parameters),
+			pagination.sinceId,
+			pagination.untilId,
+			undefined,
+			undefined,
+			'_',
+		);
+		if (!softLimit) {
+			query.limit(pagination.limit);
+		}
+		query.expressionMap.selects = cte.expressionMap.selects;
+		const attributes: PropertyDescriptor = Object.create(null);
+		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
+			return 'SELECT * FROM note note'; // NOTE: selected columns in the cte are already transformed so just pass-through here
+		};
+		Object.defineProperty(query, 'createSelectExpression', attributes);
+		const result = await query.getMany();
+		if (softLimit) {
+			return result.slice(0, pagination.limit);
+		} else {
+			return result;
+		}
+	}
+
+	@bindThis
+	private queryNoteBySql(
+		q: string,
+		me: MiUser | null,
+		opts: SearchOpts,
+		usePgroonga: boolean,
+	): SelectQueryBuilder<MiNote> {
+		const query = this.notesRepository.createQueryBuilder('note');
 
 		if (opts.userId) {
 			query.andWhere('note.userId = :userId', { userId: opts.userId });
@@ -220,10 +348,10 @@ export class SearchService {
 			.leftJoinAndSelect('reply.user', 'replyUser')
 			.leftJoinAndSelect('renote.user', 'renoteUser');
 
-		if (this.config.fulltextSearch?.provider === 'sqlPgroonga') {
+		if (usePgroonga) {
 			query.andWhere('concat_ws_unsafe_immutable(\' \', note.cw, note.text) &@~ :q', { q });
 		} else {
-			query.andWhere('lower(concat_ws_unsafe_immutable(\' \', note.cw, note.text)) LIKE :q', { q: `%${ sqlLikeEscape(q.toLowerCase()) }%` });
+			query.andWhere('lower(concat_ws_unsafe_immutable(\' \', note.cw, note.text)) LIKE :q', { q: `%${sqlLikeEscape(q.toLowerCase())}%` });
 		}
 
 		query
@@ -238,11 +366,47 @@ export class SearchService {
 			}
 		}
 
+		if (opts.onlyFollows) {
+			query.andWhere(`note.userId IN (${this.followingsRepository.createQueryBuilder('following').select('following.followeeId').where('following.followerId = :followerId').getQuery()})`, { followerId: me?.id });
+		}
+
+		if (opts.onlyMentioned) {
+			query.andWhere(':mentions <@ note.mentions', { mentions: [me?.id] });
+		}
+
+		if (opts.onlySpecified) {
+			query.andWhere(':visibleUserIds <@ note.visibleUserIds', { visibleUserIds: [me?.id] });
+		}
+
+		if (opts.minRenoteCount != null) {
+			query.andWhere('note.renoteCount >= :minRenoteCount', { minRenoteCount: opts.minRenoteCount });
+		}
+
+		if (opts.maxRenoteCount != null) {
+			query.andWhere('note.renoteCount <= :maxRenoteCount', { maxRenoteCount: opts.maxRenoteCount });
+		}
+
+		if (opts.minRepliesCount != null) {
+			query.andWhere('note.repliesCount >= :minRepliesCount', { minRepliesCount: opts.minRepliesCount });
+		}
+
+		if (opts.maxRepliesCount != null) {
+			query.andWhere('note.repliesCount <= :maxRepliesCount', { maxRepliesCount: opts.maxRepliesCount });
+		}
+
+		if (opts.minReactionsCount != null) {
+			query.andWhere('COALESCE((SELECT sum(reaction::INTEGER) FROM LATERAL jsonb_array_elements(jsonb_path_query_array(note.reactions, \'$.*\')) reaction), 0) >= :minReactionsCount', { minReactionsCount: opts.minReactionsCount });
+		}
+
+		if (opts.maxReactionsCount != null) {
+			query.andWhere('COALESCE((SELECT sum(reaction::INTEGER) FROM LATERAL jsonb_array_elements(jsonb_path_query_array(note.reactions, \'$.*\')) reaction), 0) <= :maxReactionsCount', { maxReactionsCount: opts.maxReactionsCount });
+		}
+
 		this.queryService.generateVisibilityQuery(query, me);
 		if (me) this.queryService.generateMutedUserQuery(query, me);
 		if (me) this.queryService.generateBlockedUserQuery(query, me);
 
-		return query.limit(pagination.limit).getMany();
+		return query;
 	}
 
 	@bindThis

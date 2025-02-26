@@ -1,4 +1,5 @@
-import { Ref, readonly, ref } from 'vue';
+import { readonly, ref } from 'vue';
+import type { Ref } from 'vue';
 import { misskeyApi } from './misskey-api.js';
 import type * as Misskey from 'misskey-js';
 import { hostname } from '@@/js/config.js';
