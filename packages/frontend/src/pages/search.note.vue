@@ -24,7 +24,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<template #prefix><i class="ti ti-server"></i></template>
 					</MkInput>
 				</template>
-				<MkSwitch v-model="internal" style="display: none;">internal</MkSwitch>
+
+				<MkRadios v-model="targetSelect">
+					<template #label>{{ i18n.ts.target }}</template>
+					<option value="all" default>{{ i18n.ts.all }}</option>
+					<option value="follows">{{ i18n.ts.following }}</option>
+					<option value="mentioned">{{ i18n.ts.mentions }}</option>
+					<option value="specified">{{ i18n.ts.directNotes }}</option>
+				</MkRadios>
 
 				<MkFolder :defaultOpen="true">
 					<template #label>{{ i18n.ts.specifyUser }}</template>
@@ -42,7 +49,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 				<MkFolder :defaultOpen="true">
 					<template #label>{{ i18n.ts._poll.duration }}</template>
-					<template v-if="user" #suffix>
+					<template v-if="sinceDate || untilDate" #suffix>
 						<MkTime v-if="sinceDate" :time="sinceDate" mode="absolute"/>
 						-
 						<MkTime v-if="untilDate" :time="untilDate" mode="absolute"/>
@@ -52,6 +59,66 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<MkInput v-model="sinceDate" :class="$style.dtl" type="datetime-local"/>
 						-
 						<MkInput v-model="untilDate" :class="$style.dtl" type="datetime-local"/>
+					</div>
+				</MkFolder>
+
+				<MkFolder>
+					<template #label>{{ i18n.ts.repliedCount }}</template>
+					<template v-if="repliesCount" #suffix>
+						{{ Number.isSafeInteger(minRepliesCount) ? minRepliesCount : 0 }}
+						-
+						{{ Number.isSafeInteger(maxRepliesCount) ? maxRepliesCount : '∞' }}
+					</template>
+
+					<div class="_gaps">
+						<MkSwitch v-model="repliesCount">
+							<template #label>{{ i18n.ts.configure }}</template>
+						</MkSwitch>
+						<div class="_gaps" :class="$style.range">
+							<MkInput v-model="minRepliesCount" :class="$style.dtl" type="number"/>
+							-
+							<MkInput v-model="maxRepliesCount" :class="$style.dtl" type="number"/>
+						</div>
+					</div>
+				</MkFolder>
+
+				<MkFolder>
+					<template #label>{{ i18n.ts.renotedCount }}</template>
+					<template v-if="renoteCount" #suffix>
+						{{ Number.isSafeInteger(minRenoteCount) ? minRenoteCount : 0 }}
+						-
+						{{ Number.isSafeInteger(maxRenoteCount) ? maxRenoteCount : '∞' }}
+					</template>
+
+					<div class="_gaps">
+						<MkSwitch v-model="renoteCount">
+							<template #label>{{ i18n.ts.configure }}</template>
+						</MkSwitch>
+						<div class="_gaps" :class="$style.range">
+							<MkInput v-model="minRenoteCount" :class="$style.dtl" type="number"/>
+							-
+							<MkInput v-model="maxRenoteCount" :class="$style.dtl" type="number"/>
+						</div>
+					</div>
+				</MkFolder>
+
+				<MkFolder>
+					<template #label>{{ i18n.ts.receivedReactionsCount }}</template>
+					<template v-if="reactionsCount" #suffix>
+						{{ Number.isSafeInteger(minReactionsCount) ? minReactionsCount : 0 }}
+						-
+						{{ Number.isSafeInteger(maxReactionsCount) ? maxReactionsCount : '∞' }}
+					</template>
+
+					<div class="_gaps">
+						<MkSwitch v-model="reactionsCount">
+							<template #label>{{ i18n.ts.configure }}</template>
+						</MkSwitch>
+						<div class="_gaps" :class="$style.range">
+							<MkInput v-model="minReactionsCount" :class="$style.dtl" type="number"/>
+							-
+							<MkInput v-model="maxReactionsCount" :class="$style.dtl" type="number"/>
+						</div>
 					</div>
 				</MkFolder>
 			</div>
@@ -105,13 +172,22 @@ const searchQuery = ref(toRef(props, 'query').value);
 const notePagination = ref<Paging>();
 const user = ref<UserDetailed | null>(null);
 const hostInput = ref(toRef(props, 'host').value);
-const internal = ref(false);
 const sinceDate = ref('');
 const untilDate = ref('');
+const repliesCount = ref(false);
+const minRepliesCount = ref<number | null>(null);
+const maxRepliesCount = ref<number | null>(null);
+const renoteCount = ref(false);
+const minRenoteCount = ref<number | null>(null);
+const maxRenoteCount = ref<number | null>(null);
+const reactionsCount = ref(false);
+const minReactionsCount = ref<number | null>(null);
+const maxReactionsCount = ref<number | null>(null);
 
 const noteSearchableScope = instance.noteSearchableScope ?? 'local';
 
 const hostSelect = ref<'all' | 'local' | 'specified'>('all');
+const targetSelect = ref<'all' | 'follows' | 'mentioned' | 'specified'>('all');
 
 const setHostSelectWithInput = (after: string | undefined | null, before: string | undefined | null) => {
 	if (before === after) return;
@@ -221,9 +297,17 @@ async function search() {
 			query: searchQuery.value,
 			userId: user.value ? user.value.id : null,
 			...(searchHost.value ? { host: searchHost.value } : {}),
-			internal: internal.value,
 			sinceDate: sinceDate.value ? new Date(sinceDate.value).valueOf() : undefined,
 			untilDate: untilDate.value ? new Date(untilDate.value).valueOf() : undefined,
+			onlyFollows: targetSelect.value === 'follows',
+			onlyMentioned: targetSelect.value === 'mentioned',
+			onlySpecified: targetSelect.value === 'specified',
+			minRenoteCount: renoteCount.value && Number.isSafeInteger(minRenoteCount.value) ? minRenoteCount.value : undefined,
+			maxRenoteCount: renoteCount.value && Number.isSafeInteger(maxRenoteCount.value) ? maxRenoteCount.value : undefined,
+			minRepliesCount: repliesCount.value && Number.isSafeInteger(minRepliesCount.value) ? minRepliesCount.value : undefined,
+			maxRepliesCount: repliesCount.value && Number.isSafeInteger(maxRepliesCount.value) ? maxRepliesCount.value : undefined,
+			minReactionsCount: reactionsCount.value && Number.isSafeInteger(minReactionsCount.value) ? minReactionsCount.value : undefined,
+			maxReactionsCount: reactionsCount.value && Number.isSafeInteger(maxReactionsCount.value) ? maxReactionsCount.value : undefined,
 		},
 	};
 
