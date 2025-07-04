@@ -30,7 +30,7 @@ jobs:
             - name: Fetch and extract new files
               if: env.repo_version != env.ltn_version
               run: |
-                  find . -type f -not \( -path './.git/*' -o -path './.github/workflows/*' \) | xargs rm -rf
+                  find . -type f -not \( -path './.git/*' -o -path './.github/workflows/*' -o -path ./.gitignore \) | xargs rm -rf
                   cd ~
                   curl -sL 'https://live-theater.net/tarball/misskey-${{ env.ltn_version }}.tar.gz' > '${{ env.ltn_version }}.tar.gz'
                   mkdir '${{ env.ltn_version }}' && tar -xf '${{ env.ltn_version }}.tar.gz' -C '${{ env.ltn_version }}' && cd '${{ env.ltn_version }}'
