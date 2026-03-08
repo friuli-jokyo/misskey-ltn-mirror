@@ -220,7 +220,7 @@ import * as mfm from 'mfm-js';
 import * as Misskey from 'misskey-js';
 import { isLink } from '@@/js/is-link.js';
 import { shouldCollapsed } from '@@/js/collapsed.js';
-import { host } from '@@/js/config.js';
+import { host, hostname } from '@@/js/config.js';
 import type { Ref } from 'vue';
 import type { MenuItem } from '@/types/menu.js';
 import type { OpenOnRemoteOptions } from '@/utility/please-login.js';
@@ -349,6 +349,13 @@ const pleaseLoginContext = computed<OpenOnRemoteOptions>(() => ({
 function userOf(targetNote: Misskey.entities.Note): Misskey.entities.User {
 	if (targetNote.anonymouslySendToUser) {
 		return targetNote.anonymouslySendToUser;
+	}
+	if (targetNote.anonymousChannelUsername) {
+		return {
+			...targetNote.user,
+			username: targetNote.anonymousChannelUsername,
+			avatarUrl: `${location.origin}/identicon/@${targetNote.anonymousChannelUsername}@${hostname}`,
+		};
 	}
 	return targetNote.user;
 }

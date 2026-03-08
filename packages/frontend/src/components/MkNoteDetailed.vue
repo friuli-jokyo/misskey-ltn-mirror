@@ -495,6 +495,13 @@ function userOf(note: Misskey.entities.Note): Misskey.entities.User {
 	if (note.anonymouslySendToUser) {
 		return note.anonymouslySendToUser;
 	}
+	if (note.anonymousChannelUsername) {
+		return {
+			...note.user,
+			username: note.anonymousChannelUsername,
+			avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}`,
+		};
+	}
 	return note.user;
 }
 
