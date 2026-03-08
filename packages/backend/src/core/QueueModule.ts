@@ -147,14 +147,19 @@ export class QueueModule implements OnApplicationShutdown {
 		this.initQueueEventListeners();
 	}
 
-	private async getJobFromCache(jobId: string, queue: Bull.Queue): Promise<Bull.Job | undefined> {
+	private getJobCacheKey(queueName: string, jobId: string): string {
+		return `${queueName}:${jobId}`;
+	}
+
+	private async getJobFromCache(jobId: string, queue: Bull.Queue, queueName: string): Promise<Bull.Job | undefined> {
+		const cacheKey = this.getJobCacheKey(queueName, jobId);
 		// Check cache first
-		let job = this.jobCache.get(jobId);
+		let job = this.jobCache.get(cacheKey);
 		if (!job) {
 			// If not in cache, fetch from queue
 			job = await queue.getJob(jobId);
 			if (job) {
-				this.jobCache.set(jobId, job);
+				this.jobCache.set(cacheKey, job);
 			}
 		}
 		return job;
@@ -164,15 +169,20 @@ export class QueueModule implements OnApplicationShutdown {
 		const queueEvents = new Bull.QueueEvents(queueName, baseQueueOptions(this.config, queueName));
 		this.queueEventListeners.push(queueEvents);
 
-		queueEvents.on('progress', async ({ jobId }) => {
-			const job = await this.getJobFromCache(jobId, queue);
+		queueEvents.on('progress', async ({ jobId, data }) => {
+			const job = await this.getJobFromCache(jobId, queue, queueName);
 			if (job?.data?.user?.id && job.id) {
 				const state = await job.getState();
+				const progress = typeof data === 'number'
+					? data
+					: typeof job.progress === 'number'
+						? job.progress
+						: null;
 				this.globalEventService.publishJobStream(job.data.user.id, 'jobProgress', {
 					id: job.id,
 					name: job.name,
 					state,
-					progress: typeof job.progress === 'number' ? job.progress : null,
+					progress,
 					timestamp: job.timestamp,
 					completedAt: job.finishedOn ?? null,
 				});
@@ -180,7 +190,7 @@ export class QueueModule implements OnApplicationShutdown {
 		});
 
 		queueEvents.on('completed', async ({ jobId }) => {
-			const job = await this.getJobFromCache(jobId, queue);
+			const job = await this.getJobFromCache(jobId, queue, queueName);
 			if (job?.data?.user?.id && job.id) {
 				const state = await job.getState();
 				this.globalEventService.publishJobStream(job.data.user.id, 'jobCompleted', {
@@ -193,11 +203,11 @@ export class QueueModule implements OnApplicationShutdown {
 				});
 			}
 			// Remove from cache after completion
-			this.jobCache.delete(jobId);
+			this.jobCache.delete(this.getJobCacheKey(queueName, jobId));
 		});
 
 		queueEvents.on('failed', async ({ jobId }) => {
-			const job = await this.getJobFromCache(jobId, queue);
+			const job = await this.getJobFromCache(jobId, queue, queueName);
 			if (job?.data?.user?.id && job.id) {
 				const state = await job.getState();
 				this.globalEventService.publishJobStream(job.data.user.id, 'jobFailed', {
@@ -210,7 +220,7 @@ export class QueueModule implements OnApplicationShutdown {
 				});
 			}
 			// Remove from cache after failure
-			this.jobCache.delete(jobId);
+			this.jobCache.delete(this.getJobCacheKey(queueName, jobId));
 		});
 	}
 

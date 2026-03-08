@@ -61,6 +61,7 @@ export type DbJobMap = {
 	importUserLists: DbUserImportJobData;
 	importCustomEmojis: DbUserImportJobData;
 	deleteAccount: DbUserDeleteJobData;
+	testJob: { user: ThinUser; duration: number };
 };
 
 export type DbJobDataWithUser = {
