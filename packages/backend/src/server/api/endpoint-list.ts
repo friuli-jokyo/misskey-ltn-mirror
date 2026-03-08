@@ -96,6 +96,7 @@ export * as 'admin/show-moderation-logs' from './endpoints/admin/show-moderation
 export * as 'admin/show-user' from './endpoints/admin/show-user.js';
 export * as 'admin/show-users' from './endpoints/admin/show-users.js';
 export * as 'admin/suspend-user' from './endpoints/admin/suspend-user.js';
+export * as 'admin/test-job' from './endpoints/admin/test-job.js';
 export * as 'admin/system-webhook/create' from './endpoints/admin/system-webhook/create.js';
 export * as 'admin/system-webhook/delete' from './endpoints/admin/system-webhook/delete.js';
 export * as 'admin/system-webhook/list' from './endpoints/admin/system-webhook/list.js';
