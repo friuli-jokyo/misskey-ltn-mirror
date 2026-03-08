@@ -57,7 +57,8 @@ const rootEl = useTemplateRef('rootEl');
 const menuIndicated = computed(() => {
 	for (const def in navbarItemDef) {
 		if (def === 'notifications') continue; // 通知は下にボタンとして表示されてるから
-		if (navbarItemDef[def].indicated) return true;
+		const indicatedRef = navbarItemDef[def].indicated;
+		if (indicatedRef && (typeof indicatedRef === 'boolean' ? indicatedRef : indicatedRef.value)) return true;
 	}
 	if ($i && (!$i.securityKeys && supported() || instance.enableEmail && !$i.emailVerified || !$i.twoFactorEnabled)) return true;
 	return false;
