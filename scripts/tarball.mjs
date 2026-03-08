@@ -18,10 +18,10 @@ const ignore = [
 	'**/.gitmodules',
 	// Exclude files you don't want to include in the tarball here
 	'**/scripts/tarball.mjs',
-	'**/.claude/**',
-	'**/.github/**',
-	'**/.rebase/**',
-	'**/.vscode/**',
+	'**/.claude/**/*',
+	'**/.github/**/*',
+	'**/.rebase/**/*',
+	'**/.vscode/**/*',
 ];
 
 export async function buildTarball() {

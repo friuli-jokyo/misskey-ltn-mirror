@@ -295,7 +295,11 @@ definePage(computed(() => ({
 
 .progressFill {
 	height: 100%;
-	background: linear-gradient(90deg, var(--MI_THEME-accentLight), var(--MI_THEME-accent));
+	background: linear-gradient(
+		90deg,
+		hsl(from var(--job-state-color, var(--MI_THEME-accent)) h s calc(l + 8)),
+		var(--job-state-color, var(--MI_THEME-accent))
+	);
 	border-radius: 4px;
 	transition: width 0.3s ease;
 }
