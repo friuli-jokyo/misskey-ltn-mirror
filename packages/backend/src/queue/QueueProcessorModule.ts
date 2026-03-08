@@ -43,6 +43,7 @@ import { TickChartsProcessorService } from './processors/TickChartsProcessorServ
 import { AggregateRetentionProcessorService } from './processors/AggregateRetentionProcessorService.js';
 import { ExportFavoritesProcessorService } from './processors/ExportFavoritesProcessorService.js';
 import { RelationshipProcessorService } from './processors/RelationshipProcessorService.js';
+import { TestJobProcessorService } from './processors/TestJobProcessorService.js';
 
 @Module({
 	imports: [
@@ -87,6 +88,7 @@ import { RelationshipProcessorService } from './processors/RelationshipProcessor
 		CheckExpiredMutingsProcessorService,
 		CheckModeratorsActivityProcessorService,
 		CleanRemoteNotesProcessorService,
+		TestJobProcessorService,
 		QueueProcessorService,
 	],
 	exports: [

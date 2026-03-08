@@ -7,7 +7,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 <PageWithHeader :actions="headerActions" :tabs="headerTabs">
 	<div class="_spacer" style="--MI_SPACER-w: 800px;">
 		<div class="_gaps_m">
-			<div v-if="jobs.length" class="_gaps_s">
+			<MkButton v-if="$i && ($i.isAdmin || $i.isModerator)" :class="$style.testButton" primary rounded @click="createTestJob">
+				<i class="ti ti-test-pipe"></i> Create Test Job
+			</MkButton>
+			<MkLoading v-if="isLoading"/>
+			<div v-else-if="jobs.length" class="_gaps_s">
 				<TransitionGroup tag="div" :name="prefer.s.animation ? 'jobs' : ''" class="_gaps_s">
 					<div
 						v-for="job in jobs"
@@ -19,7 +23,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 							job.state === 'failed' && $style.stateFailed,
 							job.state === 'waiting' && $style.stateWaiting,
 							job.state === 'waiting-children' && $style.stateWaitingChildren,
-							job.state === 'delayed' && $style.stateDelayed,					job.state === 'prioritized' && $style.statePrioritized,							job.state === 'unknown' && $style.stateUnknown,
+							job.state === 'delayed' && $style.stateDelayed,
+							job.state === 'prioritized' && $style.statePrioritized,
+							job.state === 'unknown' && $style.stateUnknown,
 						]"
 						class="_panel"
 					>
@@ -69,6 +75,10 @@ import { misskeyApi } from '@/utility/misskey-api.js';
 import { definePage } from '@/page.js';
 import { useStream } from '@/stream.js';
 import { prefer } from '@/preferences.js';
+import MkButton from '@/components/MkButton.vue';
+import MkLoading from '@/components/global/MkLoading.vue';
+import * as os from '@/os.js';
+import { $i } from '@/i.js';
 
 type Job = {
 	id: string;
@@ -80,6 +90,7 @@ type Job = {
 };
 
 const jobs = ref<Job[]>([]);
+const isLoading = ref(true);
 let connection: Misskey.IChannelConnection<Misskey.Channels['job']> | null = null;
 
 const fetchJobs = async () => {
@@ -87,6 +98,8 @@ const fetchJobs = async () => {
 		jobs.value = await misskeyApi('i/jobs', {});
 	} catch (err) {
 		console.error(err);
+	} finally {
+		isLoading.value = false;
 	}
 };
 
@@ -110,6 +123,29 @@ const getStateLabel = (state: string): string => {
 		case 'prioritized': return i18n.ts.waiting;
 		case 'unknown': return i18n.ts.unknown;
 		default: return state;
+	}
+};
+
+const createTestJob = async () => {
+	const { canceled, result } = await os.inputNumber({
+		title: 'Create test job',
+		text: 'Test job duration (seconds)',
+		placeholder: '10',
+		default: 10,
+	});
+
+	if (canceled || result == null) return;
+
+	try {
+		const response = await misskeyApi('admin/test-job', { duration: result });
+		if (response?.jobId) {
+			os.toast(`Test job created: ${response.jobId}`);
+		}
+	} catch (err) {
+		os.alert({
+			type: 'error',
+			text: err?.message ?? 'Error',
+		});
 	}
 };
 
@@ -303,6 +339,10 @@ definePage(computed(() => ({
 
 .emptyText {
 	font-size: 1.1em;
+}
+
+.testButton {
+	width: 100%;
 }
 
 @keyframes spin {

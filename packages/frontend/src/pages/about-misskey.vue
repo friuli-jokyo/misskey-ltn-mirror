@@ -119,7 +119,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<FormSection>
 					<template #label><Mfm text="$[jelly ❤]"/> {{ i18n.ts._aboutMisskey.patrons }}</template>
 					<div :class="$style.patronsWithIcon">
-						<div v-for="patron in patronsWithIcon" :class="$style.patronWithIcon">
+						<div v-for="patron in patronsWithIcon" :key="`${patron.name}-${patron.icon}`" :class="$style.patronWithIcon">
 							<img :src="patron.icon" :class="$style.patronIcon">
 							<span :class="$style.patronName">{{ patron.name }}</span>
 						</div>
@@ -150,6 +150,7 @@ import { definePage } from '@/page.js';
 import { claimAchievement, claimedAchievements } from '@/utility/achievements.js';
 import { $i } from '@/i.js';
 import { prefer } from '@/preferences.js';
+import { getInitialPrefValue } from '@/preferences/manager.js';
 
 const patronsWithIcon = [{
 	name: 'カイヤン',
@@ -429,14 +430,17 @@ const containerEl = useTemplateRef('containerEl');
 
 function iconLoaded() {
 	if (containerEl.value == null) return;
-	const emojis = prefer.s.emojiPalettes[0].emojis;
+	const emojis = prefer.s.emojiPalettes?.[0]?.emojis ?? [];
+	const defaultEmojis = getInitialPrefValue('emojiPalettes')?.[0]?.emojis ?? [];
+	const emojiPool = emojis.length ? emojis : defaultEmojis;
+	if (!emojiPool.length) return;
 	const containerWidth = containerEl.value.offsetWidth;
 	for (let i = 0; i < 32; i++) {
 		easterEggEmojis.value.push({
 			id: i.toString(),
 			top: -(128 + (Math.random() * 256)),
 			left: (Math.random() * containerWidth),
-			emoji: emojis[Math.floor(Math.random() * emojis.length)],
+			emoji: emojiPool[Math.floor(Math.random() * emojiPool.length)],
 		});
 	}
 
