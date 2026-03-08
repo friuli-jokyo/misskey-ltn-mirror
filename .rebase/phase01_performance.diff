@@ -1,0 +1,984 @@
+diff --git a/packages/backend/src/GlobalModule.ts b/packages/backend/src/GlobalModule.ts
+index ace7f7841c..d9503ad4e6 100644
+--- a/packages/backend/src/GlobalModule.ts
++++ b/packages/backend/src/GlobalModule.ts
+@@ -30,14 +30,19 @@ const $db: Provider = {
+ 	inject: [DI.config],
+ };
+ 
++const $dbLong: Provider = {
++	provide: DI.dbLong,
++	useFactory: async (config) => {
++		const db = createPostgresDataSource(config, true);
++		return await db.initialize();
++	},
++	inject: [DI.config],
++};
++
+ const $meilisearch: Provider = {
+ 	provide: DI.meilisearch,
+ 	useFactory: (config: Config) => {
+-		if (config.fulltextSearch?.provider === 'meilisearch') {
+-			if (!config.meilisearch) {
+-				throw new Error('MeiliSearch is enabled but no configuration is provided');
+-			}
+-
++		if (config.meilisearch) {
+ 			return new MeiliSearch({
+ 				host: `${config.meilisearch.ssl ? 'https' : 'http'}://${config.meilisearch.host}:${config.meilisearch.port}`,
+ 				apiKey: config.meilisearch.apiKey,
+@@ -152,12 +157,13 @@ const $meta: Provider = {
+ @Global()
+ @Module({
+ 	imports: [RepositoryModule],
+-	providers: [$config, $db, $meta, $meilisearch, $redis, $redisForPub, $redisForSub, $redisForTimelines, $redisForReactions],
+-	exports: [$config, $db, $meta, $meilisearch, $redis, $redisForPub, $redisForSub, $redisForTimelines, $redisForReactions, RepositoryModule],
++	providers: [$config, $db, $dbLong, $meta, $meilisearch, $redis, $redisForPub, $redisForSub, $redisForTimelines, $redisForReactions],
++	exports: [$config, $db, $dbLong, $meta, $meilisearch, $redis, $redisForPub, $redisForSub, $redisForTimelines, $redisForReactions, RepositoryModule],
+ })
+ export class GlobalModule implements OnApplicationShutdown {
+ 	constructor(
+ 		@Inject(DI.db) private db: DataSource,
++		@Inject(DI.dbLong) private dbLong: DataSource,
+ 		@Inject(DI.redis) private redisClient: Redis.Redis,
+ 		@Inject(DI.redisForPub) private redisForPub: Redis.Redis,
+ 		@Inject(DI.redisForSub) private redisForSub: Redis.Redis,
+@@ -171,6 +177,7 @@ export class GlobalModule implements OnApplicationShutdown {
+ 		// And then disconnect from DB
+ 		await Promise.all([
+ 			this.db.destroy(),
++			this.dbLong.destroy(),
+ 			this.redisClient.disconnect(),
+ 			this.redisForPub.disconnect(),
+ 			this.redisForSub.disconnect(),
+diff --git a/packages/backend/src/boot/entry.ts b/packages/backend/src/boot/entry.ts
+index da585ad68d..a21af18bda 100644
+--- a/packages/backend/src/boot/entry.ts
++++ b/packages/backend/src/boot/entry.ts
+@@ -11,7 +11,9 @@ import cluster from 'node:cluster';
+ import { EventEmitter } from 'node:events';
+ import chalk from 'chalk';
+ import Xev from 'xev';
++import type { INestApplicationContext } from '@nestjs/common';
+ import Logger from '@/logger.js';
++import { ServerService } from '@/server/ServerService.js';
+ import { envOption } from '../env.js';
+ import { masterMain } from './master.js';
+ import { workerMain } from './worker.js';
+@@ -68,26 +70,48 @@ process.on('exit', code => {
+ 
+ //#endregion
+ 
++let server: INestApplicationContext | undefined;
++let jobQueue: INestApplicationContext | undefined;
+ if (!envOption.disableClustering) {
+ 	if (cluster.isPrimary) {
+ 		logger.info(`Start main process... pid: ${process.pid}`);
+-		await masterMain();
++		const apps = await masterMain();
++		if (apps.server) {
++			server = apps.server;
++		}
++		if (apps.jobQueue) {
++			jobQueue = apps.jobQueue;
++		}
+ 		ev.mount();
+ 	} else if (cluster.isWorker) {
+ 		logger.info(`Start worker process... pid: ${process.pid}`);
+-		await workerMain();
++		const apps = await workerMain();
++		if (apps.server) {
++			server = apps.server;
++		}
++		if (apps.jobQueue) {
++			jobQueue = apps.jobQueue;
++		}
+ 	} else {
+ 		throw new Error('Unknown process type');
+ 	}
+ } else {
+ 	// 非clusterの場合はMasterのみが起動するため、Workerの処理は行わない(cluster.isWorker === trueの状態でこのブロックに来ることはない)
+ 	logger.info(`Start main process... pid: ${process.pid}`);
+-	await masterMain();
++	const apps = await masterMain();
++	if (apps.server) {
++		server = apps.server;
++	}
++	if (apps.jobQueue) {
++		jobQueue = apps.jobQueue;
++	}
+ 	ev.mount();
+ }
+ 
+ readyRef.value = true;
+ 
++await server?.get(ServerService).ready();
++
+ // ユニットテスト時にMisskeyが子プロセスで起動された時のため
+ // それ以外のときは process.send は使えないので弾く
+ if (process.send) {
+diff --git a/packages/backend/src/boot/master.ts b/packages/backend/src/boot/master.ts
+index d1fb3858db..0ccd0d71ad 100644
+--- a/packages/backend/src/boot/master.ts
++++ b/packages/backend/src/boot/master.ts
+@@ -10,6 +10,7 @@ import * as os from 'node:os';
+ import cluster from 'node:cluster';
+ import chalk from 'chalk';
+ import chalkTemplate from 'chalk-template';
++import type { INestApplicationContext } from '@nestjs/common';
+ import * as Sentry from '@sentry/node';
+ import { nodeProfilingIntegration } from '@sentry/profiling-node';
+ import Logger from '@/logger.js';
+@@ -90,6 +91,8 @@ export async function masterMain() {
+ 			...config.sentryForBackend.options,
+ 		});
+ 	}
++	let serverApp: INestApplicationContext | undefined;
++	let jobQueueApp: INestApplicationContext | undefined;
+ 
+ 	bootLogger.info(
+ 		`mode: [disableClustering: ${envOption.disableClustering}, onlyServer: ${envOption.onlyServer}, onlyQueue: ${envOption.onlyQueue}]`,
+@@ -104,9 +107,9 @@ export async function masterMain() {
+ 			// そのため、メインプロセスでも直接listenするとポートの競合が発生して起動に失敗してしまう。
+ 			// see: https://nodejs.org/api/cluster.html#cluster
+ 		} else if (envOption.onlyQueue) {
+-			await jobQueue();
++			jobQueueApp = await jobQueue();
+ 		} else {
+-			await server();
++			serverApp = await server();
+ 		}
+ 
+ 		await spawnWorkers(config.clusterLimit);
+@@ -114,12 +117,12 @@ export async function masterMain() {
+ 		// clusterモジュール無効時
+ 
+ 		if (envOption.onlyServer) {
+-			await server();
++			serverApp = await server();
+ 		} else if (envOption.onlyQueue) {
+-			await jobQueue();
++			jobQueueApp = await jobQueue();
+ 		} else {
+-			await server();
+-			await jobQueue();
++			serverApp = await server();
++			jobQueueApp = await jobQueue();
+ 		}
+ 	}
+ 
+@@ -128,6 +131,10 @@ export async function masterMain() {
+ 	} else {
+ 		bootLogger.succ(config.socket ? `Now listening on socket ${config.socket} on ${config.url}` : `Now listening on port ${config.port} on ${config.url}`, null, true);
+ 	}
++	return {
++		server: serverApp,
++		jobQueue: jobQueueApp,
++	};
+ }
+ 
+ function showEnvironment(): void {
+diff --git a/packages/backend/src/boot/worker.ts b/packages/backend/src/boot/worker.ts
+index 5d4a15b29f..c85599285e 100644
+--- a/packages/backend/src/boot/worker.ts
++++ b/packages/backend/src/boot/worker.ts
+@@ -9,6 +9,7 @@ import { nodeProfilingIntegration } from '@sentry/profiling-node';
+ import { envOption } from '@/env.js';
+ import { loadConfig } from '@/config.js';
+ import { jobQueue, server } from './common.js';
++import { INestApplicationContext } from '@nestjs/common';
+ 
+ /**
+  * Init worker process
+@@ -34,16 +35,22 @@ export async function workerMain() {
+ 		});
+ 	}
+ 
++	let serverApp: INestApplicationContext | undefined;
++	let jobQueueApp: INestApplicationContext | undefined;
+ 	if (envOption.onlyServer) {
+-		await server();
++		serverApp = await server();
+ 	} else if (envOption.onlyQueue) {
+-		await jobQueue();
++		jobQueueApp = await jobQueue();
+ 	} else {
+-		await jobQueue();
++		jobQueueApp = await jobQueue();
+ 	}
+ 
+ 	if (cluster.isWorker) {
+ 		// Send a 'ready' message to parent process
+ 		process.send!('ready');
+ 	}
++	return {
++		server: serverApp,
++		jobQueue: jobQueueApp,
++	};
+ }
+diff --git a/packages/backend/src/core/QueueModule.ts b/packages/backend/src/core/QueueModule.ts
+index b10b8e5899..84d5f81bdc 100644
+--- a/packages/backend/src/core/QueueModule.ts
++++ b/packages/backend/src/core/QueueModule.ts
+@@ -13,6 +13,8 @@ import {
+ 	DeliverJobData,
+ 	EndedPollNotificationJobData,
+ 	InboxJobData,
++	DbJobData,
++	DbJobMap,
+ 	RelationshipJobData,
+ 	UserWebhookDeliverJobData,
+ 	SystemWebhookDeliverJobData,
+@@ -23,7 +25,7 @@ export type SystemQueue = Bull.Queue<Record<string, unknown>>;
+ export type EndedPollNotificationQueue = Bull.Queue<EndedPollNotificationJobData>;
+ export type DeliverQueue = Bull.Queue<DeliverJobData>;
+ export type InboxQueue = Bull.Queue<InboxJobData>;
+-export type DbQueue = Bull.Queue;
++export type DbQueue = Bull.Queue<DbJobData<keyof DbJobMap>>;
+ export type RelationshipQueue = Bull.Queue<RelationshipJobData>;
+ export type ObjectStorageQueue = Bull.Queue;
+ export type UserWebhookDeliverQueue = Bull.Queue<UserWebhookDeliverJobData>;
+diff --git a/packages/backend/src/core/QueueService.ts b/packages/backend/src/core/QueueService.ts
+index da76dd1284..26b5a1b421 100644
+--- a/packages/backend/src/core/QueueService.ts
++++ b/packages/backend/src/core/QueueService.ts
+@@ -201,6 +201,7 @@ export class QueueService {
+ 		return this.dbQueue.add('exportCustomEmojis', {
+ 			user: { id: user.id },
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -211,6 +212,7 @@ export class QueueService {
+ 		return this.dbQueue.add('exportNotes', {
+ 			user: { id: user.id },
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -221,6 +223,7 @@ export class QueueService {
+ 		return this.dbQueue.add('exportClips', {
+ 			user: { id: user.id },
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -231,6 +234,7 @@ export class QueueService {
+ 		return this.dbQueue.add('exportFavorites', {
+ 			user: { id: user.id },
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -243,6 +247,7 @@ export class QueueService {
+ 			excludeMuting,
+ 			excludeInactive,
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -253,6 +258,7 @@ export class QueueService {
+ 		return this.dbQueue.add('exportMuting', {
+ 			user: { id: user.id },
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -263,6 +269,7 @@ export class QueueService {
+ 		return this.dbQueue.add('exportBlocking', {
+ 			user: { id: user.id },
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -273,6 +280,7 @@ export class QueueService {
+ 		return this.dbQueue.add('exportUserLists', {
+ 			user: { id: user.id },
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -283,6 +291,7 @@ export class QueueService {
+ 		return this.dbQueue.add('exportAntennas', {
+ 			user: { id: user.id },
+ 		}, {
++			attempts: 3,
+ 			removeOnComplete: true,
+ 			removeOnFail: true,
+ 		});
+@@ -302,8 +311,17 @@ export class QueueService {
+ 
+ 	@bindThis
+ 	public createImportFollowingToDbJob(user: ThinUser, targets: string[], withReplies?: boolean) {
+-		const jobs = targets.map(rel => this.generateToDbJobData('importFollowingToDb', { user, target: rel, withReplies }));
+-		return this.dbQueue.addBulk(jobs);
++		if (targets.length === 0) return;
++		return this.dbQueue.add('importFollowingToDb', {
++			user: { id: user.id },
++			target: targets[0],
++			withReplies,
++			remaining: targets.slice(1),
++		}, {
++			removeOnComplete: true,
++			removeOnFail: true,
++			delay: 1000,
++		});
+ 	}
+ 
+ 	@bindThis
+diff --git a/packages/backend/src/core/UserSuspendService.ts b/packages/backend/src/core/UserSuspendService.ts
+index 7920e58e36..63b84ed50d 100644
+--- a/packages/backend/src/core/UserSuspendService.ts
++++ b/packages/backend/src/core/UserSuspendService.ts
+@@ -4,21 +4,29 @@
+  */
+ 
+ import { Inject, Injectable } from '@nestjs/common';
+-import { Not, IsNull } from 'typeorm';
++import { Not, IsNull, Brackets, DataSource, EntityManager } from 'typeorm';
+ import type { FollowingsRepository, FollowRequestsRepository, UsersRepository } from '@/models/_.js';
++import { DI } from '@/di-symbols.js';
++import type Logger from '@/logger.js';
+ import type { MiUser } from '@/models/User.js';
++import type { FollowingsRepository } from '@/models/_.js';
+ import { QueueService } from '@/core/QueueService.js';
+ import { GlobalEventService } from '@/core/GlobalEventService.js';
+-import { DI } from '@/di-symbols.js';
+ import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
+ import { UserEntityService } from '@/core/entities/UserEntityService.js';
+ import { bindThis } from '@/decorators.js';
+ import { RelationshipJobData } from '@/queue/types.js';
+ import { ModerationLogService } from '@/core/ModerationLogService.js';
++import { LoggerService } from '@/core/LoggerService.js';
+ 
+ @Injectable()
+ export class UserSuspendService {
++	public logger: Logger;
++
+ 	constructor(
++		@Inject(DI.db)
++		private db: DataSource,
++
+ 		@Inject(DI.usersRepository)
+ 		private usersRepository: UsersRepository,
+ 
+@@ -33,7 +41,9 @@ export class UserSuspendService {
+ 		private globalEventService: GlobalEventService,
+ 		private apRendererService: ApRendererService,
+ 		private moderationLogService: ModerationLogService,
++		private loggerService: LoggerService,
+ 	) {
++		this.logger = this.loggerService.getLogger('account:suspend');
+ 	}
+ 
+ 	@bindThis
+@@ -49,7 +59,7 @@ export class UserSuspendService {
+ 		});
+ 
+ 		(async () => {
+-			await this.postSuspend(user).catch(e => {});
++			await this.doPostSuspend(user).catch(e => {});
+ 			await this.unFollowAll(user).catch(e => {});
+ 		})();
+ 	}
+@@ -67,12 +77,14 @@ export class UserSuspendService {
+ 		});
+ 
+ 		(async () => {
+-			await this.postUnsuspend(user).catch(e => {});
++			await this.doPostUnsuspend(user).catch(e => {});
+ 		})();
+ 	}
+ 
+ 	@bindThis
+-	private async postSuspend(user: { id: MiUser['id']; host: MiUser['host'] }): Promise<void> {
++	public async doPostSuspend(user: { id: MiUser['id']; host: MiUser['host'] }): Promise<void> {
++		this.logger.warn(`doPostSuspend: ${user.id} (host: ${user.host})`);
++
+ 		this.globalEventService.publishInternalEvent('userChangeSuspendedState', { id: user.id, isSuspended: true });
+ 
+ 		this.followRequestsRepository.delete({
+@@ -86,55 +98,85 @@ export class UserSuspendService {
+ 			// 知り得る全SharedInboxにDelete配信
+ 			const content = this.apRendererService.addContext(this.apRendererService.renderDelete(this.userEntityService.genLocalUserUri(user.id), user));
+ 
+-			const queue: string[] = [];
+-
+-			const followings = await this.followingsRepository.find({
+-				where: [
+-					{ followerSharedInbox: Not(IsNull()) },
+-					{ followeeSharedInbox: Not(IsNull()) },
+-				],
+-				select: ['followerSharedInbox', 'followeeSharedInbox'],
++			this.logger.info(`Delivering delete activity to all shared inboxes of ${user.id}`);
++			await this.db.transaction(async (transactionalEntityManager: EntityManager) => {
++				const inboxesCte = transactionalEntityManager.createQueryBuilder()
++					.select('distinct coalesce(following.followerSharedInbox, following.followeeSharedInbox)', 'inbox')
++					.from(this.followingsRepository.metadata.targetName, 'following')
++					.where(new Brackets((qb) => qb.where({ followerHost: Not(IsNull()) }).orWhere({ followeeHost: Not(IsNull()) })))
++					.andWhere(new Brackets((qb) => qb.where({ followerSharedInbox: Not(IsNull()) }).orWhere({ followeeSharedInbox: Not(IsNull()) })))
++					.orderBy('inbox');
++
++				let offset = 0;
++				let cursor = '';
++				while (true) { // eslint-disable-line @typescript-eslint/no-unnecessary-condition, no-constant-condition
++					const inboxes = await transactionalEntityManager.createQueryBuilder().addCommonTableExpression(inboxesCte, 'inboxes')
++						.select('inbox').from('inboxes', 'inboxes').where('inbox > :cursor', { cursor }).limit(500).getRawMany<{ inbox: string }>()
++						.then((rows) => rows.map((row) => row.inbox));
++
++					if (inboxes.length === 0) break;
++
++					this.logger.info(`Delivering delete activity to ${offset} - ${offset + inboxes.length} shared inboxes of ${user.id}`);
++					for (const inbox of inboxes) {
++						try {
++							this.queueService.deliver(user, content, inbox, true);
++						} catch (err) {
++							this.logger.error(`Failed to deliver delete activity to ${inbox}: ${err}`, { error: err, inbox });
++						}
++					}
++
++					offset += inboxes.length;
++					cursor = inboxes[inboxes.length - 1];
++				}
+ 			});
+ 
+-			const inboxes = followings.map(x => x.followerSharedInbox ?? x.followeeSharedInbox);
+-
+-			for (const inbox of inboxes) {
+-				if (inbox != null && !queue.includes(inbox)) queue.push(inbox);
+-			}
+-
+-			for (const inbox of queue) {
+-				this.queueService.deliver(user, content, inbox, true);
+-			}
++			this.logger.info(`Scheduled delete activity delivery to all shared inboxes of ${user.id}`);
+ 		}
+ 	}
+ 
+ 	@bindThis
+-	private async postUnsuspend(user: MiUser): Promise<void> {
++	public async doPostUnsuspend(user: MiUser): Promise<void> {
++		this.logger.warn(`doPostUnsuspend: ${user.id}`);
++
+ 		this.globalEventService.publishInternalEvent('userChangeSuspendedState', { id: user.id, isSuspended: false });
+ 
+ 		if (this.userEntityService.isLocalUser(user)) {
+ 			// 知り得る全SharedInboxにUndo Delete配信
+ 			const content = this.apRendererService.addContext(this.apRendererService.renderUndo(this.apRendererService.renderDelete(this.userEntityService.genLocalUserUri(user.id), user), user));
+ 
+-			const queue: string[] = [];
+-
+-			const followings = await this.followingsRepository.find({
+-				where: [
+-					{ followerSharedInbox: Not(IsNull()) },
+-					{ followeeSharedInbox: Not(IsNull()) },
+-				],
+-				select: ['followerSharedInbox', 'followeeSharedInbox'],
++			this.logger.info(`Delivering undo delete activity to all shared inboxes of ${user.id}`);
++			await this.db.transaction(async (transactionalEntityManager: EntityManager) => {
++				const inboxesCte = transactionalEntityManager.createQueryBuilder()
++					.select('distinct coalesce(following.followerSharedInbox, following.followeeSharedInbox)', 'inbox')
++					.from(this.followingsRepository.metadata.targetName, 'following')
++					.where(new Brackets((qb) => qb.where({ followerHost: Not(IsNull()) }).orWhere({ followeeHost: Not(IsNull()) })))
++					.andWhere(new Brackets((qb) => qb.where({ followerSharedInbox: Not(IsNull()) }).orWhere({ followeeSharedInbox: Not(IsNull()) })))
++					.orderBy('inbox');
++
++				let offset = 0;
++				let cursor = '';
++				while (true) { // eslint-disable-line @typescript-eslint/no-unnecessary-condition, no-constant-condition
++					const inboxes = await transactionalEntityManager.createQueryBuilder().addCommonTableExpression(inboxesCte, 'inboxes')
++						.select('inbox').from('inboxes', 'inboxes').where('inbox > :cursor', { cursor }).limit(500).getRawMany<{ inbox: string }>()
++						.then((rows) => rows.map((row) => row.inbox));
++
++					if (inboxes.length === 0) break;
++
++					this.logger.info(`Delivering undo delete activity to ${offset} - ${offset + inboxes.length} shared inboxes of ${user.id}`);
++					for (const inbox of inboxes) {
++						try {
++							this.queueService.deliver(user, content, inbox, true);
++						} catch (err) {
++							this.logger.error(`Failed to deliver undo delete activity to ${inbox}: ${err}`, { error: err, inbox });
++						}
++					}
++
++					offset += inboxes.length;
++					cursor = inboxes[inboxes.length - 1];
++				}
+ 			});
+ 
+-			const inboxes = followings.map(x => x.followerSharedInbox ?? x.followeeSharedInbox);
+-
+-			for (const inbox of inboxes) {
+-				if (inbox != null && !queue.includes(inbox)) queue.push(inbox);
+-			}
+-
+-			for (const inbox of queue) {
+-				this.queueService.deliver(user as any, content, inbox, true);
+-			}
++			this.logger.info(`Scheduled undo delete activity delivery to all shared inboxes of ${user.id}`);
+ 		}
+ 	}
+ 
+diff --git a/packages/backend/src/core/activitypub/ApInboxService.ts b/packages/backend/src/core/activitypub/ApInboxService.ts
+index 21c7adf7b2..ea7261037e 100644
+--- a/packages/backend/src/core/activitypub/ApInboxService.ts
++++ b/packages/backend/src/core/activitypub/ApInboxService.ts
+@@ -438,6 +438,10 @@ export class ApInboxService {
+ 			}
+ 		}
+ 
++		if (activity && [note.to, note.cc].flat().includes('https://www.w3.org/ns/activitystreams#Public') && actor.followersCount === 0) {
++			return 'skip: no audience';
++		}
++
+ 		const unlock = await this.appLockService.getApLock(uri);
+ 
+ 		try {
+diff --git a/packages/backend/src/postgres.ts b/packages/backend/src/postgres.ts
+index 8a0b7d97d7..6ee369a783 100644
+--- a/packages/backend/src/postgres.ts
++++ b/packages/backend/src/postgres.ts
+@@ -20,6 +20,7 @@ import { MiApp } from '@/models/App.js';
+ import { MiAvatarDecoration } from '@/models/AvatarDecoration.js';
+ import { MiAuthSession } from '@/models/AuthSession.js';
+ import { MiBlocking } from '@/models/Blocking.js';
++import { MiChannelAnonymousSalt } from '@/models/ChannelAnonymousSalt.js'
+ import { MiChannelFollowing } from '@/models/ChannelFollowing.js';
+ import { MiChannelFavorite } from '@/models/ChannelFavorite.js';
+ import { MiClip } from '@/models/Clip.js';
+@@ -219,6 +220,7 @@ export const entities = [
+ 	MiPromoRead,
+ 	MiRelay,
+ 	MiChannel,
++	MiChannelAnonymousSalt,
+ 	MiChannelFollowing,
+ 	MiChannelFavorite,
+ 	MiRegistryItem,
+@@ -241,7 +243,7 @@ export const entities = [
+ 
+ const log = process.env.NODE_ENV !== 'production';
+ 
+-export function createPostgresDataSource(config: Config) {
++export function createPostgresDataSource(config: Config, long = false) {
+ 	return new DataSource({
+ 		type: 'postgres',
+ 		host: config.db.host,
+@@ -250,7 +252,7 @@ export function createPostgresDataSource(config: Config) {
+ 		password: config.db.pass,
+ 		database: config.db.db,
+ 		extra: {
+-			statement_timeout: 1000 * 10,
++			statement_timeout: long ? 0 : 32768,
+ 			...config.db.extra,
+ 		},
+ 		...(config.dbReplications ? {
+diff --git a/packages/backend/src/queue/processors/ExportBlockingProcessorService.ts b/packages/backend/src/queue/processors/ExportBlockingProcessorService.ts
+index ecc439db69..70bac06a05 100644
+--- a/packages/backend/src/queue/processors/ExportBlockingProcessorService.ts
++++ b/packages/backend/src/queue/processors/ExportBlockingProcessorService.ts
+@@ -101,7 +101,7 @@ export class ExportBlockingProcessorService {
+ 					blockerId: user.id,
+ 				});
+ 
+-				job.updateProgress(exportedCount / total);
++				job.updateProgress(100 * exportedCount / total);
+ 			}
+ 
+ 			stream.end();
+diff --git a/packages/backend/src/queue/processors/ExportClipsProcessorService.ts b/packages/backend/src/queue/processors/ExportClipsProcessorService.ts
+index 583ddbb745..c62daa729e 100644
+--- a/packages/backend/src/queue/processors/ExportClipsProcessorService.ts
++++ b/packages/backend/src/queue/processors/ExportClipsProcessorService.ts
+@@ -130,7 +130,7 @@ export class ExportClipsProcessorService {
+ 				userId: user.id,
+ 			});
+ 
+-			job.updateProgress(exportedClipsCount / total);
++			job.updateProgress(100 * exportedClipsCount / total);
+ 		}
+ 	}
+ 
+diff --git a/packages/backend/src/queue/processors/ExportFavoritesProcessorService.ts b/packages/backend/src/queue/processors/ExportFavoritesProcessorService.ts
+index b81feece01..72b9c68d47 100644
+--- a/packages/backend/src/queue/processors/ExportFavoritesProcessorService.ts
++++ b/packages/backend/src/queue/processors/ExportFavoritesProcessorService.ts
+@@ -17,6 +17,7 @@ import type { MiNote } from '@/models/Note.js';
+ import { bindThis } from '@/decorators.js';
+ import { IdService } from '@/core/IdService.js';
+ import { NotificationService } from '@/core/NotificationService.js';
++import { InstanceActorService } from '@/core/InstanceActorService.js';
+ import { QueueLoggerService } from '../QueueLoggerService.js';
+ import type * as Bull from 'bullmq';
+ import type { DbJobDataWithUser } from '../types.js';
+@@ -39,6 +40,7 @@ export class ExportFavoritesProcessorService {
+ 		private queueLoggerService: QueueLoggerService,
+ 		private idService: IdService,
+ 		private notificationService: NotificationService,
++		private instanceActorService: InstanceActorService,
+ 	) {
+ 		this.logger = this.queueLoggerService.logger.createSubLogger('export-favorites');
+ 	}
+@@ -103,7 +105,7 @@ export class ExportFavoritesProcessorService {
+ 					if (favorite.note.hasPoll) {
+ 						poll = await this.pollsRepository.findOneByOrFail({ noteId: favorite.note.id });
+ 					}
+-					const content = JSON.stringify(this.serialize(favorite, poll));
++					const content = JSON.stringify(await this.serialize(favorite, poll));
+ 					const isFirst = exportedFavoritesCount === 0;
+ 					await write(isFirst ? content : ',\n' + content);
+ 					exportedFavoritesCount++;
+@@ -113,7 +115,7 @@ export class ExportFavoritesProcessorService {
+ 					userId: user.id,
+ 				});
+ 
+-				job.updateProgress(exportedFavoritesCount / total);
++				job.updateProgress(100 * exportedFavoritesCount / total);
+ 			}
+ 
+ 			await write(']');
+@@ -135,7 +137,8 @@ export class ExportFavoritesProcessorService {
+ 		}
+ 	}
+ 
+-	private serialize(favorite: MiNoteFavorite & { note: MiNote & { user: MiUser } }, poll: MiPoll | null = null): Record<string, unknown> {
++	private async serialize(favorite: MiNoteFavorite & { note: MiNote & { user: MiUser } }, poll: MiPoll | null = null): Promise<Record<string, unknown>> {
++		const user = favorite.note.anonymouslySendToUserId || favorite.note.anonymousChannelUsername ? await this.instanceActorService.getInstanceActor() : favorite.note.user;
+ 		return {
+ 			id: favorite.id,
+ 			createdAt: this.idService.parse(favorite.id).date.toISOString(),
+@@ -155,11 +158,11 @@ export class ExportFavoritesProcessorService {
+ 				uri: favorite.note.uri,
+ 				url: favorite.note.url,
+ 				user: {
+-					id: favorite.note.user.id,
+-					name: favorite.note.user.name,
+-					username: favorite.note.user.username,
+-					host: favorite.note.user.host,
+-					uri: favorite.note.user.uri,
++					id: user.id,
++					name: user.name,
++					username: user.username,
++					host: user.host,
++					uri: user.uri,
+ 				},
+ 			},
+ 		};
+diff --git a/packages/backend/src/queue/processors/ExportMutingProcessorService.ts b/packages/backend/src/queue/processors/ExportMutingProcessorService.ts
+index f9867ade29..ad154a346f 100644
+--- a/packages/backend/src/queue/processors/ExportMutingProcessorService.ts
++++ b/packages/backend/src/queue/processors/ExportMutingProcessorService.ts
+@@ -102,7 +102,7 @@ export class ExportMutingProcessorService {
+ 					muterId: user.id,
+ 				});
+ 
+-				job.updateProgress(exportedCount / total);
++				job.updateProgress(100 * exportedCount / total);
+ 			}
+ 
+ 			stream.end();
+diff --git a/packages/backend/src/queue/processors/ExportNotesProcessorService.ts b/packages/backend/src/queue/processors/ExportNotesProcessorService.ts
+index 9e2b678219..45191c3299 100644
+--- a/packages/backend/src/queue/processors/ExportNotesProcessorService.ts
++++ b/packages/backend/src/queue/processors/ExportNotesProcessorService.ts
+@@ -3,12 +3,12 @@
+  * SPDX-License-Identifier: AGPL-3.0-only
+  */
+ 
+-import { ReadableStream, TextEncoderStream } from 'node:stream/web';
++import { TextEncoderStream, TransformStream } from 'node:stream/web';
+ import { Inject, Injectable } from '@nestjs/common';
+-import { MoreThan } from 'typeorm';
++import { DataSource } from 'typeorm';
+ import { format as dateFormat } from 'date-fns';
+ import { DI } from '@/di-symbols.js';
+-import type { NotesRepository, PollsRepository, UsersRepository } from '@/models/_.js';
++import type { MiUser, NotesRepository, PollsRepository, UsersRepository } from '@/models/_.js';
+ import type Logger from '@/logger.js';
+ import { DriveService } from '@/core/DriveService.js';
+ import { createTemp } from '@/misc/create-temp.js';
+@@ -24,72 +24,53 @@ import { FileWriterStream } from '@/misc/FileWriterStream.js';
+ import { QueueLoggerService } from '../QueueLoggerService.js';
+ import type * as Bull from 'bullmq';
+ import type { DbJobDataWithUser } from '../types.js';
++import { Readable } from 'node:stream';
+ 
+-class NoteStream extends ReadableStream<Record<string, unknown>> {
++type MiNoteRaw = {
++	[T in keyof MiNote as `note_${T}`]: MiNote[T];
++};
++
++class NoteStream extends TransformStream<MiNoteRaw, Record<string, unknown>> {
+ 	constructor(
+ 		job: Bull.Job,
+-		notesRepository: NotesRepository,
+ 		pollsRepository: PollsRepository,
+ 		driveFileEntityService: DriveFileEntityService,
+ 		idService: IdService,
+-		userId: string,
++		user: MiUser,
+ 	) {
+ 		let exportedNotesCount = 0;
+-		let cursor: MiNote['id'] | null = null;
+ 
+ 		const serialize = (
+-			note: MiNote,
++			note: MiNoteRaw,
+ 			poll: MiPoll | null,
+ 			files: Packed<'DriveFile'>[],
+ 		): Record<string, unknown> => {
+ 			return {
+-				id: note.id,
+-				text: note.text,
+-				createdAt: idService.parse(note.id).date.toISOString(),
+-				fileIds: note.fileIds,
++				id: note.note_id,
++				text: note.note_text,
++				createdAt: idService.parse(note.note_id).date.toISOString(),
++				fileIds: note.note_fileIds,
+ 				files: files,
+-				replyId: note.replyId,
+-				renoteId: note.renoteId,
++				replyId: note.note_replyId,
++				renoteId: note.note_renoteId,
+ 				poll: poll,
+-				cw: note.cw,
+-				visibility: note.visibility,
+-				visibleUserIds: note.visibleUserIds,
+-				localOnly: note.localOnly,
+-				reactionAcceptance: note.reactionAcceptance,
++				cw: note.note_cw,
++				visibility: note.note_visibility,
++				visibleUserIds: note.note_visibleUserIds,
++				localOnly: note.note_localOnly,
++				reactionAcceptance: note.note_reactionAcceptance,
+ 			};
+ 		};
+ 
+ 		super({
+-			async pull(controller): Promise<void> {
+-				const notes = await notesRepository.find({
+-					where: {
+-						userId,
+-						...(cursor !== null ? { id: MoreThan(cursor) } : {}),
+-					},
+-					take: 100, // 100件ずつ取得
+-					order: { id: 1 },
+-				});
+-
+-				if (notes.length === 0) {
+-					job.updateProgress(100);
+-					controller.close();
+-				}
+-
+-				cursor = notes.at(-1)?.id ?? null;
+-
+-				for (const note of notes) {
+-					const poll = note.hasPoll
+-						? await pollsRepository.findOneByOrFail({ noteId: note.id }) // N+1
+-						: null;
+-					const files = await driveFileEntityService.packManyByIds(note.fileIds); // N+1
+-					const content = serialize(note, poll, files);
+-
+-					controller.enqueue(content);
+-					exportedNotesCount++;
+-				}
+-
+-				const total = await notesRepository.countBy({ userId });
+-				job.updateProgress(exportedNotesCount / total);
++			async transform(chunk, controller) {
++				const poll = chunk.note_hasPoll
++					? await pollsRepository.findOneByOrFail({ noteId: chunk.note_id }) // N+1
++					: null;
++				const files = await driveFileEntityService.packManyByIds(chunk.note_fileIds); // N+1
++				const content = serialize(chunk, poll, files);
++				controller.enqueue(content);
++				job.updateProgress(100 * ++exportedNotesCount / user.notesCount);
+ 			},
+ 		});
+ 	}
+@@ -100,6 +81,9 @@ export class ExportNotesProcessorService {
+ 	private logger: Logger;
+ 
+ 	constructor(
++		@Inject(DI.dbLong)
++		private dbLong: DataSource,
++
+ 		@Inject(DI.usersRepository)
+ 		private usersRepository: UsersRepository,
+ 
+@@ -132,16 +116,16 @@ export class ExportNotesProcessorService {
+ 
+ 		this.logger.info(`Temp file is ${path}`);
+ 
++		const queryRunner = this.dbLong.createQueryRunner();
+ 		try {
+ 			// メモリが足りなくならないようにストリームで処理する
+-			await new NoteStream(
+-				job,
+-				this.notesRepository,
+-				this.pollsRepository,
+-				this.driveFileEntityService,
+-				this.idService,
+-				user.id,
++			await Readable.toWeb(
++				await this.notesRepository.createQueryBuilder('note', queryRunner)
++					.where('note.userId = :userId', { userId: user.id })
++					.orderBy('note.id')
++					.stream(),
+ 			)
++				.pipeThrough(new NoteStream(job, this.pollsRepository, this.driveFileEntityService, this.idService, user))
+ 				.pipeThrough(new JsonArrayStream())
+ 				.pipeThrough(new TextEncoderStream())
+ 				.pipeTo(new FileWriterStream(path));
+@@ -158,6 +142,7 @@ export class ExportNotesProcessorService {
+ 				fileId: driveFile.id,
+ 			});
+ 		} finally {
++			await queryRunner.release();
+ 			cleanup();
+ 		}
+ 	}
+diff --git a/packages/backend/src/queue/processors/ImportFollowingProcessorService.ts b/packages/backend/src/queue/processors/ImportFollowingProcessorService.ts
+index 70c9f3a096..2eb9e255a8 100644
+--- a/packages/backend/src/queue/processors/ImportFollowingProcessorService.ts
++++ b/packages/backend/src/queue/processors/ImportFollowingProcessorService.ts
+@@ -67,6 +67,10 @@ export class ImportFollowingProcessorService {
+ 		const user = job.data.user;
+ 
+ 		try {
++			if (job.data.remaining) {
++				this.queueService.createImportFollowingToDbJob(user, job.data.remaining, job.data.withReplies);
++			}
++
+ 			const acct = line.split(',')[0].trim();
+ 			const { username, host } = Acct.parse(acct);
+ 
+diff --git a/packages/backend/src/queue/types.ts b/packages/backend/src/queue/types.ts
+index 757daea88b..4b052bc1d4 100644
+--- a/packages/backend/src/queue/types.ts
++++ b/packages/backend/src/queue/types.ts
+@@ -97,6 +97,7 @@ export type DbUserImportToDbJobData = {
+ 	user: ThinUser;
+ 	target: string;
+ 	withReplies?: boolean;
++	remaining?: string[];
+ };
+ 
+ export type ObjectStorageJobData = ObjectStorageFileJobData | Record<string, unknown>;
+diff --git a/packages/backend/src/server/HealthServerService.ts b/packages/backend/src/server/HealthServerService.ts
+index 5980609f02..9ec891f6bc 100644
+--- a/packages/backend/src/server/HealthServerService.ts
++++ b/packages/backend/src/server/HealthServerService.ts
+@@ -11,6 +11,7 @@ import { DI } from '@/di-symbols.js';
+ import { readyRef } from '@/boot/ready.js';
+ import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
+ import type { MeiliSearch } from 'meilisearch';
++import { ApiLoggerService } from '@/server/api/ApiLoggerService.js';
+ 
+ @Injectable()
+ export class HealthServerService {
+@@ -35,12 +36,14 @@ export class HealthServerService {
+ 
+ 		@Inject(DI.meilisearch)
+ 		private meilisearch: MeiliSearch | null,
++
++		private apiLoggerService: ApiLoggerService,
+ 	) {}
+ 
+ 	@bindThis
+ 	public createServer(fastify: FastifyInstance, options: FastifyPluginOptions, done: (err?: Error) => void) {
+ 		fastify.get('/', async (request, reply) => {
+-			reply.code(await Promise.all([
++			reply.code(await Promise.allSettled([
+ 				new Promise<void>((resolve, reject) => readyRef.value ? resolve() : reject()),
+ 				this.redis.ping(),
+ 				this.redisForPub.ping(),
+@@ -49,7 +52,19 @@ export class HealthServerService {
+ 				this.redisForReactions.ping(),
+ 				this.db.query('SELECT 1'),
+ 				...(this.meilisearch ? [this.meilisearch.health()] : []),
+-			]).then(() => 200, () => 503));
++			]).then((result) => {
++				this.apiLoggerService.logger.info('Health:', {
++					server: result[0].status,
++					redis: result[1].status,
++					redisForPub: result[2].status,
++					redisForSub: result[3].status,
++					redisForTimelines: result[4].status,
++					redisForReactions: result[5].status,
++					db: result[6].status,
++					meilisearch: result[7]?.status,
++				});
++				return result.every((r) => r.status === 'fulfilled') ? 200 : 503;
++			}));
+ 			reply.header('Cache-Control', 'no-store');
+ 		});
+ 
+diff --git a/packages/backend/src/server/ServerService.ts b/packages/backend/src/server/ServerService.ts
+index b899053287..a68c50b706 100644
+--- a/packages/backend/src/server/ServerService.ts
++++ b/packages/backend/src/server/ServerService.ts
+@@ -75,6 +75,7 @@ export class ServerService implements OnApplicationShutdown {
+ 	@bindThis
+ 	public async launch(): Promise<void> {
+ 		const fastify = Fastify({
++			maxParamLength: 256,
+ 			trustProxy: true,
+ 			logger: false,
+ 		});
+@@ -286,21 +287,23 @@ export class ServerService implements OnApplicationShutdown {
+ 				process.exit(1);
+ 			}
+ 		});
++	}
+ 
++	@bindThis
++	public async ready(): Promise<void> {
+ 		if (this.config.socket) {
+ 			if (fs.existsSync(this.config.socket)) {
+ 				fs.unlinkSync(this.config.socket);
+ 			}
+-			fastify.listen({ path: this.config.socket }, (err, address) => {
++			this.#fastify.listen({ path: this.config.socket }, (err, address) => {
+ 				if (this.config.chmodSocket) {
+ 					fs.chmodSync(this.config.socket!, this.config.chmodSocket);
+ 				}
+ 			});
+ 		} else {
+-			fastify.listen({ port: this.config.port, host: '0.0.0.0' });
++			this.#fastify.listen({ port: this.config.port, host: '0.0.0.0' });
+ 		}
+-
+-		await fastify.ready();
++		await this.#fastify.ready();
+ 	}
+ 
+ 	@bindThis
+diff --git a/packages/frontend/vite.config.ts b/packages/frontend/vite.config.ts
+index d1b7c410dc..361c6df8f8 100644
+--- a/packages/frontend/vite.config.ts
++++ b/packages/frontend/vite.config.ts
+@@ -21,6 +21,7 @@ const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json', '.json5', '.s
+  * CDNを使わずにバンドルしたい場合、以下の配列から該当要素を削除orコメントアウトすればOK
+  */
+ const externalPackages = [
++	/*
+ 	// shiki（コードブロックのシンタックスハイライトで使用中）はテーマ・言語の定義の容量が大きいため、それらはCDNから読み込む
+ 	{
+ 		name: 'shiki',
+@@ -32,6 +33,7 @@ const externalPackages = [
+ 				: id;
+ 		},
+ 	},
++	 */
+ ];
+ 
+ const hash = (str: string, seed = 0): number => {

@@ -35,6 +35,14 @@ export const packedEmojiSimpleSchema = {
 			type: 'boolean',
 			optional: true, nullable: false,
 		},
+		hidden: {
+			type: 'boolean',
+			optional: true, nullable: false,
+		},
+		conspicuousScale: {
+			type: 'number',
+			optional: true, nullable: false,
+		},
 		roleIdsThatCanBeUsedThisEmojiAsReaction: {
 			type: 'array',
 			optional: true, nullable: false,
@@ -91,6 +99,14 @@ export const packedEmojiDetailedSchema = {
 		},
 		localOnly: {
 			type: 'boolean',
+			optional: false, nullable: false,
+		},
+		hidden: {
+			type: 'boolean',
+			optional: true, nullable: false,
+		},
+		conspicuousScale: {
+			type: 'number',
 			optional: false, nullable: false,
 		},
 		roleIdsThatCanBeUsedThisEmojiAsReaction: {

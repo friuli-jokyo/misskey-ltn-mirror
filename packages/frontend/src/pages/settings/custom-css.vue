@@ -7,6 +7,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 <div class="_gaps_m">
 	<FormInfo warn>{{ i18n.ts.customCssWarn }}</FormInfo>
 
+	<FormInfo v-if="isSafeMode" warn>{{ i18n.ts.customCssIsDisabledBecauseSafeMode }}</FormInfo>
+
 	<MkCodeEditor v-model="localCustomCss" manualSave lang="css">
 		<template #label>CSS</template>
 	</MkCodeEditor>
@@ -17,23 +19,28 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
 import MkCodeEditor from '@/components/MkCodeEditor.vue';
 import FormInfo from '@/components/MkInfo.vue';
+import { isSafeMode } from '@@/js/config.js';
 import * as os from '@/os.js';
-import { unisonReload } from '@/scripts/unison-reload.js';
+import { unisonReload } from '@/utility/unison-reload.js';
 import { i18n } from '@/i18n.js';
-import { definePageMetadata } from '@/scripts/page-metadata.js';
+import { definePage } from '@/page.js';
 import { miLocalStorage } from '@/local-storage.js';
 
 const localCustomCss = ref(miLocalStorage.getItem('customCss') ?? '');
 
-let customCss: HTMLStyleElement;
+let customCss: HTMLStyleElement | null = null;
 
 onMounted(() => {
-	customCss = document.getElementById('customCss') as typeof customCss;
-	customCss.disabled = true;
+	customCss = window.document.getElementById('customCss') as HTMLStyleElement | null;
+	if (customCss != null) {
+		customCss.disabled = true;
+	}
 });
 
 onUnmounted(() => {
-	customCss.disabled = false;
+	if (customCss != null) {
+		customCss.disabled = false;
+	}
 });
 
 async function apply() {
@@ -56,7 +63,7 @@ const headerActions = computed(() => []);
 
 const headerTabs = computed(() => []);
 
-definePageMetadata(() => ({
+definePage(() => ({
 	title: i18n.ts.customCss,
 	icon: 'ti ti-code',
 }));

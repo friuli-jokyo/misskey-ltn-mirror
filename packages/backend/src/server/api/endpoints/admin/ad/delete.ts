@@ -14,7 +14,7 @@ export const meta = {
 	tags: ['admin'],
 
 	requireCredential: true,
-	requireRolePolicy: 'canManageAds',
+	requiredRolePolicy: 'canManageAds',
 	kind: 'write:admin:ad',
 
 	errors: {

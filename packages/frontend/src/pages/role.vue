@@ -6,47 +6,41 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <MkStickyContainer>
 	<template #header><MkPageHeader v-model:tab="tab" :tabs="headerTabs" :actions="headerActions"/></template>
-	<MkSpacer v-if="error != null" :contentMax="1200">
+	<div v-if="error != null" class="_spacer" style="--MI_SPACER-max: 1200px;">
 		<div :class="$style.root">
-			<img :class="$style.img" :src="serverErrorImageUrl" class="_ghost"/>
-			<p :class="$style.text">
-				<i class="ti ti-alert-triangle"></i>
-				{{ error }}
-			</p>
+			<img :class="$style.img" :src="instance.serverErrorImageUrl" class="_ghost"/>
+			<p>{{ error }}</p>
 		</div>
-	</MkSpacer>
-	<MkSpacer v-else-if="tab === 'users'" :contentMax="1200">
-		<div class="_gaps_s">
-			<div v-if="role">{{ role.description }}</div>
-			<MkUserList v-if="visible" :pagination="users" :extractor="(item) => item.user"/>
-			<div v-else-if="!visible" class="_fullinfo">
-				<img :src="infoImageUrl" class="_ghost"/>
-				<div>{{ i18n.ts.nothing }}</div>
-			</div>
+	</div>
+	<div v-else-if="tab === 'users'" class="_spacer" style="--MI_SPACER-max: 1200px;">
+		<div v-if="role" class="_gaps_s">
+			<div>{{ role.description }}</div>
+			<MkUserList v-if="visible" :paginator="usersPaginator" :extractor="(item) => item.user"/>
+			<MkResult v-else-if="!visible" type="empty" :text="i18n.ts.nothing"/>
 		</div>
-	</MkSpacer>
-	<MkSpacer v-else-if="tab === 'timeline'" :contentMax="700">
-		<MkTimeline v-if="visible" ref="timeline" src="role" :role="props.roleId"/>
-		<div v-else-if="!visible" class="_fullinfo">
-			<img :src="infoImageUrl" class="_ghost"/>
-			<div>{{ i18n.ts.nothing }}</div>
-		</div>
-	</MkSpacer>
+	</div>
+	<div v-else-if="tab === 'timeline'" class="_spacer" style="--MI_SPACER-max: 700px;">
+		<MkStreamingNotesTimeline v-if="visible" ref="timeline" src="role" :role="props.roleId"/>
+		<MkResult v-else-if="!visible" type="empty" :text="i18n.ts.nothing"/>
+	</div>
 </MkStickyContainer>
 </template>
 
 <script lang="ts" setup>
-import { computed, watch, ref } from 'vue';
+import { computed, watch, ref, markRaw } from 'vue';
 import * as Misskey from 'misskey-js';
-import { $i } from '@/account.js';
-import { misskeyApi } from '@/scripts/misskey-api.js';
+import { $i } from '@/i.js';
+import { misskeyApi } from '@/utility/misskey-api.js';
 import MkUserList from '@/components/MkUserList.vue';
-import { definePageMetadata } from '@/scripts/page-metadata.js';
+import { definePage } from '@/page.js';
 import { i18n } from '@/i18n.js';
 import * as os from '@/os.js';
-import MkTimeline from '@/components/MkTimeline.vue';
-import { instanceName } from '@@/js/config.js';
-import { serverErrorImageUrl, infoImageUrl } from '@/instance.js';
+import MkStreamingNotesTimeline from '@/components/MkStreamingNotesTimeline.vue';
+import { Paginator } from '@/utility/paginator.js';
+import { instance } from '@/instance.js';
+import MkPageHeader from '@/components/global/MkPageHeader.vue';
+import MkStickyContainer from '@/components/global/MkStickyContainer.vue';
+import MkResult from '@/components/global/MkResult.vue';
 
 const props = withDefaults(defineProps<{
 	roleId: string;
@@ -78,16 +72,23 @@ watch(() => props.roleId, () => {
 }, { immediate: true });
 
 const users = computed(() => ({
-	endpoint: 'roles/users' as const,
+	endpoint: 'roles/users',
 	limit: 30,
 	params: {
 		roleId: props.roleId,
 	},
 }));
 
+const usersPaginator = markRaw(new Paginator('roles/users', {
+	limit: 30,
+	computedParams: computed(() => ({
+		roleId: props.roleId,
+	})),
+}));
+
 const headerActions = computed(() =>
 	role.value?.target === 'manual'
-		? $i?.policies.selfAssignability?.some(([t, u]) => u && role.value.tags.includes(t))
+		? $i?.policies.selfAssignability?.some(([t, u]) => u && role.value!.tags.includes(t))
 			? [
 					{
 						icon: 'ti ti-user-minus',
@@ -100,7 +101,7 @@ const headerActions = computed(() =>
 						handler: assign,
 					},
 				]
-			: $i?.policies.selfAssignability?.some(([t, u]) => role.value.tags.includes(t))
+			: $i?.policies.selfAssignability?.some(([t, u]) => role.value!.tags.includes(t))
 				? [
 						{
 							icon: 'ti ti-user-plus',
@@ -113,17 +114,17 @@ const headerActions = computed(() =>
 
 async function assign() {
 	const { canceled, result: period } = await os.select({
-		title: i18n.ts.period + ': ' + role.value.name,
+		title: i18n.ts.period + ': ' + role.value!.name,
 		items: [{
-			value: 'indefinitely', text: i18n.ts.indefinitely,
+			value: 'indefinitely', label: i18n.ts.indefinitely,
 		}, {
-			value: 'oneHour', text: i18n.ts.oneHour,
+			value: 'oneHour', label: i18n.ts.oneHour,
 		}, {
-			value: 'oneDay', text: i18n.ts.oneDay,
+			value: 'oneDay', label: i18n.ts.oneDay,
 		}, {
-			value: 'oneWeek', text: i18n.ts.oneWeek,
+			value: 'oneWeek', label: i18n.ts.oneWeek,
 		}, {
-			value: 'oneMonth', text: i18n.ts.oneMonth,
+			value: 'oneMonth', label: i18n.ts.oneMonth,
 		}],
 		default: 'indefinitely',
 	});
@@ -136,7 +137,7 @@ async function assign() {
 		: period === 'oneMonth' ? Date.now() + (1000 * 60 * 60 * 24 * 30)
 		: null;
 
-	os.apiWithDialog('admin/roles/assign', { roleId: role.value.id, userId: $i.id, expiresAt });
+	os.apiWithDialog('admin/roles/assign', { roleId: role.value!.id, userId: $i!.id, expiresAt });
 }
 
 async function assignIndefinetly() {
@@ -146,7 +147,7 @@ async function assignIndefinetly() {
 	});
 	if (canceled) return;
 
-	os.apiWithDialog('admin/roles/assign', { roleId: role.value.id, userId: $i.id });
+	os.apiWithDialog('admin/roles/assign', { roleId: role.value!.id, userId: $i!.id });
 }
 
 async function unassign() {
@@ -156,7 +157,7 @@ async function unassign() {
 	});
 	if (canceled) return;
 
-	os.apiWithDialog('admin/roles/unassign', { roleId: role.value.id, userId: $i.id });
+	os.apiWithDialog('admin/roles/unassign', { roleId: role.value!.id, userId: $i!.id });
 }
 
 const headerTabs = computed(() => [{
@@ -169,29 +170,8 @@ const headerTabs = computed(() => [{
 	title: i18n.ts.timeline,
 }]);
 
-definePageMetadata(() => ({
+definePage(() => ({
 	title: role.value ? role.value.name : (error.value ?? i18n.ts.role),
 	icon: 'ti ti-badge',
 }));
 </script>
-
-<style lang="scss" module>
-.root {
-	padding: 32px;
-	text-align: center;
-  align-items: center;
-}
-
-.text {
-	margin: 0 0 8px 0;
-}
-
-.img {
-	vertical-align: bottom;
-  width: 128px;
-	height: 128px;
-	margin-bottom: 16px;
-	border-radius: 16px;
-}
-</style>
-

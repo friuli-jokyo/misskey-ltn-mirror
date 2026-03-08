@@ -32,6 +32,7 @@ export const paramDef = {
 		roleId: { type: 'string', format: 'misskey:id' },
 		name: { type: 'string' },
 		description: { type: 'string' },
+		tags: { type: 'array', items: { type: 'string' } },
 		color: { type: 'string', nullable: true },
 		iconUrl: { type: 'string', nullable: true },
 		target: { type: 'string', enum: ['manual', 'conditional'] },
@@ -41,6 +42,7 @@ export const paramDef = {
 		isAdministrator: { type: 'boolean' },
 		isExplorable: { type: 'boolean' },
 		asBadge: { type: 'boolean' },
+		preserveAssignmentOnMoveAccount: { type: 'boolean' },
 		canEditMembersByModerator: { type: 'boolean' },
 		displayOrder: { type: 'number' },
 		policies: {
@@ -69,6 +71,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			await this.roleService.update(role, {
 				name: ps.name,
 				description: ps.description,
+				tags: ps.tags,
 				color: ps.color,
 				iconUrl: ps.iconUrl,
 				target: ps.target,
@@ -78,6 +81,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				isAdministrator: ps.isAdministrator,
 				isExplorable: ps.isExplorable,
 				asBadge: ps.asBadge,
+				preserveAssignmentOnMoveAccount: ps.preserveAssignmentOnMoveAccount,
 				canEditMembersByModerator: ps.canEditMembersByModerator,
 				displayOrder: ps.displayOrder,
 				policies: ps.policies,

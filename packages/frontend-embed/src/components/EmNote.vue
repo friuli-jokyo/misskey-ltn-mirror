@@ -20,11 +20,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div v-if="note.visibility === 'specified'" :class="$style.specifiedBar"></div>
 		<EmAvatar :class="$style.renoteAvatar" :user="note.user" link/>
 		<i class="ti ti-repeat" style="margin-right: 4px;"></i>
-		<I18n :src="i18n.ts.renotedBy" tag="span" :class="$style.renoteText">
+		<I18n :src="note.channel && note.channel.id !== inChannel ? i18n.ts.renotedByChannel : i18n.ts.renotedBy" tag="span" :class="$style.renoteText">
 			<template #user>
 				<EmA :class="$style.renoteUserName" :to="userPage(note.user)">
 					<EmUserName :user="note.user"/>
 				</EmA>
+			</template>
+			<template v-if="note.channel" #channel>
+				<EmA :to="`/channels/${note.channel.id}`">{{ note.channel.name }}</EmA>
 			</template>
 		</I18n>
 		<div :class="$style.renoteInfo">
@@ -154,7 +157,7 @@ const isRenote = Misskey.note.isPureRenote(note.value);
 const rootEl = shallowRef<HTMLElement>();
 const renoteTime = shallowRef<HTMLElement>();
 const appearNote = computed(() => getAppearNote(note.value));
-const showContent = ref(false);
+const showContent = ref(appearNote.value.cw != null && prefer.s.autoOpenCws.some((word) => appearNote.value.cw!.includes(word)));
 const parsed = computed(() => appearNote.value.text ? mfm.parse(appearNote.value.text) : null);
 const isLong = shouldCollapsed(appearNote.value, []);
 const collapsed = ref(appearNote.value.cw == null && isLong);

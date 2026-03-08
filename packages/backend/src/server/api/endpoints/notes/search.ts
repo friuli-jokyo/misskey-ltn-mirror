@@ -5,10 +5,10 @@
 
 import { Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import { IdService } from '@/core/IdService.js';
 import { SearchService } from '@/core/SearchService.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { RoleService } from '@/core/RoleService.js';
+import { IdService } from '@/core/IdService.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -69,19 +69,19 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
-		private idService: IdService,
 		private noteEntityService: NoteEntityService,
 		private searchService: SearchService,
 		private roleService: RoleService,
+		private idService: IdService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
+			const untilId = ps.untilId ?? (ps.untilDate != null ? this.idService.gen(ps.untilDate, true) : undefined);
+			const sinceId = ps.sinceId ?? (ps.sinceDate != null ? this.idService.gen(ps.sinceDate, true) : undefined);
+
 			const policies = await this.roleService.getUserPolicies(me ? me.id : null);
 			if (!policies.canSearchNotes) {
 				throw new ApiError(meta.errors.unavailable);
 			}
-
-			const untilId = ps.untilId ?? (ps.untilDate != null ? this.idService.gen(ps.untilDate) : undefined);
-			const sinceId = ps.sinceId ?? (ps.sinceDate != null ? this.idService.gen(ps.sinceDate) : undefined);
 
 			const notes = await this.searchService.searchNote(ps.query, me, {
 				userId: ps.userId,
@@ -97,8 +97,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				minReactionsCount: ps.minReactionsCount,
 				maxReactionsCount: ps.maxReactionsCount,
 			}, {
-				untilId,
-				sinceId,
+				untilId: untilId,
+				sinceId: sinceId,
 				limit: ps.limit,
 			});
 

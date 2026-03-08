@@ -4,12 +4,10 @@
  */
 
 import cluster from 'node:cluster';
-import * as Sentry from '@sentry/node';
-import { nodeProfilingIntegration } from '@sentry/profiling-node';
+import type { INestApplicationContext } from '@nestjs/common';
 import { envOption } from '@/env.js';
 import { loadConfig } from '@/config.js';
 import { jobQueue, server } from './common.js';
-import { INestApplicationContext } from '@nestjs/common';
 
 /**
  * Init worker process
@@ -18,6 +16,9 @@ export async function workerMain() {
 	const config = loadConfig();
 
 	if (config.sentryForBackend) {
+		const Sentry = await import('@sentry/node');
+		const { nodeProfilingIntegration } = await import('@sentry/profiling-node');
+
 		Sentry.init({
 			integrations: [
 				...(config.sentryForBackend.enableNodeProfiling ? [nodeProfilingIntegration()] : []),

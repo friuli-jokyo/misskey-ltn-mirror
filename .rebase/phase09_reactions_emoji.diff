@@ -1,0 +1,769 @@
+diff --git a/packages/backend/migration/1699872192285-hidden-emoji.js b/packages/backend/migration/1699872192285-hidden-emoji.js
+new file mode 100644
+index 0000000000..fc1486b02c
+--- /dev/null
++++ b/packages/backend/migration/1699872192285-hidden-emoji.js
+@@ -0,0 +1,16 @@
++/*
++ * SPDX-FileCopyrightText: syuilo and other misskey contributors
++ * SPDX-License-Identifier: AGPL-3.0-only
++ */
++
++export class HiddenEmoji1699872192285 {
++    name = 'HiddenEmoji1699872192285'
++
++    async up(queryRunner) {
++        await queryRunner.query(`ALTER TABLE "emoji" ADD "hidden" boolean NOT NULL DEFAULT false`);
++    }
++
++    async down(queryRunner) {
++        await queryRunner.query(`ALTER TABLE "emoji" DROP COLUMN "hidden"`);
++    }
++}
+diff --git a/packages/backend/migration/1711123547052-conspicuousScale-emoji.js b/packages/backend/migration/1711123547052-conspicuousScale-emoji.js
+new file mode 100644
+index 0000000000..a5e3bcf350
+--- /dev/null
++++ b/packages/backend/migration/1711123547052-conspicuousScale-emoji.js
+@@ -0,0 +1,16 @@
++/*
++ * SPDX-FileCopyrightText: syuilo and other misskey contributors
++ * SPDX-License-Identifier: AGPL-3.0-only
++ */
++
++export class ConspicuousScaleEmoji1711123547052 {
++    name = 'ConspicuousScaleEmoji1711123547052'
++
++    async up(queryRunner) {
++        await queryRunner.query(`ALTER TABLE "emoji" ADD "conspicuousScale" smallint NOT NULL DEFAULT 1`);
++    }
++
++    async down(queryRunner) {
++        await queryRunner.query(`ALTER TABLE "emoji" DROP COLUMN "conspicuousScale"`);
++    }
++}
+diff --git a/packages/backend/src/core/CustomEmojiService.ts b/packages/backend/src/core/CustomEmojiService.ts
+index da71a5de6f..e1e69ab031 100644
+--- a/packages/backend/src/core/CustomEmojiService.ts
++++ b/packages/backend/src/core/CustomEmojiService.ts
+@@ -101,6 +101,8 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 		license: string | null;
+ 		isSensitive: boolean;
+ 		localOnly: boolean;
++		hidden: boolean;
++		conspicuousScale: number;
+ 		roleIdsThatCanBeUsedThisEmojiAsReaction: MiRole['id'][];
+ 	}, moderator?: MiUser): Promise<MiEmoji> {
+ 		const emoji = await this.emojisRepository.insertOne({
+@@ -116,15 +118,19 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 			license: data.license,
+ 			isSensitive: data.isSensitive,
+ 			localOnly: data.localOnly,
++			hidden: data.hidden,
++			conspicuousScale: data.conspicuousScale,
+ 			roleIdsThatCanBeUsedThisEmojiAsReaction: data.roleIdsThatCanBeUsedThisEmojiAsReaction,
+ 		});
+ 
+ 		if (data.host == null) {
+ 			this.localEmojisCache.refresh();
+ 
+-			this.globalEventService.publishBroadcastStream('emojiAdded', {
+-				emoji: await this.emojiEntityService.packDetailed(emoji.id),
+-			});
++			if (!data.hidden) {
++				this.globalEventService.publishBroadcastStream('emojiAdded', {
++					emoji: await this.emojiEntityService.packDetailed(emoji.id),
++				});
++			}
+ 
+ 			if (moderator) {
+ 				this.moderationLogService.log(moderator, 'addCustomEmoji', {
+@@ -149,6 +155,8 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 		license?: string | null;
+ 		isSensitive?: boolean;
+ 		localOnly?: boolean;
++		hidden?: boolean;
++		conspicuousScale?: number;
+ 		roleIdsThatCanBeUsedThisEmojiAsReaction?: MiRole['id'][];
+ 	}, moderator?: MiUser): Promise<
+ 		null
+@@ -176,6 +184,8 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 			license: data.license,
+ 			isSensitive: data.isSensitive,
+ 			localOnly: data.localOnly,
++			hidden: data.hidden,
++			conspicuousScale: data.conspicuousScale,
+ 			originalUrl: data.originalUrl,
+ 			publicUrl: data.publicUrl,
+ 			type: data.fileType,
+@@ -186,18 +196,21 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 
+ 		const packed = await this.emojiEntityService.packDetailed(emoji.id);
+ 
+-		if (!doNameUpdate) {
++		if (emoji.name === data.name && !emoji.hidden && !data.hidden) {
+ 			this.globalEventService.publishBroadcastStream('emojiUpdated', {
+ 				emojis: [packed],
+ 			});
+ 		} else {
+-			this.globalEventService.publishBroadcastStream('emojiDeleted', {
+-				emojis: [await this.emojiEntityService.packDetailed(emoji)],
+-			});
+-
+-			this.globalEventService.publishBroadcastStream('emojiAdded', {
+-				emoji: packed,
+-			});
++			if (!emoji.hidden) {
++				this.globalEventService.publishBroadcastStream('emojiDeleted', {
++					emojis: [await this.emojiEntityService.packDetailed(emoji)],
++				});
++			}
++			if (!data.hidden) {
++				this.globalEventService.publishBroadcastStream('emojiAdded', {
++					emoji: packed,
++				});
++			}
+ 		}
+ 
+ 		if (moderator) {
+@@ -227,7 +240,7 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 		this.localEmojisCache.refresh();
+ 
+ 		this.globalEventService.publishBroadcastStream('emojiUpdated', {
+-			emojis: await this.emojiEntityService.packDetailedMany(ids),
++			emojis: await this.emojiEntityService.packDetailedMany(emojis.filter(x => !x.hidden).map(x => x.id)),
+ 		});
+ 	}
+ 
+@@ -243,7 +256,10 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 		this.localEmojisCache.refresh();
+ 
+ 		this.globalEventService.publishBroadcastStream('emojiUpdated', {
+-			emojis: await this.emojiEntityService.packDetailedMany(ids),
++			emojis: await this.emojiEntityService.packDetailedMany(await this.emojisRepository.findBy({
++				id: In(ids),
++				hidden: false,
++			})),
+ 		});
+ 	}
+ 
+@@ -263,7 +279,7 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 		this.localEmojisCache.refresh();
+ 
+ 		this.globalEventService.publishBroadcastStream('emojiUpdated', {
+-			emojis: await this.emojiEntityService.packDetailedMany(ids),
++			emojis: await this.emojiEntityService.packDetailedMany(emojis.filter(x => !x.hidden).map(x => x.id)),
+ 		});
+ 	}
+ 
+@@ -279,7 +295,10 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 		this.localEmojisCache.refresh();
+ 
+ 		this.globalEventService.publishBroadcastStream('emojiUpdated', {
+-			emojis: await this.emojiEntityService.packDetailedMany(ids),
++			emojis: await this.emojiEntityService.packDetailedMany(await this.emojisRepository.findBy({
++				id: In(ids),
++				hidden: false,
++			})),
+ 		});
+ 	}
+ 
+@@ -295,7 +314,10 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 		this.localEmojisCache.refresh();
+ 
+ 		this.globalEventService.publishBroadcastStream('emojiUpdated', {
+-			emojis: await this.emojiEntityService.packDetailedMany(ids),
++			emojis: await this.emojiEntityService.packDetailedMany(await this.emojisRepository.findBy({
++				id: In(ids),
++				hidden: false,
++			})),
+ 		});
+ 	}
+ 
+@@ -307,9 +329,11 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 
+ 		this.localEmojisCache.refresh();
+ 
+-		this.globalEventService.publishBroadcastStream('emojiDeleted', {
+-			emojis: [await this.emojiEntityService.packDetailed(emoji)],
+-		});
++		if (!emoji.hidden) {
++			this.globalEventService.publishBroadcastStream('emojiDeleted', {
++				emojis: [await this.emojiEntityService.packDetailed(emoji)],
++			});
++		}
+ 
+ 		if (moderator) {
+ 			this.moderationLogService.log(moderator, 'deleteCustomEmoji', {
+@@ -339,7 +363,7 @@ export class CustomEmojiService implements OnApplicationShutdown {
+ 		this.localEmojisCache.refresh();
+ 
+ 		this.globalEventService.publishBroadcastStream('emojiDeleted', {
+-			emojis: await this.emojiEntityService.packDetailedMany(emojis),
++			emojis: await this.emojiEntityService.packDetailedMany(emojis.filter(x => !x.hidden)),
+ 		});
+ 	}
+ 
+diff --git a/packages/backend/src/core/entities/EmojiEntityService.ts b/packages/backend/src/core/entities/EmojiEntityService.ts
+index 490d3f2511..14a08a32bf 100644
+--- a/packages/backend/src/core/entities/EmojiEntityService.ts
++++ b/packages/backend/src/core/entities/EmojiEntityService.ts
+@@ -35,6 +35,8 @@ export class EmojiEntityService {
+ 			url: emoji.publicUrl || emoji.originalUrl,
+ 			localOnly: emoji.localOnly ? true : undefined,
+ 			isSensitive: emoji.isSensitive ? true : undefined,
++			hidden: emoji.hidden || undefined,
++			conspicuousScale: emoji.conspicuousScale === 1 ? undefined : emoji.conspicuousScale,
+ 			roleIdsThatCanBeUsedThisEmojiAsReaction: emoji.roleIdsThatCanBeUsedThisEmojiAsReaction.length > 0 ? emoji.roleIdsThatCanBeUsedThisEmojiAsReaction : undefined,
+ 		};
+ 	}
+@@ -63,6 +65,8 @@ export class EmojiEntityService {
+ 			license: emoji.license,
+ 			isSensitive: emoji.isSensitive,
+ 			localOnly: emoji.localOnly,
++			hidden: emoji.hidden || undefined,
++			conspicuousScale: emoji.conspicuousScale,
+ 			roleIdsThatCanBeUsedThisEmojiAsReaction: emoji.roleIdsThatCanBeUsedThisEmojiAsReaction,
+ 		};
+ 	}
+diff --git a/packages/backend/src/models/Emoji.ts b/packages/backend/src/models/Emoji.ts
+index d62b6e9f6f..5a6f8d9d05 100644
+--- a/packages/backend/src/models/Emoji.ts
++++ b/packages/backend/src/models/Emoji.ts
+@@ -71,6 +71,17 @@ export class MiEmoji {
+ 	})
+ 	public localOnly: boolean;
+ 
++	@Index()
++	@Column('boolean', {
++		default: false,
++	})
++	public hidden: boolean;
++
++	@Column('smallint', {
++		default: 1,
++	})
++	public conspicuousScale: number;
++
+ 	@Column('boolean', {
+ 		default: false,
+ 	})
+diff --git a/packages/backend/src/queue/processors/ImportCustomEmojisProcessorService.ts b/packages/backend/src/queue/processors/ImportCustomEmojisProcessorService.ts
+index 725e1c8ba2..f1fc048cf2 100644
+--- a/packages/backend/src/queue/processors/ImportCustomEmojisProcessorService.ts
++++ b/packages/backend/src/queue/processors/ImportCustomEmojisProcessorService.ts
+@@ -104,8 +104,9 @@ export class ImportCustomEmojisProcessorService {
+ 						host: null,
+ 						aliases: emojiInfo.aliases,
+ 						license: emojiInfo.license,
+-						isSensitive: emojiInfo.isSensitive,
+-						localOnly: emojiInfo.localOnly,
++						isSensitive: emojiInfo.isSensitive ?? false,
++						localOnly: emojiInfo.localOnly ?? false,
++						hidden: emojiInfo.hidden ?? false,
+ 						roleIdsThatCanBeUsedThisEmojiAsReaction: [],
+ 					});
+ 				} catch (e) {
+diff --git a/packages/backend/src/server/api/endpoints/admin/emoji/add.ts b/packages/backend/src/server/api/endpoints/admin/emoji/add.ts
+index 53256565f6..0614b3270b 100644
+--- a/packages/backend/src/server/api/endpoints/admin/emoji/add.ts
++++ b/packages/backend/src/server/api/endpoints/admin/emoji/add.ts
+@@ -62,6 +62,8 @@ export const paramDef = {
+ 		license: { type: 'string', nullable: true },
+ 		isSensitive: { type: 'boolean' },
+ 		localOnly: { type: 'boolean' },
++		hidden: { type: 'boolean' },
++		conspicuousScale: { type: 'number', minimum: 1, maximum: 2 },
+ 		roleIdsThatCanBeUsedThisEmojiAsReaction: {
+ 			type: 'array',
+ 			items: {
+@@ -100,6 +102,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				license: ps.license ?? null,
+ 				isSensitive: ps.isSensitive ?? false,
+ 				localOnly: ps.localOnly ?? false,
++				hidden: ps.hidden ?? false,
++				conspicuousScale: ps.conspicuousScale ?? 1,
+ 				roleIdsThatCanBeUsedThisEmojiAsReaction: ps.roleIdsThatCanBeUsedThisEmojiAsReaction ?? [],
+ 			}, me);
+ 
+diff --git a/packages/backend/src/server/api/endpoints/admin/emoji/update.ts b/packages/backend/src/server/api/endpoints/admin/emoji/update.ts
+index e3aaa051c1..e9f6cb8881 100644
+--- a/packages/backend/src/server/api/endpoints/admin/emoji/update.ts
++++ b/packages/backend/src/server/api/endpoints/admin/emoji/update.ts
+@@ -53,6 +53,8 @@ export const paramDef = {
+ 		license: { type: 'string', nullable: true },
+ 		isSensitive: { type: 'boolean' },
+ 		localOnly: { type: 'boolean' },
++		hidden: { type: 'boolean', default: false },
++		conspicuousScale: { type: 'number', minimum: 1, maximum: 2 },
+ 		roleIdsThatCanBeUsedThisEmojiAsReaction: { type: 'array', items: {
+ 			type: 'string',
+ 		} },
+@@ -93,6 +95,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				license: ps.license,
+ 				isSensitive: ps.isSensitive,
+ 				localOnly: ps.localOnly,
++				hidden: ps.hidden,
++				conspicuousScale: ps.conspicuousScale,
+ 				roleIdsThatCanBeUsedThisEmojiAsReaction: ps.roleIdsThatCanBeUsedThisEmojiAsReaction,
+ 			}, me);
+ 
+diff --git a/packages/backend/src/server/api/endpoints/emojis.ts b/packages/backend/src/server/api/endpoints/emojis.ts
+index 46ef4eca1b..2b20ae1bb0 100644
+--- a/packages/backend/src/server/api/endpoints/emojis.ts
++++ b/packages/backend/src/server/api/endpoints/emojis.ts
+@@ -53,6 +53,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 			const emojis = await this.emojisRepository.find({
+ 				where: {
+ 					host: IsNull(),
++					hidden: false,
+ 				},
+ 				order: {
+ 					category: 'ASC',
+diff --git a/packages/frontend/src/components/MkAvatars.vue b/packages/frontend/src/components/MkAvatars.vue
+index 8236d0ddb9..c3ca7ec13a 100644
+--- a/packages/frontend/src/components/MkAvatars.vue
++++ b/packages/frontend/src/components/MkAvatars.vue
+@@ -6,7 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <template>
+ <div>
+ 	<div v-for="user in users.slice(0, limit)" :key="user.id" style="display:inline-block;width:32px;height:32px;margin-right:8px;">
+-		<MkAvatar :user="user" style="width:32px; height:32px;" indicator link preview/>
++		<MkAvatar :user="user" style="width:32px; height:32px;" indicator link preview small/>
+ 	</div>
+ 	<div v-if="users.length > limit" style="display: inline-block;">...</div>
+ </div>
+diff --git a/packages/frontend/src/components/MkClipPreview.vue b/packages/frontend/src/components/MkClipPreview.vue
+index 5b09ec90dd..057dae4b72 100644
+--- a/packages/frontend/src/components/MkClipPreview.vue
++++ b/packages/frontend/src/components/MkClipPreview.vue
+@@ -15,7 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		<template v-if="!props.noUserInfo">
+ 			<div :class="$style.divider"></div>
+ 			<div>
+-				<MkAvatar :user="clip.user" :class="$style.userAvatar" indicator link preview/> <MkUserName :user="clip.user" :nowrap="false"/>
++				<MkAvatar :user="clip.user" :class="$style.userAvatar" indicator link preview small/> <MkUserName :user="clip.user" :nowrap="false"/>
+ 			</div>
+ 		</template>
+ 	</div>
+diff --git a/packages/frontend/src/components/MkGalleryPostPreview.vue b/packages/frontend/src/components/MkGalleryPostPreview.vue
+index 22f8355acf..f7acae1f5d 100644
+--- a/packages/frontend/src/components/MkGalleryPostPreview.vue
++++ b/packages/frontend/src/components/MkGalleryPostPreview.vue
+@@ -22,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	</div>
+ 	<article>
+ 		<header>
+-			<MkAvatar :user="post.user" class="avatar" link preview/>
++			<MkAvatar :user="post.user" class="avatar" link preview small/>
+ 		</header>
+ 		<footer>
+ 			<span class="title">{{ post.title }}</span>
+diff --git a/packages/frontend/src/components/MkInviteCode.vue b/packages/frontend/src/components/MkInviteCode.vue
+index 1a71f6574f..cef7bc15dc 100644
+--- a/packages/frontend/src/components/MkInviteCode.vue
++++ b/packages/frontend/src/components/MkInviteCode.vue
+@@ -27,7 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<div v-if="moderator">
+ 				<div :class="$style.label">{{ i18n.ts.inviteCodeCreator }}</div>
+ 				<div v-if="invite.createdBy" :class="$style.user">
+-					<MkAvatar :user="invite.createdBy" :class="$style.avatar" link preview/>
++					<MkAvatar :user="invite.createdBy" :class="$style.avatar" link preview small/>
+ 					<MkUserName :user="invite.createdBy" :nowrap="false"/>
+ 					<div v-if="moderator">({{ invite.createdBy.id }})</div>
+ 				</div>
+@@ -36,7 +36,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<div v-if="invite.used">
+ 				<div :class="$style.label">{{ i18n.ts.registeredUserUsingInviteCode }}</div>
+ 				<div v-if="invite.usedBy" :class="$style.user">
+-					<MkAvatar :user="invite.usedBy" :class="$style.avatar" link preview/>
++					<MkAvatar :user="invite.usedBy" :class="$style.avatar" link preview small/>
+ 					<MkUserName :user="invite.usedBy" :nowrap="false"/>
+ 					<div v-if="moderator">({{ invite.usedBy.id }})</div>
+ 				</div>
+diff --git a/packages/frontend/src/components/MkMenu.vue b/packages/frontend/src/components/MkMenu.vue
+index d484c1b338..9f105c0d53 100644
+--- a/packages/frontend/src/components/MkMenu.vue
++++ b/packages/frontend/src/components/MkMenu.vue
+@@ -46,10 +46,11 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				@mouseleave.passive="onItemMouseLeave"
+ 			>
+ 				<i v-if="item.icon" class="ti-fw" :class="[$style.icon, item.icon]"></i>
+-				<MkAvatar v-if="item.avatar" :user="item.avatar" :class="$style.avatar"/>
++				<MkAvatar v-if="item.avatar" :user="item.avatar" :class="$style.avatar" small/>
+ 				<div :class="$style.item_content">
+ 					<span :class="$style.item_content_text">{{ item.text }}</span>
+ 					<span v-if="item.indicate" :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
++					<span v-if="item.suffixIcon" :class="$style.caret" style="pointer-events: none;"><i class="ti ti-fw" :class="item.suffixIcon"></i></span>
+ 				</div>
+ 			</MkA>
+ 			<a
+@@ -69,6 +70,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<div :class="$style.item_content">
+ 					<span :class="$style.item_content_text">{{ item.text }}</span>
+ 					<span v-if="item.indicate" :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
++					<span v-if="item.suffixIcon" :class="$style.caret" style="pointer-events: none;"><i class="ti ti-fw" :class="item.suffixIcon"></i></span>
+ 				</div>
+ 			</a>
+ 			<button
+@@ -80,7 +82,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				@mouseenter.passive="onItemMouseEnter"
+ 				@mouseleave.passive="onItemMouseLeave"
+ 			>
+-				<MkAvatar :user="item.user" :class="$style.avatar"/><MkUserName :user="item.user"/>
++				<MkAvatar :user="item.user" :class="$style.avatar" small/><MkUserName :user="item.user"/>
+ 				<div v-if="item.indicate" :class="$style.item_content">
+ 					<span :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
+ 				</div>
+@@ -158,10 +160,11 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				@mouseleave.passive="onItemMouseLeave"
+ 			>
+ 				<i v-if="item.icon" class="ti-fw" :class="[$style.icon, item.icon]"></i>
+-				<MkAvatar v-if="item.avatar" :user="item.avatar" :class="$style.avatar"/>
++				<MkAvatar v-if="item.avatar" :user="item.avatar" :class="$style.avatar" small/>
+ 				<div :class="$style.item_content">
+ 					<span :class="$style.item_content_text">{{ item.text }}</span>
+ 					<span v-if="item.indicate" :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
++					<span v-if="item.suffixIcon" :class="$style.caret" style="pointer-events: none;"><i class="ti ti-fw" :class="item.suffixIcon"></i></span>
+ 				</div>
+ 			</button>
+ 		</template>
+diff --git a/packages/frontend/src/components/MkNotification.vue b/packages/frontend/src/components/MkNotification.vue
+index 80cb9a45bb..6ae2291259 100644
+--- a/packages/frontend/src/components/MkNotification.vue
++++ b/packages/frontend/src/components/MkNotification.vue
+@@ -6,13 +6,13 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <template>
+ <div :class="$style.root">
+ 	<div :class="$style.head">
+-		<MkAvatar v-if="['pollEnded', 'note'].includes(notification.type) && 'note' in notification" :class="$style.icon" :user="notification.note.user" link preview/>
+-		<MkAvatar v-else-if="['roleAssigned', 'achievementEarned', 'exportCompleted', 'login', 'createToken'].includes(notification.type)" :class="$style.icon" :user="$i" link preview/>
++		<MkAvatar v-if="['pollEnded', 'note'].includes(notification.type) && 'note' in notification" :class="$style.icon" :user="notification.note.user" link preview small/>
++		<MkAvatar v-else-if="['roleAssigned', 'achievementEarned', 'exportCompleted', 'login', 'createToken'].includes(notification.type)" :class="$style.icon" :user="$i" link preview small/>
+ 		<div v-else-if="notification.type === 'reaction:grouped' && notification.note.reactionAcceptance === 'likeOnly'" :class="[$style.icon, $style.icon_reactionGroupHeart]"><i class="ti ti-heart" style="line-height: 1;"></i></div>
+ 		<div v-else-if="notification.type === 'reaction:grouped'" :class="[$style.icon, $style.icon_reactionGroup]"><i class="ti ti-plus" style="line-height: 1;"></i></div>
+ 		<div v-else-if="notification.type === 'renote:grouped'" :class="[$style.icon, $style.icon_renoteGroup]"><i class="ti ti-repeat" style="line-height: 1;"></i></div>
+ 		<img v-else-if="notification.type === 'test'" :class="$style.icon" :src="infoImageUrl"/>
+-		<MkAvatar v-else-if="'user' in notification" :class="$style.icon" :user="notification.user" link preview/>
++		<MkAvatar v-else-if="'user' in notification" :class="$style.icon" :user="notification.user" link preview small/>
+ 		<img v-else-if="'icon' in notification && notification.icon != null" :class="[$style.icon, $style.icon_app]" :src="notification.icon" alt=""/>
+ 		<div
+ 			:class="[$style.subIcon, {
+@@ -138,7 +138,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ 			<div v-if="notification.type === 'reaction:grouped'">
+ 				<div v-for="reaction of notification.reactions" :key="reaction.user.id + reaction.reaction" :class="$style.reactionsItem">
+-					<MkAvatar :class="$style.reactionsItemAvatar" :user="reaction.user" link preview/>
++					<MkAvatar :class="$style.reactionsItemAvatar" :user="reaction.user" link preview small/>
+ 					<div :class="$style.reactionsItemReaction">
+ 						<MkReactionIcon
+ 							:withTooltip="true"
+@@ -151,7 +151,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			</div>
+ 			<div v-else-if="notification.type === 'renote:grouped'">
+ 				<div v-for="user of notification.users" :key="user.id" :class="$style.reactionsItem">
+-					<MkAvatar :class="$style.reactionsItemAvatar" :user="user" link preview/>
++					<MkAvatar :class="$style.reactionsItemAvatar" :user="user" link preview small/>
+ 				</div>
+ 			</div>
+ 		</div>
+diff --git a/packages/frontend/src/components/MkReactionsViewer.details.vue b/packages/frontend/src/components/MkReactionsViewer.details.vue
+index d24e0b15bf..fafcfbc5b9 100644
+--- a/packages/frontend/src/components/MkReactionsViewer.details.vue
++++ b/packages/frontend/src/components/MkReactionsViewer.details.vue
+@@ -12,7 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		</div>
+ 		<div :class="$style.users">
+ 			<div v-for="u in users" :key="u.id" :class="$style.user">
+-				<MkAvatar :class="$style.avatar" :user="u"/>
++				<MkAvatar :class="$style.avatar" :user="u" small/>
+ 				<MkUserName :user="u" :nowrap="true"/>
+ 			</div>
+ 			<div v-if="count > 10" :class="$style.more">+{{ count - 10 }}</div>
+diff --git a/packages/frontend/src/components/MkReactionsViewer.vue b/packages/frontend/src/components/MkReactionsViewer.vue
+index 63b202f9f3..9b4958a630 100644
+--- a/packages/frontend/src/components/MkReactionsViewer.vue
++++ b/packages/frontend/src/components/MkReactionsViewer.vue
+@@ -12,15 +12,17 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	:moveClass="defaultStore.state.animation ? $style.transition_x_move : ''"
+ 	tag="div" :class="$style.root"
+ >
+-	<XReaction v-for="[reaction, count] in reactions" :key="reaction" :reaction="reaction" :count="count" :isInitial="initialReactions.has(reaction)" :note="note" @reactionToggled="onMockToggleReaction"/>
++	<XReaction v-for="[reaction, count] in reactions" :key="reaction" :reaction="reaction" :count="count" :isInitial="initialReactions.has(reaction)" :note="note" :users="reactedUsers.get(reaction)" @reactionToggled="onMockToggleReaction"/>
+ 	<slot v-if="hasMoreReactions" name="more"/>
+ </TransitionGroup>
+ </template>
+ 
+ <script lang="ts" setup>
+ import * as Misskey from 'misskey-js';
+-import { inject, watch, ref } from 'vue';
++import { inject, nextTick, watch, ref } from 'vue';
+ import XReaction from '@/components/MkReactionsViewer.reaction.vue';
++import { customEmojisMap } from '@/custom-emojis.js';
++import { misskeyApiGet } from '@/scripts/misskey-api.js';
+ import { defaultStore } from '@/store.js';
+ 
+ const props = withDefaults(defineProps<{
+@@ -36,10 +38,18 @@ const emit = defineEmits<{
+ 	(ev: 'mockUpdateMyReaction', emoji: string, delta: number): void;
+ }>();
+ 
++const sleep = window.requestIdleCallback as unknown
++	? () => new Promise(resolve => requestIdleCallback(resolve))
++	: () => nextTick().then(() => new Promise(resolve => setTimeout(resolve, 0)));
++
+ const initialReactions = new Set(Object.keys(props.note.reactions));
++const encoder = new TextEncoder();
+ 
+ const reactions = ref<[string, number][]>([]);
+ const hasMoreReactions = ref(false);
++const reactedUsers = ref<Map<string, Misskey.entities.UserLite[]>>(new Map());
++
++let abortController = new AbortController();
+ 
+ if (props.note.myReaction && !Object.keys(reactions.value).includes(props.note.myReaction)) {
+ 	reactions.value[props.note.myReaction] = props.note.reactions[props.note.myReaction];
+@@ -54,6 +64,18 @@ function onMockToggleReaction(emoji: string, count: number) {
+ 	emit('mockUpdateMyReaction', emoji, (count - reactions.value[i][1]));
+ }
+ 
++function getScale(name: string): number {
++	if (!defaultStore.state.adaptiveReactionsDisplaySize) {
++		return 1;
++	}
++	const match = name.match(/(?<=^:)\w+(?=@\.:$)/);
++	if (!match) {
++		return 1;
++	}
++	const emoji = customEmojisMap.get(match[0]);
++	return emoji?.conspicuousScale || 1;
++}
++
+ watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumber]) => {
+ 	let newReactions: [string, number][] = [];
+ 	hasMoreReactions.value = Object.keys(newSource).length > maxNumber;
+@@ -70,7 +92,7 @@ watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumbe
+ 	newReactions = [
+ 		...newReactions,
+ 		...Object.entries(newSource)
+-			.sort(([, a], [, b]) => b - a)
++			.sort((a, b) => (getScale(b[0]) - getScale(a[0])) || (b[1] - a[1]))
+ 			.filter(([y], i) => i < maxNumber && !newReactionsNames.includes(y)),
+ 	];
+ 
+@@ -81,6 +103,43 @@ watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumbe
+ 	}
+ 
+ 	reactions.value = newReactions;
++
++	if (defaultStore.state.showReactedUserAvatars) {
++		abortController.abort();
++		abortController = new AbortController();
++		sleep()
++			.then(() => crypto.subtle.digest('SHA-1', encoder.encode(JSON.stringify(reactions.value))))
++			.then(async digest => {
++				const _cacheKey_ = String.fromCharCode.apply(null, new Uint16Array(digest) as unknown as number[]);
++				const data: Misskey.entities.NoteReaction[] = [];
++				let untilId: string | undefined;
++				for (;;) {
++					const page = await misskeyApiGet('notes/reactions', {
++						noteId: props.note.id,
++						limit: 100,
++						untilId,
++						_cacheKey_,
++					}, abortController.signal);
++					if (!page.length) break;
++					data.push(...page);
++					untilId = page.at(-1)!.id;
++					if (!untilId || page.length < 100) break;
++					await sleep();
++				}
++				return data.reverse();
++			})
++			.then(data => {
++				const map = new Map();
++				for (const item of data) {
++					if (map.has(item.type)) {
++						map.get(item.type)!.push(item.user);
++					} else {
++						map.set(item.type, [item.user]);
++					}
++				}
++				reactedUsers.value = map;
++			});
++	}
+ }, { immediate: true, deep: true });
+ </script>
+ 
+@@ -100,10 +159,8 @@ watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumbe
+ }
+ 
+ .root {
+-	display: flex;
+-	flex-wrap: wrap;
+-	align-items: center;
+ 	margin: 4px -2px 0 -2px;
++	contain: layout;
+ 
+ 	&:empty {
+ 		display: none;
+diff --git a/packages/frontend/src/components/MkUserCardMini.vue b/packages/frontend/src/components/MkUserCardMini.vue
+index 7a2e878931..1ffc7a2cce 100644
+--- a/packages/frontend/src/components/MkUserCardMini.vue
++++ b/packages/frontend/src/components/MkUserCardMini.vue
+@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ <template>
+ <div v-adaptive-bg :class="[$style.root]">
+-	<MkAvatar :class="$style.avatar" :user="user" indicator/>
++	<MkAvatar :class="$style.avatar" :user="user" indicator small/>
+ 	<div :class="$style.body">
+ 		<span :class="$style.name"><MkUserName :user="user"/></span>
+ 		<span :class="$style.sub"><span class="_monospace">@{{ acct(user) }}</span></span>
+diff --git a/packages/frontend/src/components/MkUsersTooltip.vue b/packages/frontend/src/components/MkUsersTooltip.vue
+index 0cb7f22e93..feec004827 100644
+--- a/packages/frontend/src/components/MkUsersTooltip.vue
++++ b/packages/frontend/src/components/MkUsersTooltip.vue
+@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <MkTooltip ref="tooltip" :showing="showing" :targetElement="targetElement" :maxWidth="250" @closed="emit('closed')">
+ 	<div :class="$style.root">
+ 		<div v-for="u in users" :key="u.id" :class="$style.user">
+-			<MkAvatar :class="$style.avatar" :user="u"/>
++			<MkAvatar :class="$style.avatar" :user="u" small/>
+ 			<MkUserName :user="u" :nowrap="true"/>
+ 		</div>
+ 		<div v-if="users.length < count">+{{ count - users.length }}</div>
+diff --git a/packages/frontend/src/components/global/MkAvatar.vue b/packages/frontend/src/components/global/MkAvatar.vue
+index 35c07bc80c..4810b13dca 100644
+--- a/packages/frontend/src/components/global/MkAvatar.vue
++++ b/packages/frontend/src/components/global/MkAvatar.vue
+@@ -45,7 +45,7 @@ import * as Misskey from 'misskey-js';
+ import { extractAvgColorFromBlurhash } from '@@/js/extract-avg-color-from-blurhash.js';
+ import MkImgWithBlurhash from '../MkImgWithBlurhash.vue';
+ import MkA from './MkA.vue';
+-import { getStaticImageUrl } from '@/scripts/media-proxy.js';
++import { getProxiedImageUrl, getStaticImageUrl } from '@/scripts/media-proxy.js';
+ import { acct, userPage } from '@/filters/user.js';
+ import MkUserOnlineIndicator from '@/components/MkUserOnlineIndicator.vue';
+ import { defaultStore } from '@/store.js';
+@@ -56,26 +56,30 @@ const useBlurEffect = ref(defaultStore.state.useBlurEffect);
+ 
+ const props = withDefaults(defineProps<{
+ 	user: Misskey.entities.User;
++	small?: boolean;
+ 	target?: string | null;
+ 	link?: boolean;
+ 	preview?: boolean;
+ 	indicator?: boolean;
+ 	decorations?: (Omit<Misskey.entities.UserDetailed['avatarDecorations'][number], 'id'> & { blink?: boolean; })[];
+ 	forceShowDecoration?: boolean;
++	forceHideDecoration?: boolean;
+ }>(), {
+ 	target: null,
++	small: false,
+ 	link: false,
+ 	preview: false,
+ 	indicator: false,
+ 	decorations: undefined,
+ 	forceShowDecoration: false,
++	forceHideDecoration: false,
+ });
+ 
+ const emit = defineEmits<{
+ 	(ev: 'click', v: MouseEvent): void;
+ }>();
+ 
+-const showDecoration = props.forceShowDecoration || defaultStore.state.showAvatarDecorations;
++const showDecoration = (props.forceShowDecoration || defaultStore.state.showAvatarDecorations) && !props.forceHideDecoration;
+ 
+ const bound = computed(() => props.link
+ 	? { to: userPage(props.user), target: props.target }
+@@ -83,8 +87,10 @@ const bound = computed(() => props.link
+ 
+ const url = computed(() => {
+ 	if (props.user.avatarUrl == null) return null;
+-	if (defaultStore.state.disableShowingAnimatedImages || defaultStore.state.dataSaver.avatar) return getStaticImageUrl(props.user.avatarUrl);
+-	return props.user.avatarUrl;
++	const baseUrl = props.small ? getProxiedImageUrl(props.user.avatarUrl, 'emoji') : props.user.avatarUrl;
++	return defaultStore.state.disableShowingAnimatedImages || defaultStore.state.dataSaver.avatar
++		? getStaticImageUrl(baseUrl)
++		: baseUrl;
+ });
+ 
+ function onClick(ev: MouseEvent): void {
+@@ -202,6 +208,7 @@ watch(() => props.user.avatarBlurhash, () => {
+ 		height: 100%;
+ 		padding: 50%;
+ 		pointer-events: none;
++		line-height: 0;
+ 
+ 		> .earLeft,
+ 		> .earRight {
+diff --git a/packages/frontend/src/components/global/MkCustomEmoji.vue b/packages/frontend/src/components/global/MkCustomEmoji.vue
+index ec1d859080..7cf8968f37 100644
+--- a/packages/frontend/src/components/global/MkCustomEmoji.vue
++++ b/packages/frontend/src/components/global/MkCustomEmoji.vue
+@@ -60,7 +60,10 @@ const rawUrl = computed(() => {
+ 		return props.url;
+ 	}
+ 	if (isLocal.value) {
+-		return customEmojisMap.get(customEmojiName.value)?.url ?? null;
++		const url = customEmojisMap.get(customEmojiName.value)?.url;
++		if (url) {
++			return url;
++		}
+ 	}
+ 	return props.host ? `/emoji/${customEmojiName.value}@${props.host}.webp` : `/emoji/${customEmojiName.value}.webp`;
+ });
+diff --git a/packages/frontend/src/components/global/MkPageHeader.vue b/packages/frontend/src/components/global/MkPageHeader.vue
+index 1070c0c83b..521ea4f475 100644
+--- a/packages/frontend/src/components/global/MkPageHeader.vue
++++ b/packages/frontend/src/components/global/MkPageHeader.vue
+@@ -7,14 +7,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <div v-if="show" ref="el" :class="[$style.root]" :style="{ background: bg }">
+ 	<div :class="[$style.upper, { [$style.slim]: narrow, [$style.thin]: thin_ }]">
+ 		<div v-if="!thin_ && narrow && props.displayMyAvatar && $i" class="_button" :class="$style.buttonsLeft" @click="openAccountMenu">
+-			<MkAvatar :class="$style.avatar" :user="$i"/>
++			<MkAvatar :class="$style.avatar" :user="$i" small/>
+ 		</div>
+ 		<div v-else-if="!thin_ && narrow && !hideTitle" :class="$style.buttonsLeft"/>
+ 
+ 		<template v-if="pageMetadata">
+ 			<div v-if="!hideTitle" :class="$style.titleContainer" @click="top">
+ 				<div v-if="pageMetadata.avatar" :class="$style.titleAvatarContainer">
+-					<MkAvatar :class="$style.titleAvatar" :user="pageMetadata.avatar" indicator/>
++					<MkAvatar :class="$style.titleAvatar" :user="pageMetadata.avatar" indicator small/>
+ 				</div>
+ 				<i v-else-if="pageMetadata.icon" :class="[$style.titleIcon, pageMetadata.icon]"></i>
+ 
+diff --git a/packages/frontend/src/pages/emoji-edit-dialog.vue b/packages/frontend/src/pages/emoji-edit-dialog.vue
+index da3315cff5..9d8ac3bee5 100644
+--- a/packages/frontend/src/pages/emoji-edit-dialog.vue
++++ b/packages/frontend/src/pages/emoji-edit-dialog.vue
+@@ -68,6 +68,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</MkFolder>
+ 				<MkSwitch v-model="isSensitive">isSensitive</MkSwitch>
+ 				<MkSwitch v-model="localOnly">{{ i18n.ts.localOnly }}</MkSwitch>
++				<MkSwitch v-model="hidden">hidden</MkSwitch>
++				<MkInput v-model="conspicuousScale" type="number">conspicuousScale</MkInput>
+ 				<MkButton v-if="emoji" danger @click="del()"><i class="ti ti-trash"></i> {{ i18n.ts.delete }}</MkButton>
+ 			</div>
+ 		</MkSpacer>
+@@ -110,6 +112,8 @@ const aliases = ref<string>(props.emoji ? props.emoji.aliases.join(' ') : '');
+ const license = ref<string>(props.emoji?.license ? props.emoji.license : '');
+ const isSensitive = ref(props.emoji ? props.emoji.isSensitive : false);
+ const localOnly = ref(props.emoji ? props.emoji.localOnly : false);
++const hidden = ref(props.emoji ? props.emoji.hidden : false);
++const conspicuousScale = ref(props.emoji ? props.emoji.conspicuousScale : 1);
+ const roleIdsThatCanBeUsedThisEmojiAsReaction = ref(props.emoji ? props.emoji.roleIdsThatCanBeUsedThisEmojiAsReaction : []);
+ const rolesThatCanBeUsedThisEmojiAsReaction = ref<Misskey.entities.Role[]>([]);
+ const file = ref<Misskey.entities.DriveFile>();
+@@ -152,6 +156,8 @@ async function done() {
+ 		license: license.value === '' ? null : license.value,
+ 		isSensitive: isSensitive.value,
+ 		localOnly: localOnly.value,
++		hidden: hidden.value,
++		conspicuousScale: conspicuousScale.value,
+ 		roleIdsThatCanBeUsedThisEmojiAsReaction: rolesThatCanBeUsedThisEmojiAsReaction.value.map(x => x.id),
+ 	};
+ 

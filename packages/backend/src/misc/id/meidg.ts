@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { parseBigInt16 } from '@/misc/bigint.js';
+
 const CHARS = '0123456789abcdef';
 
 //  4bit Fixed hex value 'g'
@@ -31,7 +33,7 @@ function getRandom() {
 
 export function genMeidg(t: number, immutable = false): string {
 	if (immutable) {
-		return getTime(t) + '000000000000';
+		return 'g' + getTime(t) + '000000000000';
 	}
 	return 'g' + getTime(t) + getRandom();
 }
@@ -39,6 +41,13 @@ export function genMeidg(t: number, immutable = false): string {
 export function parseMeidg(id: string): { date: Date; } {
 	return {
 		date: new Date(parseInt(id.slice(1, 12), 16)),
+	};
+}
+
+export function parseMeidgFull(id: string): { date: number; additional: bigint; } {
+	return {
+		date: parseInt(id.slice(1, 12), 16),
+		additional: parseBigInt16(id.slice(12, 24)),
 	};
 }
 

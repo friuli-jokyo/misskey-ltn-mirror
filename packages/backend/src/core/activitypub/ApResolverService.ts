@@ -3,11 +3,17 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Scope } from '@nestjs/common';
 import { IsNull, Not } from 'typeorm';
 import type { MiLocalUser, MiRemoteUser } from '@/models/User.js';
-import { InstanceActorService } from '@/core/InstanceActorService.js';
-import type { NotesRepository, PollsRepository, NoteReactionsRepository, UsersRepository, FollowRequestsRepository, MiMeta } from '@/models/_.js';
+import type {
+	FollowRequestsRepository,
+	MiMeta,
+	NoteReactionsRepository,
+	NotesRepository,
+	PollsRepository,
+	UsersRepository
+} from '@/models/_.js';
 import type { Config } from '@/config.js';
 import { HttpRequestService } from '@/core/HttpRequestService.js';
 import { DI } from '@/di-symbols.js';
@@ -15,35 +21,52 @@ import { UtilityService } from '@/core/UtilityService.js';
 import { bindThis } from '@/decorators.js';
 import { LoggerService } from '@/core/LoggerService.js';
 import type Logger from '@/logger.js';
+import { SystemAccountService } from '@/core/SystemAccountService.js';
+import { IdentifiableError } from '@/misc/identifiable-error.js';
+import type { ICollection, IObject, IOrderedCollection } from './type.js';
 import { isCollectionOrOrderedCollection } from './type.js';
 import { ApDbResolverService } from './ApDbResolverService.js';
 import { ApRendererService } from './ApRendererService.js';
 import { ApRequestService } from './ApRequestService.js';
-import type { IObject, ICollection, IOrderedCollection } from './type.js';
-import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { FetchAllowSoftFailMask } from './misc/check-against-url.js';
+import { ModuleRef } from '@nestjs/core';
 
+@Injectable({ scope: Scope.TRANSIENT })
 export class Resolver {
 	private history: Set<string>;
 	private user?: MiLocalUser;
 	private logger: Logger;
+	private recursionLimit = 256;
 
 	constructor(
+		@Inject(DI.config)
 		private config: Config,
+
+		@Inject(DI.meta)
 		private meta: MiMeta,
+
+		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
+
+		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
+
+		@Inject(DI.pollsRepository)
 		private pollsRepository: PollsRepository,
+
+		@Inject(DI.noteReactionsRepository)
 		private noteReactionsRepository: NoteReactionsRepository,
+
+		@Inject(DI.followRequestsRepository)
 		private followRequestsRepository: FollowRequestsRepository,
+
 		private utilityService: UtilityService,
-		private instanceActorService: InstanceActorService,
+		private systemAccountService: SystemAccountService,
 		private apRequestService: ApRequestService,
 		private httpRequestService: HttpRequestService,
 		private apRendererService: ApRendererService,
 		private apDbResolverService: ApDbResolverService,
 		private loggerService: LoggerService,
-		private recursionLimit = 256,
 	) {
 		this.history = new Set();
 		this.logger = this.loggerService.getLogger('ap-resolve');
@@ -104,8 +127,8 @@ export class Resolver {
 			throw new IdentifiableError('09d79f9e-64f1-4316-9cfa-e75c4d091574', 'Instance is blocked');
 		}
 
-		if (this.config.signToActivityPubGet && !this.user) {
-			this.user = await this.instanceActorService.getInstanceActor();
+		if (this.meta.signToActivityPubGet && !this.user) {
+			this.user = await this.systemAccountService.fetch('actor');
 		}
 
 		const object = (this.user
@@ -119,7 +142,7 @@ export class Resolver {
 		) {
 			throw new IdentifiableError('72180409-793c-4973-868e-5a118eb5519b', 'invalid response');
 		}
-		
+
 		return object;
 	}
 
@@ -180,54 +203,12 @@ export class Resolver {
 @Injectable()
 export class ApResolverService {
 	constructor(
-		@Inject(DI.config)
-		private config: Config,
-
-		@Inject(DI.meta)
-		private meta: MiMeta,
-
-		@Inject(DI.usersRepository)
-		private usersRepository: UsersRepository,
-
-		@Inject(DI.notesRepository)
-		private notesRepository: NotesRepository,
-
-		@Inject(DI.pollsRepository)
-		private pollsRepository: PollsRepository,
-
-		@Inject(DI.noteReactionsRepository)
-		private noteReactionsRepository: NoteReactionsRepository,
-
-		@Inject(DI.followRequestsRepository)
-		private followRequestsRepository: FollowRequestsRepository,
-
-		private utilityService: UtilityService,
-		private instanceActorService: InstanceActorService,
-		private apRequestService: ApRequestService,
-		private httpRequestService: HttpRequestService,
-		private apRendererService: ApRendererService,
-		private apDbResolverService: ApDbResolverService,
-		private loggerService: LoggerService,
+		private moduleRef: ModuleRef,
 	) {
 	}
 
 	@bindThis
-	public createResolver(): Resolver {
-		return new Resolver(
-			this.config,
-			this.meta,
-			this.usersRepository,
-			this.notesRepository,
-			this.pollsRepository,
-			this.noteReactionsRepository,
-			this.followRequestsRepository,
-			this.utilityService,
-			this.instanceActorService,
-			this.apRequestService,
-			this.httpRequestService,
-			this.apRendererService,
-			this.apDbResolverService,
-			this.loggerService,
-		);
+	public async createResolver(): Promise<Resolver> {
+		return await this.moduleRef.create(Resolver);
 	}
 }

@@ -4,13 +4,12 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { Brackets } from 'typeorm';
-import type { RoleAssignmentsRepository, RolesRepository } from '@/models/_.js';
+import type { RolesRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import { QueryService } from '@/core/QueryService.js';
 import { DI } from '@/di-symbols.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { IdService } from '@/core/IdService.js';
+import { RoleService } from '@/core/RoleService.js';
 import { ApiError } from '../../../error.js';
 
 export const meta = {
@@ -49,6 +48,8 @@ export const paramDef = {
 		roleId: { type: 'string', format: 'misskey:id' },
 		sinceId: { type: 'string', format: 'misskey:id' },
 		untilId: { type: 'string', format: 'misskey:id' },
+		sinceDate: { type: 'integer' },
+		untilDate: { type: 'integer' },
 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
 	},
 	required: ['roleId'],
@@ -60,34 +61,16 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.rolesRepository)
 		private rolesRepository: RolesRepository,
 
-		@Inject(DI.roleAssignmentsRepository)
-		private roleAssignmentsRepository: RoleAssignmentsRepository,
-
-		private queryService: QueryService,
+		private roleService: RoleService,
 		private userEntityService: UserEntityService,
 		private idService: IdService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const role = await this.rolesRepository.findOneBy({
-				id: ps.roleId,
-			});
+			const assigns = await this.roleService.getRoleAssigns(ps.roleId, ps.sinceId, ps.untilId, ps.limit);
 
-			if (role == null) {
+			if (assigns == null) {
 				throw new ApiError(meta.errors.noSuchRole);
 			}
-
-			const query = this.queryService.makePaginationQuery(this.roleAssignmentsRepository.createQueryBuilder('assign'), ps.sinceId, ps.untilId)
-				.andWhere('assign.roleId = :roleId', { roleId: role.id })
-				.andWhere(new Brackets(qb => {
-					qb
-						.where('assign.expiresAt IS NULL')
-						.orWhere('assign.expiresAt > :now', { now: new Date() });
-				}))
-				.innerJoinAndSelect('assign.user', 'user');
-
-			const assigns = await query
-				.limit(ps.limit)
-				.getMany();
 
 			const _users = assigns.map(({ user, userId }) => user ?? userId);
 			const _userMap = await this.userEntityService.packMany(_users, me, { schema: 'UserDetailed' })

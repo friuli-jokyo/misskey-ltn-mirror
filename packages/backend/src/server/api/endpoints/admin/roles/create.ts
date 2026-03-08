@@ -27,6 +27,7 @@ export const paramDef = {
 	properties: {
 		name: { type: 'string' },
 		description: { type: 'string' },
+		tags: { type: 'array', items: { type: 'string' } },
 		color: { type: 'string', nullable: true },
 		iconUrl: { type: 'string', nullable: true },
 		target: { type: 'string', enum: ['manual', 'conditional'] },
@@ -36,6 +37,7 @@ export const paramDef = {
 		isAdministrator: { type: 'boolean' },
 		isExplorable: { type: 'boolean', default: false }, // optional for backward compatibility
 		asBadge: { type: 'boolean' },
+		preserveAssignmentOnMoveAccount: { type: 'boolean' },
 		canEditMembersByModerator: { type: 'boolean' },
 		displayOrder: { type: 'number' },
 		policies: {

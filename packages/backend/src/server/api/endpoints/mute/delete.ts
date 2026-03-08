@@ -59,13 +59,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		super(meta, paramDef, async (ps, me) => {
 			const muter = me;
 
-			// Check if the mutee is yourself
-			/*
-			if (me.id === ps.userId) {
-				throw new ApiError(meta.errors.muteeIsYourself);
-			}
-			 */
-
 			// Get mutee
 			const mutee = await this.getterService.getUser(ps.userId).catch(err => {
 				if (err.id === '15348ddd-432d-49c2-8a5a-8069753becff') throw new ApiError(meta.errors.noSuchUser);

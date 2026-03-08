@@ -1,0 +1,1292 @@
+diff --git a/packages/backend/migration/1740325734247-RoleTags.js b/packages/backend/migration/1740325734247-RoleTags.js
+new file mode 100644
+index 0000000000..b2cf9aefea
+--- /dev/null
++++ b/packages/backend/migration/1740325734247-RoleTags.js
+@@ -0,0 +1,16 @@
++/*
++ * SPDX-FileCopyrightText: syuilo and misskey-project
++ * SPDX-License-Identifier: AGPL-3.0-only
++ */
++
++export class RoleTags1740325734247 {
++    name = 'RoleTags1740325734247'
++
++    async up(queryRunner) {
++        await queryRunner.query(`ALTER TABLE "role" ADD "tags" varchar(256) array NOT NULL DEFAULT '{}'::varchar[]`);
++    }
++
++    async down(queryRunner) {
++        await queryRunner.query(`ALTER TABLE "role" DROP COLUMN "tags"`);
++    }
++}
+diff --git a/packages/backend/src/core/DriveService.ts b/packages/backend/src/core/DriveService.ts
+index 1550fe3d3c..2317d8fac5 100644
+--- a/packages/backend/src/core/DriveService.ts
++++ b/packages/backend/src/core/DriveService.ts
+@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
+ import { Inject, Injectable } from '@nestjs/common';
+ import sharp from 'sharp';
+ import { sharpBmp } from '@misskey-dev/sharp-read-bmp';
++import * as Redis from 'ioredis';
+ import { IsNull } from 'typeorm';
+ import { DeleteObjectCommandInput, PutObjectCommandInput, NoSuchKey } from '@aws-sdk/client-s3';
+ import { DI } from '@/di-symbols.js';
+@@ -101,6 +102,9 @@ export class DriveService {
+ 		@Inject(DI.meta)
+ 		private meta: MiMeta,
+ 
++		@Inject(DI.redis)
++		private redisClient: Redis.Redis,
++
+ 		@Inject(DI.usersRepository)
+ 		private usersRepository: UsersRepository,
+ 
+@@ -532,6 +536,12 @@ export class DriveService {
+ 				}
+ 				await this.expireOldFile(await this.usersRepository.findOneByOrFail({ id: user.id }) as MiRemoteUser, driveCapacity - info.size);
+ 			}
++
++			for (const [usage, capacityMb] of await Promise.all(policies.driveUploadBandwidthDurationHrCapacityMbPairs.map(([durationHr, capacityMb]) => Promise.all([this.driveFileEntityService.calcDriveBandwidthOf(user, durationHr), capacityMb])))) {
++				if (capacityMb * 1024 * 1024 < usage + info.size) {
++					throw new IdentifiableError('c6244ed2-a39a-4e1c-bf93-f0fbd7764fa6', 'No free bandwidth.');
++				}
++			}
+ 		}
+ 		//#endregion
+ 
+@@ -648,6 +658,14 @@ export class DriveService {
+ 		if (file.userHost == null) {
+ 			// ローカルユーザーのみ
+ 			this.perUserDriveChart.update(file, true);
++
++			if (user) {
++				const key = `driveubh:${user.id}`;
++				this.redisClient.multi()
++					.incrby(key, info.size)
++					.expireat(key, (Math.floor(Date.now() / 36e5) + 1) * 36e2)
++					.exec();
++			}
+ 		} else {
+ 			if (this.meta.enableChartsForFederatedInstances) {
+ 				this.instanceChart.updateDrive(file, true);
+diff --git a/packages/backend/src/core/RoleService.ts b/packages/backend/src/core/RoleService.ts
+index 5af6b05942..412fe7e52f 100644
+--- a/packages/backend/src/core/RoleService.ts
++++ b/packages/backend/src/core/RoleService.ts
+@@ -5,12 +5,13 @@
+ 
+ import { Inject, Injectable } from '@nestjs/common';
+ import * as Redis from 'ioredis';
+-import { In } from 'typeorm';
++import { Brackets, In, NotBrackets } from 'typeorm';
+ import { ModuleRef } from '@nestjs/core';
+ import type {
+ 	MiMeta,
+ 	MiRole,
+ 	MiRoleAssignment,
++	MiUserProfile,
+ 	RoleAssignmentsRepository,
+ 	RolesRepository,
+ 	UsersRepository,
+@@ -26,10 +27,12 @@ import type { GlobalEvents } from '@/core/GlobalEventService.js';
+ import { GlobalEventService } from '@/core/GlobalEventService.js';
+ import { IdService } from '@/core/IdService.js';
+ import { ModerationLogService } from '@/core/ModerationLogService.js';
++import { QueryService } from '@/core/QueryService.js';
+ import type { Packed } from '@/misc/json-schema.js';
+ import { FanoutTimelineService } from '@/core/FanoutTimelineService.js';
+ import { NotificationService } from '@/core/NotificationService.js';
+ import type { OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
++import type { WhereExpressionBuilder } from 'typeorm';
+ 
+ export type RolePolicies = {
+ 	gtlAvailable: boolean;
+@@ -42,10 +45,13 @@ export type RolePolicies = {
+ 	inviteExpirationTime: number;
+ 	canManageCustomEmojis: boolean;
+ 	canManageAvatarDecorations: boolean;
++	canManageAds: boolean;
+ 	canSearchNotes: boolean;
+ 	canUseTranslator: boolean;
+ 	canHideAds: boolean;
+ 	driveCapacityMb: number;
++	driveUploadBandwidthDurationHrCapacityMbPairs: [durationHr: number, capacityMb: number][];
++	selfAssignability: [roleTag: string, isUnassignable: boolean, maximumAssigns: number][];
+ 	alwaysMarkNsfw: boolean;
+ 	canUpdateBioMedia: boolean;
+ 	pinLimit: number;
+@@ -76,10 +82,13 @@ export const DEFAULT_POLICIES: RolePolicies = {
+ 	inviteExpirationTime: 0,
+ 	canManageCustomEmojis: false,
+ 	canManageAvatarDecorations: false,
++	canManageAds: false,
+ 	canSearchNotes: false,
+ 	canUseTranslator: true,
+ 	canHideAds: false,
+ 	driveCapacityMb: 100,
++	driveUploadBandwidthDurationHrCapacityMbPairs: [],
++	selfAssignability: [],
+ 	alwaysMarkNsfw: false,
+ 	canUpdateBioMedia: true,
+ 	pinLimit: 5,
+@@ -131,6 +140,7 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 		private roleAssignmentsRepository: RoleAssignmentsRepository,
+ 
+ 		private cacheService: CacheService,
++		private queryService: QueryService,
+ 		private userEntityService: UserEntityService,
+ 		private globalEventService: GlobalEventService,
+ 		private idService: IdService,
+@@ -213,20 +223,20 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 	}
+ 
+ 	@bindThis
+-	private evalCond(user: MiUser, roles: MiRole[], value: RoleCondFormulaValue): boolean {
++	private evalCond(user: MiUser, userProfile: MiUserProfile, roles: MiRole[], value: RoleCondFormulaValue): boolean {
+ 		try {
+ 			switch (value.type) {
+ 				// ～かつ～
+ 				case 'and': {
+-					return value.values.every(v => this.evalCond(user, roles, v));
++					return value.values.every(v => this.evalCond(user, userProfile, roles, v));
+ 				}
+ 				// ～または～
+ 				case 'or': {
+-					return value.values.some(v => this.evalCond(user, roles, v));
++					return value.values.some(v => this.evalCond(user, userProfile, roles, v));
+ 				}
+ 				// ～ではない
+ 				case 'not': {
+-					return !this.evalCond(user, roles, value.value);
++					return !this.evalCond(user, userProfile, roles, value.value);
+ 				}
+ 				// マニュアルロールがアサインされている
+ 				case 'roleAssignedTo': {
+@@ -260,6 +270,15 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 				case 'isExplorable': {
+ 					return user.isExplorable;
+ 				}
++				case 'isEmailVerified': {
++					return userProfile.emailVerified;
++				}
++				case 'isTwoFactorEnabled': {
++					return userProfile.twoFactorEnabled;
++				}
++				case 'isPasswordLessLoginEnabled': {
++					return userProfile.usePasswordLessLogin;
++				}
+ 				// ユーザが作成されてから指定期間経過した
+ 				case 'createdLessThan': {
+ 					return this.idService.parse(user.id).date.getTime() > (Date.now() - (value.sec * 1000));
+@@ -301,12 +320,77 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 		}
+ 	}
+ 
++	@bindThis
++	private buildConditionalPredicate<T extends WhereExpressionBuilder>(query: T, formula: RoleCondFormulaValue, date: Date): T {
++		const id = 'formula' + formula.id.replace(/[^\da-f]/g, '');
++		switch (formula.type) {
++			case 'and':
++				return query.andWhere(new Brackets(qb => {
++					for (const value of formula.values) {
++						this.buildConditionalPredicate(qb, value, date);
++					}
++				}));
++			case 'or':
++				return query.andWhere(new Brackets(qb => {
++					for (const value of formula.values) {
++						qb.orWhere(new Brackets(qb => this.buildConditionalPredicate(qb, value, date)));
++					}
++				}));
++			case 'not':
++				return query.andWhere(new NotBrackets(qb => this.buildConditionalPredicate(qb, formula.value, date)));
++			case 'isLocal':
++				return query.andWhere('user.host IS NULL');
++			case 'isRemote':
++				return query.andWhere('user.host IS NOT NULL');
++			case 'roleAssignedTo':
++				return query.andWhere(`EXISTS (SELECT 0 FROM role_assignment WHERE role_assignment."userId" = user.id AND role_assignment."roleId" = :${id})`, { [id]: formula.roleId });
++			case 'isSuspended':
++				return query.andWhere('user.isSuspended');
++			case 'isLocked':
++				return query.andWhere('user.isLocked');
++			case 'isBot':
++				return query.andWhere('user.isBot');
++			case 'isCat':
++				return query.andWhere('user.isCat');
++			case 'isExplorable':
++				return query.andWhere('user.isExplorable');
++			case 'isEmailVerified':
++				return query.andWhere('user_profile.emailVerified');
++			case 'isTwoFactorEnabled':
++				return query.andWhere('user_profile.twoFactorEnabled');
++			case 'isPasswordLessLoginEnabled':
++				return query.andWhere('user_profile.usePasswordLessLogin');
++			case 'createdLessThan':
++				return query.andWhere(`user.id > :${id}`, { [id]: this.idService.gen(date.valueOf() - formula.sec * 1000, true) });
++			case 'createdMoreThan':
++				return query.andWhere(`user.id < :${id}`, { [id]: this.idService.gen(date.valueOf() - formula.sec * 1000, true) });
++			case 'followersLessThanOrEq':
++				return query.andWhere(`user.followersCount <= :${id}`, { [id]: formula.value });
++			case 'followersMoreThanOrEq':
++				return query.andWhere(`user.followersCount >= :${id}`, { [id]: formula.value });
++			case 'followingLessThanOrEq':
++				return query.andWhere(`user.followingCount <= :${id}`, { [id]: formula.value });
++			case 'followingMoreThanOrEq':
++				return query.andWhere(`user.followingCount >= :${id}`, { [id]: formula.value });
++			case 'notesLessThanOrEq':
++				return query.andWhere(`user.notesCount <= :${id}`, { [id]: formula.value });
++			case 'notesMoreThanOrEq':
++				return query.andWhere(`user.notesCount >= :${id}`, { [id]: formula.value });
++		}
++	}
++
+ 	@bindThis
+ 	public async getRoles() {
+ 		const roles = await this.rolesCache.fetch(() => this.rolesRepository.findBy({}));
+ 		return roles;
+ 	}
+ 
++	@bindThis
++	public async getRole(id: MiRole['id']) {
++		const roles = await this.getRoles();
++		return roles.find(r => r.id === id) ?? null;
++	}
++
+ 	@bindThis
+ 	public async getUserAssigns(userId: MiUser['id']) {
+ 		const now = Date.now();
+@@ -316,13 +400,106 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 		return assigns;
+ 	}
+ 
++	@bindThis
++	private getManualRoleAssignQuery(role: MiRole) {
++		return this.roleAssignmentsRepository.createQueryBuilder('assign')
++			.andWhere('assign.roleId = :roleId', { roleId: role.id })
++			.andWhere(new Brackets(qb => {
++				qb
++					.where('assign.expiresAt IS NULL')
++					.orWhere('assign.expiresAt > :now', { now: new Date() });
++			}))
++			.innerJoinAndSelect('assign.user', 'user');
++	}
++
++	@bindThis
++	private getConditionalRoleAssignQuery(role: MiRole) {
++		return this.buildConditionalPredicate(this.usersRepository.createQueryBuilder('user'), role.condFormula, new Date())
++			.innerJoinAndSelect('user_profile', 'user_profile', 'user.id = user_profile.userId');
++	}
++
++	@bindThis
++	public async getRoleAssigns(roleId: MiRole['id'], sinceId?: MiUser['id'], untilId?: MiUser['id'], limit?: number): Promise<MiRoleAssignment[] | null> {
++		const role = await this.getRole(roleId);
++		if (role == null) return null;
++		switch (role.target) {
++			case 'manual': {
++				return await this.queryService.makePaginationQuery(this.getManualRoleAssignQuery(role), sinceId, untilId)
++					.limit(limit)
++					.getMany();
++			}
++			case 'conditional': {
++				const assignments = await this.queryService.makePaginationQuery(this.getConditionalRoleAssignQuery(role), sinceId, untilId)
++					.limit(limit)
++					.getMany();
++				return assignments.map(user => ({
++					id: user.id,
++					userId: user.id,
++					user,
++					roleId: role.id,
++					role,
++					expiresAt: null,
++				}));
++			}
++		}
++	}
++
++	@bindThis
++	public async getRoleAssignCount(roleId: MiRole['id']): Promise<number> {
++		const role = await this.getRole(roleId);
++		if (role == null) return 0;
++		switch (role.target) {
++			case 'manual': {
++				return await this.getManualRoleAssignQuery(role).getCount();
++			}
++			case 'conditional': {
++				return await this.getConditionalRoleAssignQuery(role).getCount();
++			}
++		}
++	}
++
++	@bindThis
++	public async canSelfAssign(userId: MiUser['id'], roleId: MiRole['id']) {
++		const role = await this.getRole(roleId);
++		if (role?.target !== 'manual' || role.isAdministrator || role.isModerator) return false;
++		const roles = await this.getUserRoles(userId);
++		const policies = await this.getUserPolicies(userId);
++		for (const [roleTag, , maximumAssigns] of policies.selfAssignability) {
++			if (role.tags.includes(roleTag) && roles.filter(r => r.tags.includes(roleTag)).length < maximumAssigns) return true;
++		}
++		return false;
++	}
++
++	@bindThis
++	public async canSelfUnassign(userId: MiUser['id'], roleId: MiRole['id']) {
++		const role = await this.getRole(roleId);
++		if (role?.target !== 'manual') return false;
++		const policies = await this.getUserPolicies(userId);
++		for (const [roleTag, isUnassignable] of policies.selfAssignability) {
++			if (role.tags.includes(roleTag) && isUnassignable) return true;
++		}
++		return false;
++	}
++
++	@bindThis
++	private hasSpecificCondFormula(condFormula: RoleCondFormulaValue, ...types: readonly Omit<RoleCondFormulaValue['type'], 'and' | 'or' | 'not'>[]): boolean {
++		if (condFormula.type === 'and' || condFormula.type === 'or') {
++			return condFormula.values.some((value) => this.hasSpecificCondFormula(value, ...types));
++		}
++		if (condFormula.type === 'not') {
++			return this.hasSpecificCondFormula(condFormula.value, ...types);
++		}
++		return types.some((type) => condFormula.type === type);
++	}
++
+ 	@bindThis
+ 	public async getUserRoles(userId: MiUser['id']) {
+ 		const roles = await this.rolesCache.fetch(() => this.rolesRepository.findBy({}));
+ 		const assigns = await this.getUserAssigns(userId);
+ 		const assignedRoles = roles.filter(r => assigns.map(x => x.roleId).includes(r.id));
+ 		const user = roles.some(r => r.target === 'conditional') ? await this.cacheService.findUserById(userId) : null;
+-		const matchedCondRoles = roles.filter(r => r.target === 'conditional' && this.evalCond(user!, assignedRoles, r.condFormula));
++		const userProfile = roles.some(r => r.target === 'conditional' && this.hasSpecificCondFormula(r.condFormula, 'isEmailVerified', 'isTwoFactorEnabled', 'isPasswordLessLoginEnabled')) && await this.cacheService.userProfileCache.get(userId) || null;
++		const matchedCondRoles = roles.filter(r => r.target === 'conditional' && this.evalCond(user!, userProfile!, assignedRoles, r.condFormula));
+ 		return [...assignedRoles, ...matchedCondRoles];
+ 	}
+ 
+@@ -341,7 +518,8 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 		const badgeCondRoles = roles.filter(r => r.asBadge && (r.target === 'conditional'));
+ 		if (badgeCondRoles.length > 0) {
+ 			const user = roles.some(r => r.target === 'conditional') ? await this.cacheService.findUserById(userId) : null;
+-			const matchedBadgeCondRoles = badgeCondRoles.filter(r => this.evalCond(user!, assignedRoles, r.condFormula));
++			const userProfile = roles.some(r => r.target === 'conditional' && this.hasSpecificCondFormula(r.condFormula, 'isEmailVerified', 'isTwoFactorEnabled', 'isPasswordLessLoginEnabled')) && await this.cacheService.userProfileCache.get(userId) || null;
++			const matchedBadgeCondRoles = badgeCondRoles.filter(r => this.evalCond(user!, userProfile!, assignedRoles, r.condFormula));
+ 			return [...assignedBadgeRoles, ...matchedBadgeCondRoles];
+ 		} else {
+ 			return assignedBadgeRoles;
+@@ -381,10 +559,13 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 			inviteExpirationTime: calc('inviteExpirationTime', vs => Math.max(...vs)),
+ 			canManageCustomEmojis: calc('canManageCustomEmojis', vs => vs.some(v => v === true)),
+ 			canManageAvatarDecorations: calc('canManageAvatarDecorations', vs => vs.some(v => v === true)),
++			canManageAds: calc('canManageAds', vs => vs.some(v => v === true)),
+ 			canSearchNotes: calc('canSearchNotes', vs => vs.some(v => v === true)),
+ 			canUseTranslator: calc('canUseTranslator', vs => vs.some(v => v === true)),
+ 			canHideAds: calc('canHideAds', vs => vs.some(v => v === true)),
+ 			driveCapacityMb: calc('driveCapacityMb', vs => Math.max(...vs)),
++			driveUploadBandwidthDurationHrCapacityMbPairs: calc('driveUploadBandwidthDurationHrCapacityMbPairs', vs => vs.flat()),
++			selfAssignability: calc('selfAssignability', vs => vs.flat()),
+ 			alwaysMarkNsfw: calc('alwaysMarkNsfw', vs => vs.some(v => v === true)),
+ 			canUpdateBioMedia: calc('canUpdateBioMedia', vs => vs.some(v => v === true)),
+ 			pinLimit: calc('pinLimit', vs => Math.max(...vs)),
+@@ -406,13 +587,13 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 	}
+ 
+ 	@bindThis
+-	public async isModerator(user: { id: MiUser['id']; isRoot: MiUser['isRoot'] } | null): Promise<boolean> {
++	public async isModerator(user: { id: MiUser['id']; isRoot?: MiUser['isRoot'] } | null): Promise<boolean> {
+ 		if (user == null) return false;
+ 		return user.isRoot || (await this.getUserRoles(user.id)).some(r => r.isModerator || r.isAdministrator);
+ 	}
+ 
+ 	@bindThis
+-	public async isAdministrator(user: { id: MiUser['id']; isRoot: MiUser['isRoot'] } | null): Promise<boolean> {
++	public async isAdministrator(user: { id: MiUser['id']; isRoot?: MiUser['isRoot'] } | null): Promise<boolean> {
+ 		if (user == null) return false;
+ 		return user.isRoot || (await this.getUserRoles(user.id)).some(r => r.isAdministrator);
+ 	}
+diff --git a/packages/backend/src/core/entities/DriveFileEntityService.ts b/packages/backend/src/core/entities/DriveFileEntityService.ts
+index c485555f90..cd2420eccb 100644
+--- a/packages/backend/src/core/entities/DriveFileEntityService.ts
++++ b/packages/backend/src/core/entities/DriveFileEntityService.ts
+@@ -4,7 +4,8 @@
+  */
+ 
+ import { forwardRef, Inject, Injectable } from '@nestjs/common';
+-import { In } from 'typeorm';
++import * as Redis from 'ioredis';
++import { DataSource, In, Repository } from 'typeorm';
+ import { DI } from '@/di-symbols.js';
+ import type { DriveFilesRepository } from '@/models/_.js';
+ import type { Config } from '@/config.js';
+@@ -30,10 +31,18 @@ type PackOptions = {
+ 
+ @Injectable()
+ export class DriveFileEntityService {
++	private chartPerUserDrivesRepository: Repository<never>;
++
+ 	constructor(
+ 		@Inject(DI.config)
+ 		private config: Config,
+ 
++		@Inject(DI.db)
++		private db: DataSource,
++
++		@Inject(DI.redis)
++		private redisClient: Redis.Redis,
++
+ 		@Inject(DI.driveFilesRepository)
+ 		private driveFilesRepository: DriveFilesRepository,
+ 
+@@ -46,6 +55,7 @@ export class DriveFileEntityService {
+ 		private videoProcessingService: VideoProcessingService,
+ 		private idService: IdService,
+ 	) {
++		this.chartPerUserDrivesRepository = db.getRepository('__chart__per_user_drive');
+ 	}
+ 
+ 	@bindThis
+@@ -147,6 +157,22 @@ export class DriveFileEntityService {
+ 		return parseInt(sum, 10) || 0;
+ 	}
+ 
++	@bindThis
++	public async calcDriveBandwidthOf(user: MiUser['id'] | { id: MiUser['id'] }, durationHr: number): Promise<number> {
++		const id = typeof user === 'object' ? user.id : user;
++
++		const { sum } = await this.chartPerUserDrivesRepository
++			.createQueryBuilder('chart')
++			.where('chart.group = :id', { id })
++			.andWhere('chart.date >= :date', { date: Math.floor(Date.now() / 36e5 - durationHr) * 36e2 })
++			.select('SUM(chart.___incSize)', 'sum')
++			.getRawOne();
++
++		const add = await this.redisClient.get(`driveubh:${id}`);
++
++		return parseInt(sum || '0', 10) * 1024 + parseInt(add || '0', 10);
++	}
++
+ 	@bindThis
+ 	public async calcDriveUsageOfHost(host: string): Promise<number> {
+ 		const { sum } = await this.driveFilesRepository
+diff --git a/packages/backend/src/core/entities/RoleEntityService.ts b/packages/backend/src/core/entities/RoleEntityService.ts
+index 2a7dc37bce..34141531ac 100644
+--- a/packages/backend/src/core/entities/RoleEntityService.ts
++++ b/packages/backend/src/core/entities/RoleEntityService.ts
+@@ -4,14 +4,13 @@
+  */
+ 
+ import { Inject, Injectable } from '@nestjs/common';
+-import { Brackets } from 'typeorm';
+ import { DI } from '@/di-symbols.js';
+-import type { RoleAssignmentsRepository, RolesRepository } from '@/models/_.js';
++import type { RolesRepository } from '@/models/_.js';
+ import { awaitAll } from '@/misc/prelude/await-all.js';
+ import type { MiUser } from '@/models/User.js';
+ import type { MiRole } from '@/models/Role.js';
+ import { bindThis } from '@/decorators.js';
+-import { DEFAULT_POLICIES } from '@/core/RoleService.js';
++import { DEFAULT_POLICIES, RoleService } from '@/core/RoleService.js';
+ import { IdService } from '@/core/IdService.js';
+ 
+ @Injectable()
+@@ -20,9 +19,7 @@ export class RoleEntityService {
+ 		@Inject(DI.rolesRepository)
+ 		private rolesRepository: RolesRepository,
+ 
+-		@Inject(DI.roleAssignmentsRepository)
+-		private roleAssignmentsRepository: RoleAssignmentsRepository,
+-
++		private roleService: RoleService,
+ 		private idService: IdService,
+ 	) {
+ 	}
+@@ -34,14 +31,7 @@ export class RoleEntityService {
+ 	) {
+ 		const role = typeof src === 'object' ? src : await this.rolesRepository.findOneByOrFail({ id: src });
+ 
+-		const assignedCount = await this.roleAssignmentsRepository.createQueryBuilder('assign')
+-			.where('assign.roleId = :roleId', { roleId: role.id })
+-			.andWhere(new Brackets(qb => {
+-				qb
+-					.where('assign.expiresAt IS NULL')
+-					.orWhere('assign.expiresAt > :now', { now: new Date() });
+-			}))
+-			.getCount();
++		const assignedCount = await this.roleService.getRoleAssignCount(role.id);
+ 
+ 		const policies = { ...role.policies };
+ 		for (const [k, v] of Object.entries(DEFAULT_POLICIES)) {
+@@ -58,6 +48,7 @@ export class RoleEntityService {
+ 			updatedAt: role.updatedAt.toISOString(),
+ 			name: role.name,
+ 			description: role.description,
++			tags: role.tags,
+ 			color: role.color,
+ 			iconUrl: role.iconUrl,
+ 			target: role.target,
+diff --git a/packages/backend/src/models/Role.ts b/packages/backend/src/models/Role.ts
+index a173971b2c..4ac10f072d 100644
+--- a/packages/backend/src/models/Role.ts
++++ b/packages/backend/src/models/Role.ts
+@@ -90,6 +90,27 @@ type CondFormulaValueIsExplorable = {
+ 	type: 'isExplorable';
+ };
+ 
++/**
++ * メールアドレスが認証済みの場合のみ成立とする
++ */
++type CondFormulaValueIsEmailVerified = {
++	type: 'isEmailVerified';
++};
++
++/**
++ * 2FAを有効にしている場合のみ成立とする
++ */
++type CondFormulaValueIsTwoFactorEnabled = {
++	type: 'isTwoFactorEnabled';
++};
++
++/**
++ * パスワードレスログインを有効にしている場合のみ成立とする
++ */
++type CondFormulaValueIsPasswordLessLoginEnabled = {
++	type: 'isPasswordLessLoginEnabled';
++};
++
+ /**
+  * ユーザが作成されてから指定期間経過した場合のみ成立とする
+  */
+@@ -165,6 +186,9 @@ export type RoleCondFormulaValue = { id: string } & (
+ 	CondFormulaValueIsBot |
+ 	CondFormulaValueIsCat |
+ 	CondFormulaValueIsExplorable |
++	CondFormulaValueIsEmailVerified |
++	CondFormulaValueIsTwoFactorEnabled |
++	CondFormulaValueIsPasswordLessLoginEnabled |
+ 	CondFormulaValueRoleAssignedTo |
+ 	CondFormulaValueCreatedLessThan |
+ 	CondFormulaValueCreatedMoreThan |
+@@ -201,6 +225,11 @@ export class MiRole {
+ 	})
+ 	public description: string;
+ 
++	@Column('varchar', {
++		length: 256, array: true, default: '{}',
++	})
++	public tags: string[];
++
+ 	@Column('varchar', {
+ 		length: 256, nullable: true,
+ 	})
+diff --git a/packages/backend/src/models/json-schema/role.ts b/packages/backend/src/models/json-schema/role.ts
+index 3537de94c8..1b9ca522d9 100644
+--- a/packages/backend/src/models/json-schema/role.ts
++++ b/packages/backend/src/models/json-schema/role.ts
+@@ -66,7 +66,7 @@ export const packedRoleCondFormulaValueUserSettingBooleanSchema = {
+ 		type: {
+ 			type: 'string',
+ 			nullable: false, optional: false,
+-			enum: ['isSuspended', 'isLocked', 'isBot', 'isCat', 'isExplorable'],
++			enum: ['isSuspended', 'isLocked', 'isBot', 'isCat', 'isExplorable', 'isEmailVerified', 'isTwoFactorEnabled', 'isPasswordLessLoginEnabled'],
+ 		},
+ 	},
+ } as const;
+@@ -208,6 +208,10 @@ export const packedRolePoliciesSchema = {
+ 			type: 'boolean',
+ 			optional: false, nullable: false,
+ 		},
++		canManageAds: {
++			type: 'boolean',
++			optional: false, nullable: false,
++		},
+ 		canSearchNotes: {
+ 			type: 'boolean',
+ 			optional: false, nullable: false,
+@@ -224,6 +228,25 @@ export const packedRolePoliciesSchema = {
+ 			type: 'integer',
+ 			optional: false, nullable: false,
+ 		},
++		driveUploadBandwidthDurationHrCapacityMbPairs: {
++			type: 'array',
++			optional: false, nullable: false,
++			items: {
++				type: 'array',
++				optional: false, nullable: false,
++				prefixItems: [
++					{
++						type: 'integer',
++						optional: false, nullable: false,
++					},
++					{
++						type: 'integer',
++						optional: false, nullable: false,
++					},
++				],
++				items: false,
++			},
++		},
+ 		alwaysMarkNsfw: {
+ 			type: 'boolean',
+ 			optional: false, nullable: false,
+diff --git a/packages/backend/src/server/api/endpoints/admin/roles/assign.ts b/packages/backend/src/server/api/endpoints/admin/roles/assign.ts
+index b6c7953781..056ee8fdd8 100644
+--- a/packages/backend/src/server/api/endpoints/admin/roles/assign.ts
++++ b/packages/backend/src/server/api/endpoints/admin/roles/assign.ts
+@@ -14,7 +14,6 @@ export const meta = {
+ 	tags: ['admin', 'role'],
+ 
+ 	requireCredential: true,
+-	requireModerator: true,
+ 	kind: 'write:admin:roles',
+ 
+ 	errors: {
+@@ -71,7 +70,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				throw new ApiError(meta.errors.noSuchRole);
+ 			}
+ 
+-			if (!role.canEditMembersByModerator && !(await this.roleService.isAdministrator(me))) {
++			if (!(role.canEditMembersByModerator ? await this.roleService.isModerator(me) : await this.roleService.isAdministrator(me)) && (me.id !== ps.userId || !(await this.roleService.canSelfAssign(ps.userId, ps.roleId)) || ps.expiresAt && !(await this.roleService.canSelfUnassign(ps.userId, ps.roleId)))) {
+ 				throw new ApiError(meta.errors.accessDenied);
+ 			}
+ 
+diff --git a/packages/backend/src/server/api/endpoints/admin/roles/list.ts b/packages/backend/src/server/api/endpoints/admin/roles/list.ts
+index 333fac6aa6..e1d581a112 100644
+--- a/packages/backend/src/server/api/endpoints/admin/roles/list.ts
++++ b/packages/backend/src/server/api/endpoints/admin/roles/list.ts
+@@ -8,12 +8,12 @@ import { Endpoint } from '@/server/api/endpoint-base.js';
+ import type { RolesRepository } from '@/models/_.js';
+ import { DI } from '@/di-symbols.js';
+ import { RoleEntityService } from '@/core/entities/RoleEntityService.js';
++import { RoleService } from '@/core/RoleService.js';
+ 
+ export const meta = {
+ 	tags: ['admin', 'role'],
+ 
+ 	requireCredential: true,
+-	requireModerator: true,
+ 	kind: 'read:admin:roles',
+ 
+ 	res: {
+@@ -42,12 +42,22 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 		private rolesRepository: RolesRepository,
+ 
+ 		private roleEntityService: RoleEntityService,
++		private roleService: RoleService,
+ 	) {
+ 		super(meta, paramDef, async (ps, me) => {
+-			const roles = await this.rolesRepository.find({
+-				order: { lastUsedAt: 'DESC' },
+-			});
+-			return await this.roleEntityService.packMany(roles, me);
++			if (await this.roleService.isModerator(me)) {
++				const roles = await this.rolesRepository.find({
++					order: { lastUsedAt: 'DESC' },
++				});
++				return await this.roleEntityService.packMany(roles, me);
++			} else {
++				const policies = await this.roleService.getUserPolicies(me.id);
++				const roles = await this.rolesRepository.createQueryBuilder('r')
++					.where('r.tags && :tags', { tags: policies.selfAssignability.map(([roleTag]) => roleTag) })
++					.orderBy('r.lastUsedAt', 'DESC')
++					.getMany();
++				return await this.roleEntityService.packMany(roles, me);
++			}
+ 		});
+ 	}
+ }
+diff --git a/packages/backend/src/server/api/endpoints/admin/roles/show.ts b/packages/backend/src/server/api/endpoints/admin/roles/show.ts
+index 13e5cbb995..df40f27a18 100644
+--- a/packages/backend/src/server/api/endpoints/admin/roles/show.ts
++++ b/packages/backend/src/server/api/endpoints/admin/roles/show.ts
+@@ -9,12 +9,12 @@ import type { RolesRepository } from '@/models/_.js';
+ import { DI } from '@/di-symbols.js';
+ import { ApiError } from '@/server/api/error.js';
+ import { RoleEntityService } from '@/core/entities/RoleEntityService.js';
++import { RoleService } from '@/core/RoleService.js';
+ 
+ export const meta = {
+ 	tags: ['admin', 'role'],
+ 
+ 	requireCredential: true,
+-	requireModerator: true,
+ 	kind: 'read:admin:roles',
+ 
+ 	errors: {
+@@ -49,13 +49,26 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 		private rolesRepository: RolesRepository,
+ 
+ 		private roleEntityService: RoleEntityService,
++		private roleService: RoleService,
+ 	) {
+ 		super(meta, paramDef, async (ps, me) => {
+-			const role = await this.rolesRepository.findOneBy({ id: ps.roleId });
+-			if (role == null) {
+-				throw new ApiError(meta.errors.noSuchRole);
++			if (await this.roleService.isModerator(me)) {
++				const role = await this.rolesRepository.findOneBy({ id: ps.roleId });
++				if (role == null) {
++					throw new ApiError(meta.errors.noSuchRole);
++				}
++				return await this.roleEntityService.pack(role, me);
++			} else {
++				const policies = await this.roleService.getUserPolicies(me.id);
++				const role = await this.rolesRepository.createQueryBuilder('r')
++					.where('r.id = :id')
++					.andWhere('r.tags && :tags', { id: ps.roleId, tags: policies.selfAssignability.map(([roleTag]) => roleTag) })
++					.getOne();
++				if (role == null) {
++					throw new ApiError(meta.errors.noSuchRole);
++				}
++				return await this.roleEntityService.pack(role, me);
+ 			}
+-			return await this.roleEntityService.pack(role, me);
+ 		});
+ 	}
+ }
+diff --git a/packages/backend/src/server/api/endpoints/admin/roles/unassign.ts b/packages/backend/src/server/api/endpoints/admin/roles/unassign.ts
+index e7da3384b1..a0be3398eb 100644
+--- a/packages/backend/src/server/api/endpoints/admin/roles/unassign.ts
++++ b/packages/backend/src/server/api/endpoints/admin/roles/unassign.ts
+@@ -14,7 +14,6 @@ export const meta = {
+ 	tags: ['admin', 'role'],
+ 
+ 	requireCredential: true,
+-	requireModerator: true,
+ 	kind: 'write:admin:roles',
+ 
+ 	errors: {
+@@ -73,7 +72,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				throw new ApiError(meta.errors.noSuchRole);
+ 			}
+ 
+-			if (!role.canEditMembersByModerator && !(await this.roleService.isAdministrator(me))) {
++			if (!(role.canEditMembersByModerator ? await this.roleService.isModerator(me) : await this.roleService.isAdministrator(me)) && (me.id !== ps.userId || !(await this.roleService.canSelfUnassign(ps.userId, ps.roleId)))) {
+ 				throw new ApiError(meta.errors.accessDenied);
+ 			}
+ 
+diff --git a/packages/backend/src/server/api/endpoints/admin/roles/users.ts b/packages/backend/src/server/api/endpoints/admin/roles/users.ts
+index 198166bec2..fb3a6fe905 100644
+--- a/packages/backend/src/server/api/endpoints/admin/roles/users.ts
++++ b/packages/backend/src/server/api/endpoints/admin/roles/users.ts
+@@ -4,13 +4,12 @@
+  */
+ 
+ import { Inject, Injectable } from '@nestjs/common';
+-import { Brackets } from 'typeorm';
+-import type { RoleAssignmentsRepository, RolesRepository } from '@/models/_.js';
++import type { RolesRepository } from '@/models/_.js';
+ import { Endpoint } from '@/server/api/endpoint-base.js';
+-import { QueryService } from '@/core/QueryService.js';
+ import { DI } from '@/di-symbols.js';
+ import { UserEntityService } from '@/core/entities/UserEntityService.js';
+ import { IdService } from '@/core/IdService.js';
++import { RoleService } from '@/core/RoleService.js';
+ import { ApiError } from '../../../error.js';
+ 
+ export const meta = {
+@@ -60,35 +59,17 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 		@Inject(DI.rolesRepository)
+ 		private rolesRepository: RolesRepository,
+ 
+-		@Inject(DI.roleAssignmentsRepository)
+-		private roleAssignmentsRepository: RoleAssignmentsRepository,
+-
+-		private queryService: QueryService,
++		private roleService: RoleService,
+ 		private userEntityService: UserEntityService,
+ 		private idService: IdService,
+ 	) {
+ 		super(meta, paramDef, async (ps, me) => {
+-			const role = await this.rolesRepository.findOneBy({
+-				id: ps.roleId,
+-			});
++			const assigns = await this.roleService.getRoleAssigns(ps.roleId, ps.sinceId, ps.untilId, ps.limit);
+ 
+-			if (role == null) {
++			if (assigns == null) {
+ 				throw new ApiError(meta.errors.noSuchRole);
+ 			}
+ 
+-			const query = this.queryService.makePaginationQuery(this.roleAssignmentsRepository.createQueryBuilder('assign'), ps.sinceId, ps.untilId)
+-				.andWhere('assign.roleId = :roleId', { roleId: role.id })
+-				.andWhere(new Brackets(qb => {
+-					qb
+-						.where('assign.expiresAt IS NULL')
+-						.orWhere('assign.expiresAt > :now', { now: new Date() });
+-				}))
+-				.innerJoinAndSelect('assign.user', 'user');
+-
+-			const assigns = await query
+-				.limit(ps.limit)
+-				.getMany();
+-
+ 			const _users = assigns.map(({ user, userId }) => user ?? userId);
+ 			const _userMap = await this.userEntityService.packMany(_users, me, { schema: 'UserDetailed' })
+ 				.then(users => new Map(users.map(u => [u.id, u])));
+diff --git a/packages/backend/src/server/api/endpoints/drive.ts b/packages/backend/src/server/api/endpoints/drive.ts
+index eb45e29f9e..55ee4aa636 100644
+--- a/packages/backend/src/server/api/endpoints/drive.ts
++++ b/packages/backend/src/server/api/endpoints/drive.ts
+@@ -27,6 +27,28 @@ export const meta = {
+ 				type: 'number',
+ 				optional: false, nullable: false,
+ 			},
++			uploadBandwidths: {
++				type: 'array',
++				optional: false, nullable: false,
++				items: {
++					type: 'object',
++					optional: false, nullable: false,
++					properties: {
++						duration: {
++							type: 'number',
++							optional: false, nullable: false,
++						},
++						capacity: {
++							type: 'number',
++							optional: false, nullable: false,
++						},
++						usage: {
++							type: 'number',
++							optional: false, nullable: false,
++						},
++					},
++				},
++			},
+ 		},
+ 	},
+ } as const;
+@@ -44,13 +66,20 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 		private roleService: RoleService,
+ 	) {
+ 		super(meta, paramDef, async (ps, me) => {
+-			const usage = await this.driveFileEntityService.calcDriveUsageOf(me.id);
+-
+-			const policies = await this.roleService.getUserPolicies(me.id);
++			// Calculate drive usage
++			const [usage, policies] = await Promise.all([
++				this.driveFileEntityService.calcDriveUsageOf(me.id),
++				this.roleService.getUserPolicies(me.id),
++			]);
+ 
+ 			return {
+ 				capacity: 1024 * 1024 * policies.driveCapacityMb,
+-				usage: usage,
++				uploadBandwidths: await Promise.all(policies.driveUploadBandwidthDurationHrCapacityMbPairs.map(async ([duration, capacity]) => ({
++					duration: duration * 36e5,
++					capacity: capacity * 1024 * 1024,
++					usage: await this.driveFileEntityService.calcDriveBandwidthOf(me.id, duration),
++				}))),
++				usage,
+ 			};
+ 		});
+ 	}
+diff --git a/packages/frontend-shared/js/const.ts b/packages/frontend-shared/js/const.ts
+index 9e20479e26..5a01867258 100644
+--- a/packages/frontend-shared/js/const.ts
++++ b/packages/frontend-shared/js/const.ts
+@@ -86,10 +86,13 @@ export const ROLE_POLICIES = [
+ 	'inviteExpirationTime',
+ 	'canManageCustomEmojis',
+ 	'canManageAvatarDecorations',
++	'canManageAds',
+ 	'canSearchNotes',
+ 	'canUseTranslator',
+ 	'canHideAds',
+ 	'driveCapacityMb',
++	'driveUploadBandwidthDurationHrCapacityMbPairs',
++	'selfAssignability',
+ 	'alwaysMarkNsfw',
+ 	'canUpdateBioMedia',
+ 	'pinLimit',
+diff --git a/packages/frontend/src/components/MkRolePreview.vue b/packages/frontend/src/components/MkRolePreview.vue
+index 3f14c5b5e0..97e8ae4408 100644
+--- a/packages/frontend/src/components/MkRolePreview.vue
++++ b/packages/frontend/src/components/MkRolePreview.vue
+@@ -24,8 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			</span>
+ 			<span :class="$style.bodyName">{{ role.name }}</span>
+ 			<template v-if="detailed">
+-				<span v-if="role.target === 'manual'" :class="$style.bodyUsers">{{ role.usersCount }} users</span>
+-				<span v-else-if="role.target === 'conditional'" :class="$style.bodyUsers">? users</span>
++				<span :class="$style.bodyUsers">{{ role.usersCount }} users</span>
+ 			</template>
+ 		</div>
+ 		<div :class="$style.bodyDescription">{{ role.description }}</div>
+diff --git a/packages/frontend/src/pages/admin/RolesEditorFormula.vue b/packages/frontend/src/pages/admin/RolesEditorFormula.vue
+index 4762ef3f97..b5085fab3b 100644
+--- a/packages/frontend/src/pages/admin/RolesEditorFormula.vue
++++ b/packages/frontend/src/pages/admin/RolesEditorFormula.vue
+@@ -14,6 +14,9 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<option value="isBot">{{ i18n.ts._role._condition.isBot }}</option>
+ 			<option value="isCat">{{ i18n.ts._role._condition.isCat }}</option>
+ 			<option value="isExplorable">{{ i18n.ts._role._condition.isExplorable }}</option>
++			<option value="isEmailVerified">{{ i18n.ts._role._condition.isEmailVerified }}</option>
++			<option value="isTwoFactorEnabled">{{ i18n.ts._role._condition.isTwoFactorEnabled }}</option>
++			<option value="isPasswordLessLoginEnabled">{{ i18n.ts._role._condition.isPasswordLessLoginEnabled }}</option>
+ 			<option value="roleAssignedTo">{{ i18n.ts._role._condition.roleAssignedTo }}</option>
+ 			<option value="createdLessThan">{{ i18n.ts._role._condition.createdLessThan }}</option>
+ 			<option value="createdMoreThan">{{ i18n.ts._role._condition.createdMoreThan }}</option>
+diff --git a/packages/frontend/src/pages/admin/roles.editor.vue b/packages/frontend/src/pages/admin/roles.editor.vue
+index d05f52334e..c3f6f99358 100644
+--- a/packages/frontend/src/pages/admin/roles.editor.vue
++++ b/packages/frontend/src/pages/admin/roles.editor.vue
+@@ -298,6 +298,26 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</div>
+ 			</MkFolder>
+ 
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.canManageAds, 'canManageAds'])">
++				<template #label>{{ i18n.ts._role._options.canManageAds }}</template>
++				<template #suffix>
++					<span v-if="role.policies.canManageAds.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ role.policies.canManageAds.value ? i18n.ts.yes : i18n.ts.no }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.canManageAds)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.canManageAds.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkSwitch v-model="role.policies.canManageAds.value" :disabled="role.policies.canManageAds.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts.enable }}</template>
++					</MkSwitch>
++					<MkRange v-model="role.policies.canManageAds.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
+ 			<MkFolder v-if="matchQuery([i18n.ts._role._options.canSearchNotes, 'canSearchNotes'])">
+ 				<template #label>{{ i18n.ts._role._options.canSearchNotes }}</template>
+ 				<template #suffix>
+@@ -358,6 +378,42 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</div>
+ 			</MkFolder>
+ 
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.driveUploadBandwidth, 'driveUploadBandwidthDurationHrCapacityMbPairs'])">
++				<template #label>{{ i18n.ts._role._options.driveUploadBandwidth }}</template>
++				<template #suffix>
++					<span v-if="role.policies.driveUploadBandwidthDurationHrCapacityMbPairs.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ JSON.stringify(role.policies.driveUploadBandwidthDurationHrCapacityMbPairs.value) }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.driveUploadBandwidthDurationHrCapacityMbPairs)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.driveUploadBandwidthDurationHrCapacityMbPairs.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkCodeEditor v-model="driveUploadBandwidthDurationHrCapacityMbPairs" lang="json5"/>
++					<MkRange v-model="role.policies.driveUploadBandwidthDurationHrCapacityMbPairs.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.selfAssignability, 'selfAssignability'])">
++				<template #label>{{ i18n.ts._role._options.selfAssignability }}</template>
++				<template #suffix>
++					<span v-if="role.policies.selfAssignability.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ JSON.stringify(role.policies.selfAssignability.value) }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.selfAssignability)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.selfAssignability.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkCodeEditor v-model="selfAssignability" lang="json5"/>
++					<MkRange v-model="role.policies.selfAssignability.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
+ 			<MkFolder v-if="matchQuery([i18n.ts._role._options.alwaysMarkNsfw, 'alwaysMarkNsfw'])">
+ 				<template #label>{{ i18n.ts._role._options.alwaysMarkNsfw }}</template>
+ 				<template #suffix>
+@@ -697,10 +753,12 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ <script lang="ts" setup>
+ import { watch, ref, computed } from 'vue';
++import JSON5 from 'json5';
+ import { throttle } from 'throttle-debounce';
+ import { ROLE_POLICIES } from '@@/js/const.js';
+ import RolesEditorFormula from './RolesEditorFormula.vue';
+ import MkInput from '@/components/MkInput.vue';
++import MkCodeEditor from '@/components/MkCodeEditor.vue';
+ import MkColorInput from '@/components/MkColorInput.vue';
+ import MkSelect from '@/components/MkSelect.vue';
+ import MkTextarea from '@/components/MkTextarea.vue';
+@@ -723,6 +781,24 @@ const props = defineProps<{
+ 
+ const role = ref(deepClone(props.modelValue));
+ 
++const driveUploadBandwidthDurationHrCapacityMbPairs = computed({
++	get() {
++		return JSON5.stringify(role.value.policies.driveUploadBandwidthDurationHrCapacityMbPairs.value, null, 2);
++	},
++	set(value) {
++		role.value.policies.driveUploadBandwidthDurationHrCapacityMbPairs.value = JSON5.parse(value);
++	},
++});
++
++const selfAssignability = computed({
++	get() {
++		return JSON5.stringify(role.value.policies.selfAssignability.value, null, 2);
++	},
++	set(value) {
++		role.value.policies.selfAssignability.value = JSON5.parse(value);
++	},
++});
++
+ // fill missing policy
+ for (const ROLE_POLICY of ROLE_POLICIES) {
+ 	if (role.value.policies[ROLE_POLICY] == null) {
+diff --git a/packages/frontend/src/pages/admin/roles.role.vue b/packages/frontend/src/pages/admin/roles.role.vue
+index 1c237a69b4..30cbf8434b 100644
+--- a/packages/frontend/src/pages/admin/roles.role.vue
++++ b/packages/frontend/src/pages/admin/roles.role.vue
+@@ -18,7 +18,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<template #label>{{ i18n.ts.info }}</template>
+ 					<XEditor :modelValue="role" readonly/>
+ 				</MkFolder>
+-				<MkFolder v-if="role.target === 'manual'" defaultOpen>
++				<MkFolder defaultOpen>
+ 					<template #icon><i class="ti ti-users"></i></template>
+ 					<template #label>{{ i18n.ts.users }}</template>
+ 					<template #suffix>{{ role.usersCount }}</template>
+@@ -54,7 +54,6 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 						</MkPagination>
+ 					</div>
+ 				</MkFolder>
+-				<MkInfo v-else>{{ i18n.ts._role.isConditionalRole }}</MkInfo>
+ 			</div>
+ 		</MkSpacer>
+ 	</MkStickyContainer>
+diff --git a/packages/frontend/src/pages/admin/roles.vue b/packages/frontend/src/pages/admin/roles.vue
+index 782c1256de..30369f8541 100644
+--- a/packages/frontend/src/pages/admin/roles.vue
++++ b/packages/frontend/src/pages/admin/roles.vue
+@@ -113,6 +113,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 							</MkSwitch>
+ 						</MkFolder>
+ 
++						<MkFolder v-if="matchQuery([i18n.ts._role._options.canManageAds, 'canManageAds'])">
++							<template #label>{{ i18n.ts._role._options.canManageAds }}</template>
++							<template #suffix>{{ policies.canManageAds ? i18n.ts.yes : i18n.ts.no }}</template>
++							<MkSwitch v-model="policies.canManageAds">
++								<template #label>{{ i18n.ts.enable }}</template>
++							</MkSwitch>
++						</MkFolder>
++
+ 						<MkFolder v-if="matchQuery([i18n.ts._role._options.canUseTranslator, 'canSearchNotes'])">
+ 							<template #label>{{ i18n.ts._role._options.canUseTranslator }}</template>
+ 							<template #suffix>{{ policies.canUseTranslator ? i18n.ts.yes : i18n.ts.no }}</template>
+@@ -129,6 +137,12 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 							</MkInput>
+ 						</MkFolder>
+ 
++						<MkFolder v-if="matchQuery([i18n.ts._role._options.driveCapacity, 'driveCapacityMb'])">
++							<template #label>{{ i18n.ts._role._options.driveUploadBandwidth }}</template>
++							<template #suffix>#{{ policies.driveUploadBandwidthDurationHrCapacityMbPairs.length }}</template>
++							<MkCodeEditor v-model="driveUploadBandwidthDurationHrCapacityMbPairs" lang="json5"/>
++						</MkFolder>
++
+ 						<MkFolder v-if="matchQuery([i18n.ts._role._options.alwaysMarkNsfw, 'alwaysMarkNsfw'])">
+ 							<template #label>{{ i18n.ts._role._options.alwaysMarkNsfw }}</template>
+ 							<template #suffix>{{ policies.alwaysMarkNsfw ? i18n.ts.yes : i18n.ts.no }}</template>
+@@ -283,6 +297,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ import { computed, reactive, ref } from 'vue';
+ import { ROLE_POLICIES } from '@@/js/const.js';
+ import XHeader from './_header_.vue';
++import MkCodeEditor from '@/components/MkCodeEditor.vue';
+ import MkInput from '@/components/MkInput.vue';
+ import MkFolder from '@/components/MkFolder.vue';
+ import MkSwitch from '@/components/MkSwitch.vue';
+@@ -318,6 +333,15 @@ function updateAvatarDecorationLimit(value: string | number) {
+ 	avatarDecorationLimit.value = Number(value);
+ }
+ 
++const driveUploadBandwidthDurationHrCapacityMbPairs = computed({
++	get() {
++		return JSON.stringify(policies.driveUploadBandwidthDurationHrCapacityMbPairs, null, 2);
++	},
++	set(value) {
++		policies.driveUploadBandwidthDurationHrCapacityMbPairs = JSON.parse(value);
++	},
++});
++
+ function matchQuery(keywords: string[]): boolean {
+ 	if (baseRoleQ.value.trim().length === 0) return true;
+ 	return keywords.some(keyword => keyword.toLowerCase().includes(baseRoleQ.value.toLowerCase()));
+diff --git a/packages/frontend/src/pages/role.vue b/packages/frontend/src/pages/role.vue
+index 46e510b49b..cb1b6bc776 100644
+--- a/packages/frontend/src/pages/role.vue
++++ b/packages/frontend/src/pages/role.vue
+@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ <template>
+ <MkStickyContainer>
+-	<template #header><MkPageHeader v-model:tab="tab" :tabs="headerTabs"/></template>
++	<template #header><MkPageHeader v-model:tab="tab" :tabs="headerTabs" :actions="headerActions"/></template>
+ 	<MkSpacer v-if="error != null" :contentMax="1200">
+ 		<div :class="$style.root">
+ 			<img :class="$style.img" :src="serverErrorImageUrl" class="_ghost"/>
+@@ -38,10 +38,12 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { computed, watch, ref } from 'vue';
+ import * as Misskey from 'misskey-js';
++import { $i } from '@/account.js';
+ import { misskeyApi } from '@/scripts/misskey-api.js';
+ import MkUserList from '@/components/MkUserList.vue';
+ import { definePageMetadata } from '@/scripts/page-metadata.js';
+ import { i18n } from '@/i18n.js';
++import * as os from '@/os.js';
+ import MkTimeline from '@/components/MkTimeline.vue';
+ import { instanceName } from '@@/js/config.js';
+ import { serverErrorImageUrl, infoImageUrl } from '@/instance.js';
+@@ -83,6 +85,80 @@ const users = computed(() => ({
+ 	},
+ }));
+ 
++const headerActions = computed(() =>
++	role.value?.target === 'manual'
++		? $i?.policies.selfAssignability?.some(([t, u]) => u && role.value.tags.includes(t))
++			? [
++					{
++						icon: 'ti ti-user-minus',
++						text: i18n.ts.unassign,
++						handler: unassign,
++					},
++					{
++						icon: 'ti ti-user-plus',
++						text: i18n.ts.assign,
++						handler: assign,
++					},
++				]
++			: $i?.policies.selfAssignability?.some(([t, u]) => role.value.tags.includes(t))
++				? [
++						{
++							icon: 'ti ti-user-plus',
++							text: i18n.ts.assign,
++							handler: assignIndefinetly,
++						},
++					]
++				: []
++		: []);
++
++async function assign() {
++	const { canceled, result: period } = await os.select({
++		title: i18n.ts.period + ': ' + role.value.name,
++		items: [{
++			value: 'indefinitely', text: i18n.ts.indefinitely,
++		}, {
++			value: 'oneHour', text: i18n.ts.oneHour,
++		}, {
++			value: 'oneDay', text: i18n.ts.oneDay,
++		}, {
++			value: 'oneWeek', text: i18n.ts.oneWeek,
++		}, {
++			value: 'oneMonth', text: i18n.ts.oneMonth,
++		}],
++		default: 'indefinitely',
++	});
++	if (canceled) return;
++
++	const expiresAt = period === 'indefinitely' ? null
++		: period === 'oneHour' ? Date.now() + (1000 * 60 * 60)
++		: period === 'oneDay' ? Date.now() + (1000 * 60 * 60 * 24)
++		: period === 'oneWeek' ? Date.now() + (1000 * 60 * 60 * 24 * 7)
++		: period === 'oneMonth' ? Date.now() + (1000 * 60 * 60 * 24 * 30)
++		: null;
++
++	os.apiWithDialog('admin/roles/assign', { roleId: role.value.id, userId: $i.id, expiresAt });
++}
++
++async function assignIndefinetly() {
++	const { canceled } = await os.confirm({
++		type: 'warning',
++		title: i18n.ts.areYouSure,
++	});
++	if (canceled) return;
++
++	os.apiWithDialog('admin/roles/assign', { roleId: role.value.id, userId: $i.id });
++}
++
++async function unassign() {
++	const { canceled } = await os.confirm({
++		type: 'warning',
++		title: i18n.ts.areYouSure,
++	});
++	if (canceled) return;
++
++	os.apiWithDialog('admin/roles/unassign', { roleId: role.value.id, userId: $i.id });
++}
++
+ const headerTabs = computed(() => [{
+ 	key: 'users',
+ 	icon: 'ti ti-users',
+diff --git a/packages/frontend/src/pages/settings/drive.vue b/packages/frontend/src/pages/settings/drive.vue
+index 0e66b93f1c..0030f9fc13 100644
+--- a/packages/frontend/src/pages/settings/drive.vue
++++ b/packages/frontend/src/pages/settings/drive.vue
+@@ -22,6 +22,37 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<template #value>{{ bytes(usage, 1) }}</template>
+ 				</MkKeyValue>
+ 			</FormSplit>
++			<template v-for="uploadBandwidth, i in uploadBandwidths" :key="i">
++				<div>
++					<div :class="$style.meter">
++						<div
++							:class="$style.meterValue"
++							:style="{
++								width: `${uploadBandwidth.usage / uploadBandwidth.capacity * 100}%`,
++								background: tinycolor({
++									h: 180 - (uploadBandwidth.usage / uploadBandwidth.capacity * 180),
++									s: 0.7,
++									l: 0.5,
++								}).toString(),
++							}"
++						/>
++					</div>
++				</div>
++				<FormSplit :minWidth="144">
++					<MkKeyValue>
++						<template #key>{{ i18n.ts._poll.duration }}</template>
++						<template #value>{{ hms(uploadBandwidth.duration, { textFormat: 'locale' }) }}</template>
++					</MkKeyValue>
++					<MkKeyValue>
++						<template #key>{{ i18n.ts.capacity }}</template>
++						<template #value>{{ bytes(uploadBandwidth.capacity, 1) }}</template>
++					</MkKeyValue>
++					<MkKeyValue>
++						<template #key>{{ i18n.ts.inUse }}</template>
++						<template #value>{{ bytes(uploadBandwidth.usage, 1) }}</template>
++					</MkKeyValue>
++				</FormSplit>
++			</template>
+ 		</div>
+ 	</FormSection>
+ 
+@@ -72,6 +103,7 @@ import FormSplit from '@/components/form/split.vue';
+ import * as os from '@/os.js';
+ import { misskeyApi } from '@/scripts/misskey-api.js';
+ import bytes from '@/filters/bytes.js';
++import { hms } from '@/filters/hms.js';
+ import { defaultStore } from '@/store.js';
+ import MkChart from '@/components/MkChart.vue';
+ import { i18n } from '@/i18n.js';
+@@ -83,6 +115,7 @@ const $i = signinRequired();
+ const fetching = ref(true);
+ const usage = ref<number | null>(null);
+ const capacity = ref<number | null>(null);
++const uploadBandwidths = ref<Misskey.entities.DriveResponse['uploadBandwidths'] | null>(null);
+ const uploadFolder = ref<Misskey.entities.DriveFolder | null>(null);
+ const alwaysMarkNsfw = ref($i.alwaysMarkNsfw);
+ const autoSensitive = ref($i.autoSensitive);
+@@ -105,6 +138,7 @@ const keepOriginalFilename = computed(defaultStore.makeGetterSetter('keepOrigina
+ misskeyApi('drive').then(info => {
+ 	capacity.value = info.capacity;
+ 	usage.value = info.usage;
++	uploadBandwidths.value = info.uploadBandwidths;
+ 	fetching.value = false;
+ });
+ 

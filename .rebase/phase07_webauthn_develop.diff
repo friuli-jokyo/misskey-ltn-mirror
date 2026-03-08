@@ -1,0 +1,632 @@
+diff --git a/packages/backend/src/core/WebAuthnService.ts b/packages/backend/src/core/WebAuthnService.ts
+index 372e1e2ab7..31c8d67c60 100644
+--- a/packages/backend/src/core/WebAuthnService.ts
++++ b/packages/backend/src/core/WebAuthnService.ts
+@@ -66,7 +66,6 @@ export class WebAuthnService {
+ 			userID: isoUint8Array.fromUTF8String(userId),
+ 			userName: userName,
+ 			userDisplayName: userDisplayName,
+-			attestationType: 'indirect',
+ 			excludeCredentials: keys.map(key => (<{ id: string; transports?: AuthenticatorTransportFuture[]; }>{
+ 				id: key.id,
+ 				transports: key.transports ?? undefined,
+diff --git a/packages/backend/src/server/api/SigninApiService.ts b/packages/backend/src/server/api/SigninApiService.ts
+index 1d983ca4bc..5c9d16a95a 100644
+--- a/packages/backend/src/server/api/SigninApiService.ts
++++ b/packages/backend/src/server/api/SigninApiService.ts
+@@ -15,6 +15,7 @@ import type {
+ 	UserSecurityKeysRepository,
+ 	UsersRepository,
+ } from '@/models/_.js';
++import type Logger from '@/logger.js';
+ import type { Config } from '@/config.js';
+ import { getIpHash } from '@/misc/get-ip-hash.js';
+ import type { MiLocalUser } from '@/models/User.js';
+@@ -23,6 +24,7 @@ import { bindThis } from '@/decorators.js';
+ import { WebAuthnService } from '@/core/WebAuthnService.js';
+ import { UserAuthService } from '@/core/UserAuthService.js';
+ import { CaptchaService } from '@/core/CaptchaService.js';
++import { LoggerService } from '@/core/LoggerService.js';
+ import { FastifyReplyError } from '@/misc/fastify-reply-error.js';
+ import { RateLimiterService } from './RateLimiterService.js';
+ import { SigninService } from './SigninService.js';
+@@ -31,6 +33,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
+ 
+ @Injectable()
+ export class SigninApiService {
++	private logger: Logger;
++
+ 	constructor(
+ 		@Inject(DI.config)
+ 		private config: Config,
+@@ -50,6 +54,7 @@ export class SigninApiService {
+ 		@Inject(DI.signinsRepository)
+ 		private signinsRepository: SigninsRepository,
+ 
++		private loggerService: LoggerService,
+ 		private idService: IdService,
+ 		private rateLimiterService: RateLimiterService,
+ 		private signinService: SigninService,
+@@ -57,6 +62,7 @@ export class SigninApiService {
+ 		private webAuthnService: WebAuthnService,
+ 		private captchaService: CaptchaService,
+ 	) {
++		this.logger = this.loggerService.getLogger('Signin');
+ 	}
+ 
+ 	@bindThis
+@@ -89,18 +95,22 @@ export class SigninApiService {
+ 			return { error };
+ 		}
+ 
+-		try {
+ 		// not more than 1 attempt per second and not more than 10 attempts per hour
+-			await this.rateLimiterService.limit({ key: 'signin', duration: 60 * 60 * 1000, max: 10, minInterval: 1000 }, getIpHash(request.ip));
+-		} catch (err) {
+-			reply.code(429);
+-			return {
+-				error: {
+-					message: 'Too many failed attempts to sign in. Try again later.',
+-					code: 'TOO_MANY_AUTHENTICATION_FAILURES',
+-					id: '22d05606-fbcf-421a-a2db-b32610dcfd1b',
+-				},
+-			};
++		if (this.config.enableIpRateLimit) {
++			if (process.env.NODE_ENV === 'production' && (request.ip === '::1' || request.ip === '127.0.0.1')) {
++				this.logger.warn('Recieved signin request from localhost IP address for rate limiting in production environment. This is likely due to an improper trustProxy setting in the config file.');
++			}
++			const rateLimit = await this.rateLimiterService.limit({ key: 'signin', duration: 60 * 60 * 1000, max: 10, minInterval: 1000 }, getIpHash(request.ip));
++			if (rateLimit != null) {
++				reply.code(429);
++				return {
++					error: {
++						message: 'Too many failed attempts to sign in. Try again later.',
++						code: 'TOO_MANY_AUTHENTICATION_FAILURES',
++						id: '22d05606-fbcf-421a-a2db-b32610dcfd1b',
++					},
++				};
++			}
+ 		}
+ 
+ 		if (typeof username !== 'string') {
+@@ -221,7 +231,7 @@ export class SigninApiService {
+ 
+ 			try {
+ 				await this.userAuthService.twoFactorAuthenticate(profile, token);
+-			} catch (e) {
++			} catch (_) {
+ 				return await fail(403, {
+ 					id: 'cdf1235b-ac71-46d4-a3a6-84ccce48df6f',
+ 				});
+diff --git a/packages/backend/src/server/api/SigninWithPasskeyApiService.ts b/packages/backend/src/server/api/SigninWithPasskeyApiService.ts
+index 9ba23c54e2..6feb4c3afa 100644
+--- a/packages/backend/src/server/api/SigninWithPasskeyApiService.ts
++++ b/packages/backend/src/server/api/SigninWithPasskeyApiService.ts
+@@ -84,19 +84,25 @@ export class SigninWithPasskeyApiService {
+ 			return error(status ?? 500, failure ?? { id: '4e30e80c-e338-45a0-8c8f-44455efa3b76' });
+ 		};
+ 
+-		try {
++		if (this.config.enableIpRateLimit) {
++			if (process.env.NODE_ENV === 'production' && (request.ip === '::1' || request.ip === '127.0.0.1')) {
++				this.logger.warn('Recieved signin with passkey request from localhost IP address for rate limiting in production environment. This is likely due to an improper trustProxy setting in the config file.');
++			}
++
++			try {
+ 			// Not more than 1 API call per 250ms and not more than 100 attempts per 30min
+ 			// NOTE: 1 Sign-in require 2 API calls
+-			await this.rateLimiterService.limit({ key: 'signin-with-passkey', duration: 60 * 30 * 1000, max: 200, minInterval: 250 }, getIpHash(request.ip));
+-		} catch (err) {
+-			reply.code(429);
+-			return {
+-				error: {
+-					message: 'Too many failed attempts to sign in. Try again later.',
+-					code: 'TOO_MANY_AUTHENTICATION_FAILURES',
+-					id: '22d05606-fbcf-421a-a2db-b32610dcfd1b',
+-				},
+-			};
++				await this.rateLimiterService.limit({ key: 'signin-with-passkey', duration: 60 * 30 * 1000, max: 200, minInterval: 250 }, getIpHash(request.ip));
++			} catch (_) {
++				reply.code(429);
++				return {
++					error: {
++						message: 'Too many failed attempts to sign in. Try again later.',
++						code: 'TOO_MANY_AUTHENTICATION_FAILURES',
++						id: '22d05606-fbcf-421a-a2db-b32610dcfd1b',
++					},
++				};
++			}
+ 		}
+ 
+ 		// Initiate Passkey Auth challenge with context
+diff --git a/packages/backend/src/server/api/SignupApiService.ts b/packages/backend/src/server/api/SignupApiService.ts
+index 3ec5e5d3e6..b419c51ef1 100644
+--- a/packages/backend/src/server/api/SignupApiService.ts
++++ b/packages/backend/src/server/api/SignupApiService.ts
+@@ -129,7 +129,8 @@ export class SignupApiService {
+ 
+ 		let ticket: MiRegistrationTicket | null = null;
+ 
+-		if (this.meta.disableRegistration) {
++		// テスト時はこの機構は障害となるため無効にする
++		if (process.env.NODE_ENV !== 'test' && this.meta.disableRegistration) {
+ 			if (invitationCode == null || typeof invitationCode !== 'string') {
+ 				reply.code(400);
+ 				return;
+@@ -254,7 +255,7 @@ export class SignupApiService {
+ 				throw new FastifyReplyError(400, 'EXPIRED');
+ 			}
+ 
+-			const { account, secret } = await this.signupService.signup({
++			const { account } = await this.signupService.signup({
+ 				username: pendingUser.username,
+ 				passwordHash: pendingUser.password,
+ 			});
+diff --git a/packages/backend/src/server/api/endpoints/i/2fa/key-done.ts b/packages/backend/src/server/api/endpoints/i/2fa/key-done.ts
+index 65eece5b97..8dc5cafb56 100644
+--- a/packages/backend/src/server/api/endpoints/i/2fa/key-done.ts
++++ b/packages/backend/src/server/api/endpoints/i/2fa/key-done.ts
+@@ -81,7 +81,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
+ 
+ 				try {
+ 					await this.userAuthService.twoFactorAuthenticate(profile, token);
+-				} catch (e) {
++				} catch (_) {
+ 					throw new Error('authentication failed');
+ 				}
+ 			}
+diff --git a/packages/backend/src/server/api/endpoints/i/2fa/register-key.ts b/packages/backend/src/server/api/endpoints/i/2fa/register-key.ts
+index 9391aee5e0..050dbaf49e 100644
+--- a/packages/backend/src/server/api/endpoints/i/2fa/register-key.ts
++++ b/packages/backend/src/server/api/endpoints/i/2fa/register-key.ts
+@@ -212,7 +212,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
+ 
+ 				try {
+ 					await this.userAuthService.twoFactorAuthenticate(profile, token);
+-				} catch (e) {
++				} catch (_) {
+ 					throw new Error('authentication failed');
+ 				}
+ 			}
+diff --git a/packages/backend/src/server/api/endpoints/i/2fa/unregister.ts b/packages/backend/src/server/api/endpoints/i/2fa/unregister.ts
+index b5a53cc889..23b577dc18 100644
+--- a/packages/backend/src/server/api/endpoints/i/2fa/unregister.ts
++++ b/packages/backend/src/server/api/endpoints/i/2fa/unregister.ts
+@@ -57,7 +57,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 
+ 				try {
+ 					await this.userAuthService.twoFactorAuthenticate(profile, token);
+-				} catch (e) {
++				} catch (_) {
+ 					throw new Error('authentication failed');
+ 				}
+ 			}
+diff --git a/packages/frontend/src/components/MkSignin.input.vue b/packages/frontend/src/components/MkSignin.input.vue
+index e98ac9cfd2..89ec6373cf 100644
+--- a/packages/frontend/src/components/MkSignin.input.vue
++++ b/packages/frontend/src/components/MkSignin.input.vue
+@@ -58,7 +58,7 @@ import { toUnicode } from 'punycode.js';
+ 
+ import { query, extractDomain } from '@@/js/url.js';
+ import { host as configHost } from '@@/js/config.js';
+-import type { OpenOnRemoteOptions } from '@/scripts/please-login.js';
++import type { OpenOnRemoteOptions } from '@/utility/please-login.js';
+ import { i18n } from '@/i18n.js';
+ import * as os from '@/os.js';
+ 
+@@ -69,19 +69,21 @@ import MkInfo from '@/components/MkInfo.vue';
+ const props = withDefaults(defineProps<{
+ 	message?: string,
+ 	openOnRemote?: OpenOnRemoteOptions,
++	initialUsername?: string;
+ }>(), {
+ 	message: '',
+ 	openOnRemote: undefined,
++	initialUsername: undefined,
+ });
+ 
+ const emit = defineEmits<{
+ 	(ev: 'usernameSubmitted', v: string): void;
+-	(ev: 'passkeyClick', v: MouseEvent): void;
++	(ev: 'passkeyClick', v: PointerEvent): void;
+ }>();
+ 
+ const host = toUnicode(configHost);
+ 
+-const username = ref('');
++const username = ref(props.initialUsername ?? '');
+ 
+ //#region Open on remote
+ function openRemote(options: OpenOnRemoteOptions, targetHost?: string): void {
+diff --git a/packages/frontend/src/components/MkSignin.password.vue b/packages/frontend/src/components/MkSignin.password.vue
+index cd003a39df..3b3b6a0b73 100644
+--- a/packages/frontend/src/components/MkSignin.password.vue
++++ b/packages/frontend/src/components/MkSignin.password.vue
+@@ -28,7 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<MkCaptcha v-if="instance.enableMcaptcha" ref="mcaptcha" v-model="mCaptchaResponse" provider="mcaptcha" :sitekey="instance.mcaptchaSiteKey" :instanceUrl="instance.mcaptchaInstanceUrl"/>
+ 				<MkCaptcha v-if="instance.enableRecaptcha" ref="recaptcha" v-model="reCaptchaResponse" provider="recaptcha" :sitekey="instance.recaptchaSiteKey"/>
+ 				<MkCaptcha v-if="instance.enableTurnstile" ref="turnstile" v-model="turnstileResponse" provider="turnstile" :sitekey="instance.turnstileSiteKey"/>
+-				<MkCaptcha v-if="instance.enableTestcaptcha" ref="testcaptcha" v-model="testcaptchaResponse" provider="testcaptcha"/>
++				<MkCaptcha v-if="instance.enableTestcaptcha" ref="testcaptcha" v-model="testcaptchaResponse" provider="testcaptcha" :sitekey="null"/>
+ 			</div>
+ 
+ 			<MkButton type="submit" :disabled="needCaptcha && captchaFailed" large primary rounded style="margin: 0 auto;" data-cy-signin-page-password-continue>{{ i18n.ts.continue }} <i class="ti ti-arrow-right"></i></MkButton>
+diff --git a/packages/frontend/src/components/MkSignin.vue b/packages/frontend/src/components/MkSignin.vue
+index 2fb97e8e46..b2f0f4ddcf 100644
+--- a/packages/frontend/src/components/MkSignin.vue
++++ b/packages/frontend/src/components/MkSignin.vue
+@@ -20,6 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			key="input"
+ 			:message="message"
+ 			:openOnRemote="openOnRemote"
++			:initialUsername="initialUsername"
+ 
+ 			@usernameSubmitted="onUsernameSubmitted"
+ 			@passkeyClick="onPasskeyLogin"
+@@ -67,20 +68,19 @@ SPDX-License-Identifier: AGPL-3.0-only
+ import { nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef } from 'vue';
+ import * as Misskey from 'misskey-js';
+ import { supported as webAuthnSupported, parseRequestOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
+-
+ import type { AuthenticationPublicKeyCredential } from '@github/webauthn-json/browser-ponyfill';
+-import type { OpenOnRemoteOptions } from '@/scripts/please-login.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { showSuspendedDialog } from '@/scripts/show-suspended-dialog.js';
+-import { login } from '@/account.js';
++import type { OpenOnRemoteOptions } from '@/utility/please-login.js';
++import type { PwResponse } from '@/components/MkSignin.password.vue';
++import { misskeyApi } from '@/utility/misskey-api.js';
++import { showSuspendedDialog } from '@/utility/show-suspended-dialog.js';
+ import { i18n } from '@/i18n.js';
+ import * as os from '@/os.js';
+ 
+ import XInput from '@/components/MkSignin.input.vue';
+ import XPassword from '@/components/MkSignin.password.vue';
+-import type { PwResponse } from '@/components/MkSignin.password.vue';
+ import XTotp from '@/components/MkSignin.totp.vue';
+ import XPasskey from '@/components/MkSignin.passkey.vue';
++import { login } from '@/accounts.js';
+ 
+ const emit = defineEmits<{
+ 	(ev: 'login', v: Misskey.entities.SigninFlowResponse & { finished: true }): void;
+@@ -90,10 +90,12 @@ const props = withDefaults(defineProps<{
+ 	autoSet?: boolean;
+ 	message?: string,
+ 	openOnRemote?: OpenOnRemoteOptions,
++	initialUsername?: string;
+ }>(), {
+ 	autoSet: false,
+ 	message: '',
+ 	openOnRemote: undefined,
++	initialUsername: undefined,
+ });
+ 
+ const page = ref<'input' | 'password' | 'totp' | 'passkey'>('input');
+@@ -118,6 +120,7 @@ function onPasskeyLogin(): void {
+ 			.then((res) => {
+ 				passkeyContext.value = res.context ?? '';
+ 				credentialRequest.value = parseRequestOptionsFromJSON({
++					// @ts-expect-error TODO: misskey-js由来の型（@simplewebauthn/types）とフロントエンド由来の型（@github/webauthn-json）が合わない
+ 					publicKey: res.option,
+ 				});
+ 
+@@ -132,7 +135,7 @@ function onPasskeyDone(credential: AuthenticationPublicKeyCredential): void {
+ 	waiting.value = true;
+ 
+ 	if (doingPasskeyFromInputPage.value) {
+-		misskeyApi('signin-with-passkey', {
++		misskeyApi<Misskey.entities.SigninWithPasskeyResponse>('signin-with-passkey', {
+ 			credential: credential.toJSON(),
+ 			context: passkeyContext.value,
+ 		}).then((res) => {
+@@ -147,6 +150,7 @@ function onPasskeyDone(credential: AuthenticationPublicKeyCredential): void {
+ 		tryLogin({
+ 			username: userInfo.value.username,
+ 			password: password.value,
++			// @ts-expect-error TODO: misskey-js由来の型（@simplewebauthn/types）とフロントエンド由来の型（@github/webauthn-json）が合わない
+ 			credential: credential.toJSON(),
+ 		});
+ 	}
+@@ -251,6 +255,7 @@ async function tryLogin(req: Partial<Misskey.entities.SigninFlowRequest>): Promi
+ 				case 'passkey': {
+ 					if (webAuthnSupported()) {
+ 						credentialRequest.value = parseRequestOptionsFromJSON({
++							// @ts-expect-error TODO: misskey-js由来の型（@simplewebauthn/types）とフロントエンド由来の型（@github/webauthn-json）が合わない
+ 							publicKey: res.authRequest,
+ 						});
+ 						page.value = 'passkey';
+diff --git a/packages/frontend/src/components/MkSignupDialog.form.vue b/packages/frontend/src/components/MkSignupDialog.form.vue
+index 4227e1317a..68ba09980a 100644
+--- a/packages/frontend/src/components/MkSignupDialog.form.vue
++++ b/packages/frontend/src/components/MkSignupDialog.form.vue
+@@ -8,9 +8,9 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<div :class="$style.banner">
+ 		<i class="ti ti-user-edit"></i>
+ 	</div>
+-	<MkSpacer :marginMin="20" :marginMax="32">
++	<div class="_spacer" style="--MI_SPACER-min: 20px; --MI_SPACER-max: 32px;">
+ 		<form class="_gaps_m" autocomplete="new-password" @submit.prevent="onSubmit">
+-			<MkInput v-if="instance.disableRegistration" v-model="invitationCode" type="text" :spellcheck="false" required>
++			<MkInput v-if="instance.disableRegistration" v-model="invitationCode" type="text" :spellcheck="false" required data-cy-signup-invitation-code>
+ 				<template #label>{{ i18n.ts.invitationCode }}</template>
+ 				<template #prefix><i class="ti ti-key"></i></template>
+ 			</MkInput>
+@@ -66,7 +66,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<MkCaptcha v-if="instance.enableMcaptcha" ref="mcaptcha" v-model="mCaptchaResponse" :class="$style.captcha" provider="mcaptcha" :sitekey="instance.mcaptchaSiteKey" :instanceUrl="instance.mcaptchaInstanceUrl"/>
+ 			<MkCaptcha v-if="instance.enableRecaptcha" ref="recaptcha" v-model="reCaptchaResponse" :class="$style.captcha" provider="recaptcha" :sitekey="instance.recaptchaSiteKey"/>
+ 			<MkCaptcha v-if="instance.enableTurnstile" ref="turnstile" v-model="turnstileResponse" :class="$style.captcha" provider="turnstile" :sitekey="instance.turnstileSiteKey"/>
+-			<MkCaptcha v-if="instance.enableTestcaptcha" ref="testcaptcha" v-model="testcaptchaResponse" :class="$style.captcha" provider="testcaptcha"/>
++			<MkCaptcha v-if="instance.enableTestcaptcha" ref="testcaptcha" v-model="testcaptchaResponse" :class="$style.captcha" provider="testcaptcha" :sitekey="null"/>
+ 			<MkButton type="submit" :disabled="shouldDisableSubmitting" large gradate rounded data-cy-signup-submit style="margin: 0 auto;">
+ 				<template v-if="submitting">
+ 					<MkLoading :em="true" :colored="false"/>
+@@ -74,7 +74,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<template v-else>{{ i18n.ts.start }}</template>
+ 			</MkButton>
+ 		</form>
+-	</MkSpacer>
++	</div>
+ </div>
+ </template>
+ 
+@@ -85,13 +85,13 @@ import * as Misskey from 'misskey-js';
+ import * as config from '@@/js/config.js';
+ import MkButton from './MkButton.vue';
+ import MkInput from './MkInput.vue';
+-import MkCaptcha from '@/components/MkCaptcha.vue';
+ import type { Captcha } from '@/components/MkCaptcha.vue';
++import MkCaptcha from '@/components/MkCaptcha.vue';
+ import * as os from '@/os.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { login } from '@/account.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ import { instance } from '@/instance.js';
+ import { i18n } from '@/i18n.js';
++import { login } from '@/accounts.js';
+ 
+ const props = withDefaults(defineProps<{
+ 	autoSet?: boolean;
+@@ -138,6 +138,7 @@ const shouldDisableSubmitting = computed((): boolean => {
+ 		instance.enableTurnstile && !turnstileResponse.value ||
+ 		instance.enableTestcaptcha && !testcaptchaResponse.value ||
+ 		instance.emailRequiredForSignup && emailState.value !== 'ok' ||
++		instance.disableRegistration && invitationCode.value === '' ||
+ 		usernameState.value !== 'ok' ||
+ 		passwordRetypeState.value !== 'match';
+ });
+@@ -267,7 +268,7 @@ async function onSubmit(): Promise<void> {
+ 		'testcaptcha-response': testcaptchaResponse.value,
+ 	};
+ 
+-	const res = await fetch(`${config.apiUrl}/signup`, {
++	const res = await window.fetch(`${config.apiUrl}/signup`, {
+ 		method: 'POST',
+ 		headers: {
+ 			'Content-Type': 'application/json',
+diff --git a/packages/frontend/src/pages/settings/2fa.vue b/packages/frontend/src/pages/settings/2fa.vue
+index 776f59dda3..bf71845a38 100644
+--- a/packages/frontend/src/pages/settings/2fa.vue
++++ b/packages/frontend/src/pages/settings/2fa.vue
+@@ -4,79 +4,88 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<FormSection :first="first">
+-	<template #label>{{ i18n.ts['2fa'] }}</template>
+-
+-	<div v-if="$i" class="_gaps_s">
+-		<MkInfo v-if="$i.twoFactorEnabled && $i.twoFactorBackupCodesStock === 'partial'" warn>
+-			{{ i18n.ts._2fa.backupCodeUsedWarning }}
+-		</MkInfo>
+-		<MkInfo v-if="$i.twoFactorEnabled && $i.twoFactorBackupCodesStock === 'none'" warn>
+-			{{ i18n.ts._2fa.backupCodesExhaustedWarning }}
+-		</MkInfo>
+-
+-		<MkFolder :defaultOpen="true">
+-			<template #icon><i class="ti ti-shield-lock"></i></template>
+-			<template #label>{{ i18n.ts.totp }}</template>
+-			<template #caption>{{ i18n.ts.totpDescription }}</template>
+-			<template #suffix><i v-if="$i.twoFactorEnabled" class="ti ti-check" style="color: var(--MI_THEME-success)"></i></template>
+-
+-			<div v-if="$i.twoFactorEnabled" class="_gaps_s">
+-				<div v-text="i18n.ts._2fa.alreadyRegistered"/>
+-				<template v-if="$i.securityKeysList.length > 0">
+-					<MkButton @click="renewTOTP">{{ i18n.ts._2fa.renewTOTP }}</MkButton>
+-					<MkInfo>{{ i18n.ts._2fa.whyTOTPOnlyRenew }}</MkInfo>
+-				</template>
+-				<MkButton v-else danger @click="unregisterTOTP">{{ i18n.ts.unregister }}</MkButton>
+-			</div>
+-
+-			<div v-else-if="!$i.twoFactorEnabled" class="_gaps_s">
+-				<MkButton primary gradate @click="registerTOTP">{{ i18n.ts._2fa.registerTOTP }}</MkButton>
+-				<MkLink url="https://misskey-hub.net/docs/for-users/stepped-guides/how-to-enable-2fa/" target="_blank"><i class="ti ti-help-circle"></i> {{ i18n.ts.learnMore }}</MkLink>
+-			</div>
+-		</MkFolder>
+-
+-		<MkFolder>
+-			<template #icon><i class="ti ti-key"></i></template>
+-			<template #label>{{ i18n.ts.securityKeyAndPasskey }}</template>
+-			<div class="_gaps_s">
+-				<MkInfo>
+-					{{ i18n.ts._2fa.securityKeyInfo }}
+-				</MkInfo>
+-
+-				<MkInfo v-if="!webAuthnSupported()" warn>
+-					{{ i18n.ts._2fa.securityKeyNotSupported }}
+-				</MkInfo>
+-
+-				<MkInfo v-else-if="webAuthnSupported() && !$i.twoFactorEnabled" warn>
+-					{{ i18n.ts._2fa.registerTOTPBeforeKey }}
+-				</MkInfo>
+-
+-				<template v-else>
+-					<MkButton primary @click="addSecurityKey">{{ i18n.ts._2fa.registerSecurityKey }}</MkButton>
+-					<MkFolder v-for="key in $i.securityKeysList" :key="key.id">
+-						<template #label>{{ key.name }}</template>
+-						<template #suffix><I18n :src="i18n.ts.lastUsedAt"><template #t><MkTime :time="key.lastUsed"/></template></I18n></template>
+-						<div class="_buttons">
+-							<MkButton @click="renameKey(key)"><i class="ti ti-forms"></i> {{ i18n.ts.rename }}</MkButton>
+-							<MkButton danger @click="unregisterKey(key)"><i class="ti ti-trash"></i> {{ i18n.ts.unregister }}</MkButton>
+-						</div>
+-					</MkFolder>
+-				</template>
+-			</div>
+-		</MkFolder>
+-
+-		<MkSwitch :disabled="!$i.twoFactorEnabled || $i.securityKeysList.length === 0" :modelValue="usePasswordLessLogin" @update:modelValue="v => updatePasswordLessLogin(v)">
+-			<template #label>{{ i18n.ts.passwordLessLogin }}</template>
+-			<template #caption>{{ i18n.ts.passwordLessLoginDescription }}</template>
+-		</MkSwitch>
+-	</div>
+-</FormSection>
++<SearchMarker markerId="2fa" :keywords="['2fa']">
++	<FormSection :first="first">
++		<template #label><SearchLabel>{{ i18n.ts['2fa'] }}</SearchLabel></template>
++
++		<div v-if="$i" class="_gaps_s">
++			<MkInfo v-if="$i.twoFactorEnabled && $i.twoFactorBackupCodesStock === 'partial'" warn>
++				{{ i18n.ts._2fa.backupCodeUsedWarning }}
++			</MkInfo>
++			<MkInfo v-if="$i.twoFactorEnabled && $i.twoFactorBackupCodesStock === 'none'" warn>
++				{{ i18n.ts._2fa.backupCodesExhaustedWarning }}
++			</MkInfo>
++
++			<SearchMarker :keywords="['totp', 'app']">
++				<MkFolder :defaultOpen="true">
++					<template #icon><i class="ti ti-shield-lock"></i></template>
++					<template #label><SearchLabel>{{ i18n.ts.totp }}</SearchLabel></template>
++					<template #caption><SearchText>{{ i18n.ts.totpDescription }}</SearchText></template>
++					<template #suffix><i v-if="$i.twoFactorEnabled" class="ti ti-check" style="color: var(--MI_THEME-success)"></i></template>
++
++					<div v-if="$i.twoFactorEnabled" class="_gaps_s">
++						<div>{{ i18n.ts._2fa.alreadyRegistered }}</div>
++						<template v-if="$i.securityKeysList!.length > 0">
++							<MkButton @click="renewTOTP">{{ i18n.ts._2fa.renewTOTP }}</MkButton>
++							<MkInfo>{{ i18n.ts._2fa.whyTOTPOnlyRenew }}</MkInfo>
++						</template>
++						<MkButton v-else danger @click="unregisterTOTP">{{ i18n.ts.unregister }}</MkButton>
++					</div>
++
++					<div v-else-if="!$i.twoFactorEnabled" class="_gaps_s">
++						<MkButton primary gradate @click="registerTOTP">{{ i18n.ts._2fa.registerTOTP }}</MkButton>
++						<MkLink url="https://misskey-hub.net/docs/for-users/stepped-guides/how-to-enable-2fa/" target="_blank"><i class="ti ti-help-circle"></i> {{ i18n.ts.learnMore }}</MkLink>
++					</div>
++				</MkFolder>
++			</SearchMarker>
++
++			<SearchMarker :keywords="['security', 'key', 'passkey']">
++				<MkFolder>
++					<template #icon><i class="ti ti-key"></i></template>
++					<template #label><SearchLabel>{{ i18n.ts.securityKeyAndPasskey }}</SearchLabel></template>
++					<div class="_gaps_s">
++						<MkInfo>
++							{{ i18n.ts._2fa.securityKeyInfo }}
++						</MkInfo>
++
++						<MkInfo v-if="!webAuthnSupported()" warn>
++							{{ i18n.ts._2fa.securityKeyNotSupported }}
++						</MkInfo>
++
++						<MkInfo v-else-if="webAuthnSupported() && !$i.twoFactorEnabled" warn>
++							{{ i18n.ts._2fa.registerTOTPBeforeKey }}
++						</MkInfo>
++
++						<template v-else>
++							<MkButton primary @click="addSecurityKey">{{ i18n.ts._2fa.registerSecurityKey }}</MkButton>
++							<MkFolder v-for="key in $i.securityKeysList!" :key="key.id">
++								<template #label>{{ key.name }}</template>
++								<template #suffix><I18n :src="i18n.ts.lastUsedAt"><template #t><MkTime :time="key.lastUsed"/></template></I18n></template>
++								<div class="_buttons">
++									<MkButton @click="renameKey(key)"><i class="ti ti-forms"></i> {{ i18n.ts.rename }}</MkButton>
++									<MkButton danger @click="unregisterKey(key)"><i class="ti ti-trash"></i> {{ i18n.ts.unregister }}</MkButton>
++								</div>
++							</MkFolder>
++						</template>
++					</div>
++				</MkFolder>
++			</SearchMarker>
++
++			<SearchMarker :keywords="['password', 'less', 'key', 'passkey', 'login', 'signin']">
++				<MkSwitch :disabled="!$i.twoFactorEnabled || $i.securityKeysList!.length === 0" :modelValue="usePasswordLessLogin" @update:modelValue="v => updatePasswordLessLogin(v)">
++					<template #label><SearchLabel>{{ i18n.ts.passwordLessLogin }}</SearchLabel></template>
++					<template #caption><SearchText>{{ i18n.ts.passwordLessLoginDescription }}</SearchText></template>
++				</MkSwitch>
++			</SearchMarker>
++		</div>
++	</FormSection>
++</SearchMarker>
+ </template>
+ 
+ <script lang="ts" setup>
+ import { defineAsyncComponent, computed } from 'vue';
+ import { supported as webAuthnSupported, create as webAuthnCreate, parseCreationOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
++import * as Misskey from 'misskey-js';
+ import MkButton from '@/components/MkButton.vue';
+ import MkInfo from '@/components/MkInfo.vue';
+ import MkSwitch from '@/components/MkSwitch.vue';
+@@ -84,10 +93,11 @@ import FormSection from '@/components/form/section.vue';
+ import MkFolder from '@/components/MkFolder.vue';
+ import MkLink from '@/components/MkLink.vue';
+ import * as os from '@/os.js';
+-import { signinRequired, updateAccountPartial } from '@/account.js';
++import { ensureSignin } from '@/i.js';
+ import { i18n } from '@/i18n.js';
++import { updateCurrentAccountPartial } from '@/accounts.js';
+ 
+-const $i = signinRequired();
++const $i = ensureSignin();
+ 
+ // メモ: 各エンドポイントはmeUpdatedを発行するため、refreshAccountは不要
+ 
+@@ -108,7 +118,7 @@ async function registerTOTP(): Promise<void> {
+ 		token: auth.result.token,
+ 	});
+ 
+-	const { dispose } = os.popup(defineAsyncComponent(() => import('./2fa.qrdialog.vue')), {
++	const { dispose } = await os.popupAsyncWithDialog(import('./2fa.qrdialog.vue').then(x => x.default), {
+ 		twoFactorData,
+ 	}, {
+ 		closed: () => dispose(),
+@@ -123,7 +133,7 @@ async function unregisterTOTP(): Promise<void> {
+ 		password: auth.result.password,
+ 		token: auth.result.token,
+ 	}).then(res => {
+-		updateAccountPartial({
++		updateCurrentAccountPartial({
+ 			twoFactorEnabled: false,
+ 		});
+ 	}).catch(error => {
+@@ -147,7 +157,7 @@ function renewTOTP(): void {
+ 	});
+ }
+ 
+-async function unregisterKey(key) {
++async function unregisterKey(key: NonNullable<Misskey.entities.MeDetailedOnly['securityKeysList']>[number]) {
+ 	const confirm = await os.confirm({
+ 		type: 'question',
+ 		title: i18n.ts._2fa.removeKey,
+@@ -166,7 +176,7 @@ async function unregisterKey(key) {
+ 	os.success();
+ }
+ 
+-async function renameKey(key) {
++async function renameKey(key: NonNullable<Misskey.entities.MeDetailedOnly['securityKeysList']>[number]) {
+ 	const name = await os.inputText({
+ 		title: i18n.ts.rename,
+ 		default: key.name,
+@@ -187,6 +197,7 @@ async function addSecurityKey() {
+ 	if (auth.canceled) return;
+ 
+ 	const registrationOptions = parseCreationOptionsFromJSON({
++		// @ts-expect-error misskey-js側に型がない
+ 		publicKey: await os.apiWithDialog('i/2fa/register-key', {
+ 			password: auth.result.password,
+ 			token: auth.result.token,
+@@ -217,6 +228,7 @@ async function addSecurityKey() {
+ 		password: auth.result.password,
+ 		token: auth.result.token,
+ 		name: name.result,
++		// @ts-expect-error misskey-js側に型がない
+ 		credential: credential.toJSON(),
+ 	});
+ }

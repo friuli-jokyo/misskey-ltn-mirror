@@ -6,7 +6,6 @@
 import { Inject, Injectable, type OnApplicationShutdown } from '@nestjs/common';
 import { Brackets, In, IsNull, Not } from 'typeorm';
 import * as Redis from 'ioredis';
-import sanitizeHtml from 'sanitize-html';
 import { DI } from '@/di-symbols.js';
 import { bindThis } from '@/decorators.js';
 import { GlobalEvents, GlobalEventService } from '@/core/GlobalEventService.js';
@@ -93,6 +92,7 @@ export class AbuseReportNotificationService implements OnApplicationShutdown {
 	@bindThis
 	public async notifyMail(abuseReports: MiAbuseUserReport[]) {
 		// no-op
+		return;
 	}
 
 	/**

@@ -216,6 +216,10 @@ export const packedRolePoliciesSchema = {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
+		canSearchUsers: {
+			type: 'boolean',
+			optional: false, nullable: false,
+		},
 		canUseTranslator: {
 			type: 'boolean',
 			optional: false, nullable: false,
@@ -245,6 +249,41 @@ export const packedRolePoliciesSchema = {
 					},
 				],
 				items: false,
+			},
+		},
+		selfAssignability: {
+			type: 'array',
+			optional: false, nullable: false,
+			items: {
+				type: 'array',
+				optional: false, nullable: false,
+				prefixItems: [
+					{
+						type: 'string',
+						optional: false, nullable: false,
+					},
+					{
+						type: 'boolean',
+						optional: false, nullable: false,
+					},
+					{
+						type: 'integer',
+						optional: false, nullable: false,
+					},
+				],
+				items: false,
+			},
+		},
+		maxFileSizeMb: {
+			type: 'integer',
+			optional: false, nullable: false,
+		},
+		uploadableFileTypes: {
+			type: 'array',
+			optional: false, nullable: false,
+			items: {
+				type: 'string',
+				optional: false, nullable: false,
 			},
 		},
 		alwaysMarkNsfw: {
@@ -315,6 +354,23 @@ export const packedRolePoliciesSchema = {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
+		chatAvailability: {
+			type: 'string',
+			optional: false, nullable: false,
+			enum: ['available', 'readonly', 'unavailable'],
+		},
+		noteDraftLimit: {
+			type: 'integer',
+			optional: false, nullable: false,
+		},
+		scheduledNoteLimit: {
+			type: 'integer',
+			optional: false, nullable: false,
+		},
+		watermarkAvailable: {
+			type: 'boolean',
+			optional: false, nullable: false,
+		},
 	},
 } as const;
 
@@ -344,6 +400,14 @@ export const packedRoleLiteSchema = {
 		description: {
 			type: 'string',
 			optional: false, nullable: false,
+		},
+		tags: {
+			type: 'array',
+			optional: false, nullable: false,
+			items: {
+				type: 'string',
+				optional: false, nullable: false,
+			},
 		},
 		isModerator: {
 			type: 'boolean',
@@ -404,6 +468,11 @@ export const packedRoleSchema = {
 					example: false,
 				},
 				asBadge: {
+					type: 'boolean',
+					optional: false, nullable: false,
+					example: false,
+				},
+				preserveAssignmentOnMoveAccount: {
 					type: 'boolean',
 					optional: false, nullable: false,
 					example: false,

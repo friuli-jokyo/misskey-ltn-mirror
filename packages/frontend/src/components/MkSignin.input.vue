@@ -37,7 +37,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<template #suffix>@{{ host }}</template>
 			</MkInput>
 			<!-- some user-agents cannot initiate conditional mediation without a password field -->
-			<input :class="$style.password" type="password" autocomplete="password webauthn" tabindex="-1" @input="emit('passwordProvided', $event.target.value)" />
+			<input :class="$style.password" type="password" autocomplete="current-password" tabindex="-1" @input="emit('passwordProvided', ($event.target as HTMLInputElement).value)" />
 			<MkButton type="submit" large primary rounded style="margin: 0 auto;" data-cy-signin-page-input-continue>{{ i18n.ts.continue }} <i class="ti ti-arrow-right"></i></MkButton>
 		</form>
 
@@ -64,8 +64,8 @@ import type { AuthenticationPublicKeyCredential } from '@github/webauthn-json/br
 
 import { query, extractDomain } from '@@/js/url.js';
 import { host as configHost } from '@@/js/config.js';
-import { misskeyApi } from '@/scripts/misskey-api';
-import type { OpenOnRemoteOptions } from '@/scripts/please-login.js';
+import { misskeyApi } from '@/utility/misskey-api.js';
+import type { OpenOnRemoteOptions } from '@/utility/please-login.js';
 import { i18n } from '@/i18n.js';
 import * as os from '@/os.js';
 
@@ -76,23 +76,62 @@ import MkInfo from '@/components/MkInfo.vue';
 const props = withDefaults(defineProps<{
 	message?: string,
 	openOnRemote?: OpenOnRemoteOptions,
+	initialUsername?: string;
 	useConditionalMediation?: boolean,
 }>(), {
 	message: '',
 	openOnRemote: undefined,
+	initialUsername: undefined,
 	useConditionalMediation: false,
 });
 
 const emit = defineEmits<{
 	(ev: 'usernameSubmitted', v: string): void;
 	(ev: 'passwordProvided', v: string): void;
-	(ev: 'passkeyClick', v: MouseEvent): void;
+	(ev: 'passkeyClick', v: PointerEvent): void;
 	(ev: 'done', v: { context: string, credential: AuthenticationPublicKeyCredential }): void;
 }>();
 
 const host = toUnicode(configHost);
 
-const username = ref('');
+const username = ref(props.initialUsername ?? '');
+const abortController = new AbortController();
+
+onMounted(() => {
+	if (!props.useConditionalMediation || !webAuthnSupported()) return;
+
+	misskeyApi('signin-with-passkey', {}, undefined, abortController.signal)
+		.then((response) => {
+			if (abortController.signal.aborted) return;
+
+			const options = parseRequestOptionsFromJSON({
+				mediation: 'conditional',
+				// @ts-expect-error TODO: misskey-js由来の型（@simplewebauthn/types）とフロントエンド由来の型（@github/webauthn-json）が合わない
+				publicKey: response.option,
+				abortSignal: abortController.signal,
+			});
+
+			webAuthnRequest(options)
+				.then(credential => {
+					emit('done', {
+						context: response.context,
+						credential,
+					});
+				})
+				.catch(err => {
+					if (abortController.signal.aborted || err?.name === 'AbortError') return;
+					console.error(err);
+				});
+		})
+		.catch(err => {
+			if (abortController.signal.aborted || err?.name === 'AbortError') return;
+			console.error(err);
+		});
+});
+
+onUnmounted(() => {
+	abortController.abort();
+});
 
 //#region Open on remote
 function openRemote(options: OpenOnRemoteOptions, targetHost?: string): void {

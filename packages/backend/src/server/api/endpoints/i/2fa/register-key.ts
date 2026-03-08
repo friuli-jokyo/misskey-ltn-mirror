@@ -212,7 +212,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 
 				try {
 					await this.userAuthService.twoFactorAuthenticate(profile, token);
-				} catch (e) {
+				} catch (_) {
 					throw new Error('authentication failed');
 				}
 			}
@@ -221,12 +221,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 			if (!passwordMatched) {
 				throw new ApiError(meta.errors.incorrectPassword);
 			}
-
-			/*
-			if (!profile.twoFactorEnabled) {
-				throw new ApiError(meta.errors.twoFactorNotEnabled);
-			}
-			 */
 
 			return await this.webAuthnService.initiateRegistration(
 				me.id,

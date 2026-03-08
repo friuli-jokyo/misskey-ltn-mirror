@@ -13,7 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 >
 	<template #header>{{ i18n.ts.forgotPassword }}</template>
 
-	<MkSpacer :marginMin="20" :marginMax="28">
+	<div class="_spacer" style="--MI_SPACER-min: 20px; --MI_SPACER-max: 28px;">
 		<form v-if="instance.enableEmail" @submit.prevent="onSubmit">
 			<div class="_gaps_m">
 				<MkInput v-model="username" type="text" pattern="^[a-zA-Z0-9_]+$" :spellcheck="false" autofocus required>
@@ -36,16 +36,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div v-else>
 			{{ i18n.ts._forgotPassword.contactAdmin }}
 		</div>
-	</MkSpacer>
+	</div>
 </MkModalWindow>
 </template>
 
 <script lang="ts" setup>
-import { ref } from 'vue';
+import { ref, useTemplateRef } from 'vue';
 import MkModalWindow from '@/components/MkModalWindow.vue';
 import MkButton from '@/components/MkButton.vue';
 import MkInput from '@/components/MkInput.vue';
-import MkInfo from '@/components/MkInfo.vue';
 import * as os from '@/os.js';
 import { instance } from '@/instance.js';
 import { i18n } from '@/i18n.js';
@@ -55,7 +54,7 @@ const emit = defineEmits<{
 	(ev: 'closed'): void;
 }>();
 
-const dialog = ref<InstanceType<typeof MkModalWindow>>();
+const dialog = useTemplateRef('dialog');
 
 const username = ref('');
 const email = ref('');

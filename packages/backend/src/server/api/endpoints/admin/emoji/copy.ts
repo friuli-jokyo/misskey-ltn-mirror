@@ -17,7 +17,7 @@ export const meta = {
 	tags: ['admin'],
 
 	requireCredential: true,
-	requireRolePolicy: 'canManageCustomEmojis',
+	requiredRolePolicy: 'canManageCustomEmojis',
 	kind: 'write:admin:emoji',
 
 	errors: {
@@ -76,7 +76,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			try {
 				// Create file
 				driveFile = await this.driveService.uploadFromUrl({ url: emoji.originalUrl, user: null, force: true });
-			} catch (e) {
+			} catch (_) {
 				// TODO: need to return Drive Error
 				throw new ApiError();
 			}
@@ -95,6 +95,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				host: null,
 				license: emoji.license,
 				isSensitive: emoji.isSensitive,
+				hidden: emoji.hidden,
+				conspicuousScale: emoji.conspicuousScale,
 				localOnly: emoji.localOnly,
 				roleIdsThatCanBeUsedThisEmojiAsReaction: emoji.roleIdsThatCanBeUsedThisEmojiAsReaction,
 			}, me);
