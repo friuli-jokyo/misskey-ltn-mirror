@@ -194,13 +194,16 @@ watch([() => props.reactions, () => props.maxNumber], ([newSource, maxNumber]) =
 }
 
 .root {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px;
+	margin: 4px -2px 0 -2px;
 
 	&:empty {
 		display: none;
+	}
+
+	&::after {
+		content: "";
+		display: block;
+		clear: both;
 	}
 }
 </style>
