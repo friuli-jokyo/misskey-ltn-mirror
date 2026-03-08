@@ -22,12 +22,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div :class="$style.items">
 			<div>
 				<div :class="$style.label">{{ i18n.ts.invitationCode }}</div>
-				<div>{{ invite.code }}</div>
+				<div class="_selectableAtomic">{{ invite.code }}</div>
 			</div>
 			<div v-if="moderator">
 				<div :class="$style.label">{{ i18n.ts.inviteCodeCreator }}</div>
 				<div v-if="invite.createdBy" :class="$style.user">
-					<MkAvatar :user="invite.createdBy" :class="$style.avatar" link preview small/>
+				<MkAvatar :user="invite.createdBy" :class="$style.avatar" link preview small/>
 					<MkUserName :user="invite.createdBy" :nowrap="false"/>
 					<div v-if="moderator">({{ invite.createdBy.id }})</div>
 				</div>
@@ -36,7 +36,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<div v-if="invite.used">
 				<div :class="$style.label">{{ i18n.ts.registeredUserUsingInviteCode }}</div>
 				<div v-if="invite.usedBy" :class="$style.user">
-					<MkAvatar :user="invite.usedBy" :class="$style.avatar" link preview small/>
+				<MkAvatar :user="invite.usedBy" :class="$style.avatar" link preview small/>
 					<MkUserName :user="invite.usedBy" :nowrap="false"/>
 					<div v-if="moderator">({{ invite.usedBy.id }})</div>
 				</div>
@@ -64,7 +64,7 @@ import { computed } from 'vue';
 import * as Misskey from 'misskey-js';
 import MkFolder from '@/components/MkFolder.vue';
 import MkButton from '@/components/MkButton.vue';
-import { copyToClipboard } from '@/scripts/copy-to-clipboard.js';
+import { copyToClipboard } from '@/utility/copy-to-clipboard.js';
 import { i18n } from '@/i18n.js';
 import * as os from '@/os.js';
 
@@ -90,7 +90,6 @@ function deleteCode() {
 
 function copyInviteCode() {
 	copyToClipboard(props.invite.code);
-	os.success();
 }
 </script>
 

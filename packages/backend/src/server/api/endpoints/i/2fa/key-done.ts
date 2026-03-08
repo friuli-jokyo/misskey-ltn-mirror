@@ -88,7 +88,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 
 					try {
 						await this.userAuthService.twoFactorAuthenticate(profile, token);
-					} catch (e) {
+					} catch (_) {
 						throw new Error('authentication failed');
 					}
 				}
@@ -102,12 +102,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 					throw new ApiError(meta.errors.incorrectPassword);
 				}
 			}
-
-			/*
-			if (!profile.twoFactorEnabled) {
-				throw new ApiError(meta.errors.twoFactorNotEnabled);
-			}
-			 */
 
 			const keyInfo = await this.webAuthnService.verifyRegistration(me.id, ps.credential);
 			const keyId = keyInfo.credentialID;

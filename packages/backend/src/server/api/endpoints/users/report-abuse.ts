@@ -9,7 +9,6 @@ import { GetterService } from '@/server/api/GetterService.js';
 import { RoleService } from '@/core/RoleService.js';
 import { AbuseReportService } from '@/core/AbuseReportService.js';
 import { ApiError } from '../../error.js';
-import { ACTOR_USERNAME } from '@/core/InstanceActorService.js';
 
 export const meta = {
 	tags: ['users'],
@@ -70,11 +69,11 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw new ApiError(meta.errors.cannotReportYourself);
 			}
 
-			if (targetUserHost && targetUser.username !== ACTOR_USERNAME && await this.roleService.isAdministrator(targetUser)) {
+			if (targetUserHost && !targetUser.username.includes('.') && await this.roleService.isAdministrator(targetUser)) {
 				throw new ApiError(meta.errors.cannotReportAdmin);
 			}
 
-			if (ps.noteId && !targetUserHost && targetUser.username === ACTOR_USERNAME) { // パブリックレターに対する通報の可能性がある
+			if (ps.noteId && !targetUserHost && targetUser.username.includes('.')) { // パブリックレターに対する通報の可能性がある
 				const note = await this.getterService.getNote(ps.noteId).catch(() => {});
 				if (note) {
 					targetUserId = note.userId;

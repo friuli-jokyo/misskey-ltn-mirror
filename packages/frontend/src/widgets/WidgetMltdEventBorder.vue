@@ -23,10 +23,11 @@
 
 <script lang="ts" setup>
 import { computed, onUnmounted, ref, watch } from 'vue';
-import { WidgetComponentEmits, WidgetComponentExpose, WidgetComponentProps, useWidgetPropsManager } from './widget';
+import { useWidgetPropsManager } from './widget.js';
+import type { WidgetComponentEmits, WidgetComponentExpose, WidgetComponentProps } from './widget.js';
+import type { GetFormResultType } from '@/utility/form.js';
 import MkContainer from '@/components/MkContainer.vue';
-import { i18n } from '@/i18n';
-import { GetFormResultType } from '@/scripts/form';
+import { i18n } from '@/i18n.js';
 /*
 import * as sound from '@/scripts/sound';
  */

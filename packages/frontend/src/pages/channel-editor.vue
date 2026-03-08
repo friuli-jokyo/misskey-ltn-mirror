@@ -4,9 +4,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<MkStickyContainer>
-	<template #header><MkPageHeader :actions="headerActions" :tabs="headerTabs"/></template>
-	<MkSpacer :contentMax="700">
+<PageWithHeader :actions="headerActions" :tabs="headerTabs">
+	<div class="_spacer" style="--MI_SPACER-w: 700px;">
 		<div v-if="channelId == null || channel != null" class="_gaps_m">
 			<MkInput v-model="name">
 				<template #label>{{ i18n.ts.name }}</template>
@@ -32,9 +31,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<template #label>{{ i18n.ts._channel.requirePublicWriteAccess }}</template>
 			</MkSwitch>
 
-			<MkSelect v-model="anonymousStrategy" :readonly="channelId != null">
+			<MkSelect v-model="anonymousStrategy" :readonly="channelId != null" :items="anonymousStrategyItems">
 				<template #label>{{ i18n.ts._channel.anonymousStrategy }}</template>
-				<option v-for="item in ['none', 'daily', 'weekly', 'monthly', 'yearly', 'manual']" :key="item" :value="item">{{ i18n.ts[item] }}</option>
 			</MkSelect>
 
 			<div>
@@ -51,20 +49,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div class="_gaps">
 					<MkButton primary rounded @click="addPinnedNote()"><i class="ti ti-plus"></i></MkButton>
 
-					<Sortable
-						v-model="pinnedNotes"
-						itemKey="id"
-						:handle="'.' + $style.pinnedNoteHandle"
-						:animation="150"
+					<MkDraggable
+						:modelValue="pinnedNoteIds.map(id => ({ id }))"
+						direction="vertical"
+						@update:modelValue="v => pinnedNoteIds = v.map(x => x.id)"
 					>
-						<template #item="{element,index}">
+						<template #default="{ item }">
 							<div :class="$style.pinnedNote">
 								<button class="_button" :class="$style.pinnedNoteHandle"><i class="ti ti-menu"></i></button>
-								{{ element.id }}
-								<button class="_button" :class="$style.pinnedNoteRemove" @click="removePinnedNote(index)"><i class="ti ti-x"></i></button>
+								{{ item.id }}
+								<button class="_button" :class="$style.pinnedNoteRemove" @click="removePinnedNote(item.id)"><i class="ti ti-x"></i></button>
 							</div>
 						</template>
-					</Sortable>
+					</MkDraggable>
 				</div>
 			</MkFolder>
 
@@ -74,28 +71,27 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkButton v-if="channel?.anonymousStrategy === 'manual'" danger @click="regenerateSalt()"><i class="ti ti-refresh-alert"></i> {{ i18n.ts.regenerate }}</MkButton>
 			</div>
 		</div>
-	</MkSpacer>
-</MkStickyContainer>
+	</div>
+</PageWithHeader>
 </template>
 
 <script lang="ts" setup>
-import { computed, ref, watch, defineAsyncComponent } from 'vue';
+import { computed, ref, watch } from 'vue';
 import * as Misskey from 'misskey-js';
 import MkButton from '@/components/MkButton.vue';
 import MkInput from '@/components/MkInput.vue';
 import MkColorInput from '@/components/MkColorInput.vue';
-import { selectFile } from '@/scripts/select-file.js';
+import { selectFile } from '@/utility/drive.js';
 import * as os from '@/os.js';
-import { misskeyApi } from '@/scripts/misskey-api.js';
-import { definePageMetadata } from '@/scripts/page-metadata.js';
+import { misskeyApi } from '@/utility/misskey-api.js';
+import { definePage } from '@/page.js';
 import { i18n } from '@/i18n.js';
 import MkFolder from '@/components/MkFolder.vue';
-import MkSelect from '@/components/MkSelect.vue';
 import MkSwitch from '@/components/MkSwitch.vue';
 import MkTextarea from '@/components/MkTextarea.vue';
-import { useRouter } from '@/router/supplier.js';
-
-const Sortable = defineAsyncComponent(() => import('vuedraggable').then(x => x.default));
+import MkDraggable from '@/components/MkDraggable.vue';
+import MkSelect from '@/components/MkSelect.vue';
+import { useRouter } from '@/router.js';
 
 const router = useRouter();
 
@@ -104,7 +100,7 @@ const props = defineProps<{
 }>();
 
 const channel = ref<Misskey.entities.Channel | null>(null);
-const name = ref<string | null>(null);
+const name = ref<string>('');
 const description = ref<string | null>(null);
 const bannerUrl = ref<string | null>(null);
 const bannerId = ref<string | null>(null);
@@ -113,7 +109,15 @@ const isSensitive = ref(false);
 const allowRenoteToExternal = ref(true);
 const requirePublicWriteAccess = ref(true);
 const anonymousStrategy = ref<'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'manual'>('none');
-const pinnedNotes = ref<{ id: Misskey.entities.Note['id'] }[]>([]);
+const anonymousStrategyItems = [
+	{ label: i18n.ts.none, value: 'none' },
+	{ label: i18n.ts.daily, value: 'daily' },
+	{ label: i18n.ts.weekly, value: 'weekly' },
+	{ label: i18n.ts.monthly, value: 'monthly' },
+	{ label: i18n.ts.yearly, value: 'yearly' },
+	{ label: i18n.ts.manual, value: 'manual' },
+];
+const pinnedNoteIds = ref<Misskey.entities.Note['id'][]>([]);
 
 watch(() => bannerId.value, async () => {
 	if (bannerId.value == null) {
@@ -128,22 +132,22 @@ watch(() => bannerId.value, async () => {
 async function fetchChannel() {
 	if (props.channelId == null) return;
 
-	channel.value = await misskeyApi('channels/show', {
+	const result = await misskeyApi('channels/show', {
 		channelId: props.channelId,
 	});
 
-	name.value = channel.value.name;
-	description.value = channel.value.description;
-	bannerId.value = channel.value.bannerId;
-	bannerUrl.value = channel.value.bannerUrl;
-	isSensitive.value = channel.value.isSensitive;
-	pinnedNotes.value = channel.value.pinnedNoteIds.map(id => ({
-		id,
-	}));
-	color.value = channel.value.color;
-	allowRenoteToExternal.value = channel.value.allowRenoteToExternal;
-	requirePublicWriteAccess.value = channel.value.requirePublicWriteAccess;
-	anonymousStrategy.value = channel.value.anonymousStrategy ?? 'none';
+	name.value = result.name;
+	description.value = result.description;
+	bannerId.value = result.bannerId;
+	bannerUrl.value = result.bannerUrl;
+	isSensitive.value = result.isSensitive;
+	pinnedNoteIds.value = result.pinnedNoteIds;
+	color.value = result.color;
+	allowRenoteToExternal.value = result.allowRenoteToExternal;
+	requirePublicWriteAccess.value = result.requirePublicWriteAccess;
+	anonymousStrategy.value = result.anonymousStrategy ?? 'none';
+
+	channel.value = result;
 }
 
 fetchChannel();
@@ -152,17 +156,16 @@ async function addPinnedNote() {
 	const { canceled, result: value } = await os.inputText({
 		title: i18n.ts.noteIdOrUrl,
 	});
-	if (canceled) return;
+	if (canceled || value == null) return;
+	const fromUrl = value.includes('/') ? value.split('/').pop() : null;
 	const note = await os.apiWithDialog('notes/show', {
-		noteId: value.includes('/') ? value.split('/').pop() : value,
+		noteId: fromUrl ?? value,
 	});
-	pinnedNotes.value = [{
-		id: note.id,
-	}, ...pinnedNotes.value];
+	pinnedNoteIds.value.unshift(note.id);
 }
 
-function removePinnedNote(index: number) {
-	pinnedNotes.value.splice(index, 1);
+function removePinnedNote(id: string) {
+	pinnedNoteIds.value = pinnedNoteIds.value.filter(x => x !== id);
 }
 
 function save() {
@@ -170,33 +173,40 @@ function save() {
 		name: name.value,
 		description: description.value,
 		bannerId: bannerId.value,
-		pinnedNoteIds: pinnedNotes.value.map(x => x.id),
 		color: color.value,
 		isSensitive: isSensitive.value,
 		allowRenoteToExternal: allowRenoteToExternal.value,
 		requirePublicWriteAccess: requirePublicWriteAccess.value,
-	};
+	} satisfies Misskey.entities.ChannelsCreateRequest;
 
-	if (props.channelId) {
-		params.channelId = props.channelId;
-		os.apiWithDialog('channels/update', params);
+	if (props.channelId != null) {
+		os.apiWithDialog('channels/update', {
+			...params,
+			channelId: props.channelId,
+			pinnedNoteIds: pinnedNoteIds.value,
+		});
 	} else {
 		if (anonymousStrategy.value !== 'none') {
 			params.anonymousStrategy = anonymousStrategy.value;
 		}
 		os.apiWithDialog('channels/create', params).then(created => {
-			router.push(`/channels/${created.id}`);
+			router.push('/channels/:channelId', {
+				params: {
+					channelId: created.id,
+				},
+			});
 		});
 	}
 }
 
 async function archive() {
+	if (props.channelId == null) return;
+
 	const { canceled } = await os.confirm({
 		type: 'warning',
 		title: i18n.tsx.channelArchiveConfirmTitle({ name: name.value }),
 		text: i18n.ts.channelArchiveConfirmDescription,
 	});
-
 	if (canceled) return;
 
 	misskeyApi('channels/update', {
@@ -224,8 +234,11 @@ async function regenerateSalt() {
 	});
 }
 
-function setBannerImage(evt) {
-	selectFile(evt.currentTarget ?? evt.target, null).then(file => {
+function setBannerImage(evt: PointerEvent) {
+	selectFile({
+		anchorElement: evt.currentTarget ?? evt.target,
+		multiple: false,
+	}).then(file => {
 		bannerId.value = file.id;
 	});
 }
@@ -238,7 +251,7 @@ const headerActions = computed(() => []);
 
 const headerTabs = computed(() => []);
 
-definePageMetadata(() => ({
+definePage(() => ({
 	title: props.channelId ? i18n.ts._channel.edit : i18n.ts._channel.create,
 	icon: 'ti ti-device-tv',
 }));

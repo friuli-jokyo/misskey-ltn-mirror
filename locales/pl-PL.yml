@@ -230,7 +230,6 @@ noUsers: "Brak użytkowników"
 editProfile: "Edytuj profil"
 noteDeleteConfirm: "Czy na pewno chcesz usunąć ten wpis?"
 pinLimitExceeded: "Nie możesz przypiąć więcej wpisów."
-intro: "Zakończono instalację Misskey! Utwórz konto administratora."
 done: "Gotowe"
 processing: "Przetwarzanie"
 preview: "Podgląd"
@@ -269,7 +268,6 @@ deleteAreYouSure: "Czy na pewno chcesz usunąć „{x}”?"
 resetAreYouSure: "Czy na pewno chcesz zresetować?"
 areYouSure: "Na pewno?"
 saved: "Zapisano"
-messaging: "Wiadomości"
 upload: "Wyślij"
 keepOriginalUploading: "Zachowaj oryginalny obraz"
 keepOriginalUploadingDescription: "Zapisuje oryginalnie przesłany obraz w niezmienionej postaci. Jeśli ta opcja jest wyłączona, po przesłaniu zostanie wygenerowana wersja do wyświetlenia w Internecie."
@@ -282,7 +280,6 @@ uploadFromUrlMayTakeTime: "Wysyłanie może chwilę potrwać."
 explore: "Eksploruj"
 messageRead: "Przeczytano"
 noMoreHistory: "Nie ma dalszej historii"
-startMessaging: "Rozpocznij czat"
 nUsersRead: "przeczytano przez {n}"
 agreeTo: "Wyrażam zgodę na {0}"
 agree: "Zatwierdź"
@@ -466,8 +463,6 @@ retype: "Wprowadź ponownie"
 noteOf: "Wpisy {user}"
 quoteAttached: "Zacytowano"
 quoteQuestion: "Czy na pewno chcesz umieścić cytat?"
-noMessagesYet: "Nie napisano jeszcze wiadomości"
-newMessageExists: "Masz nową wiadomość"
 onlyOneFileCanBeAttached: "Możesz załączyć tylko jeden plik do wiadomości"
 signinRequired: "Proszę się zalogować"
 invitations: "Zaproś"
@@ -753,7 +748,6 @@ thisIsExperimentalFeature: "Ta funkcja jest eksperymentalna. Jej funkcjonalnoś�
 developer: "Programista"
 makeExplorable: "Pokazuj konto na stronie „Eksploruj”"
 makeExplorableDescription: "Jeżeli wyłączysz tę opcję, Twoje konto nie będzie wyświetlać się w sekcji „Eksploruj”."
-showGapBetweenNotesInTimeline: "Pokazuj odstęp między wpisami na osi czasu."
 duplicate: "Duplikuj"
 left: "Lewo"
 center: "Wyśsrodkuj"
@@ -1044,6 +1038,26 @@ flip: "Odwróć"
 lastNDays: "W ciągu ostatnich {n} dni"
 surrender: "Odrzuć"
 gameRetry: "Spróbuj ponownie"
+postForm: "Formularz tworzenia wpisu"
+information: "Informacje"
+inMinutes: "minuta"
+inDays: "dzień"
+widgets: "Widżety"
+presets: "Konfiguracja"
+_imageEditing:
+  _vars:
+    filename: "Nazwa pliku"
+_imageFrameEditor:
+  header: "Nagłówek"
+  font: "Czcionka"
+  fontSerif: "Szeryfowa"
+  fontSansSerif: "Bezszeryfowa"
+_chat:
+  invitations: "Zaproś"
+  noHistory: "Brak historii"
+  members: "Członkowie"
+  home: "Strona główna"
+  send: "Wyślij"
 _delivery:
   stop: "Zawieszono"
   _type:
@@ -1208,7 +1222,6 @@ _theme:
     header: "Nagłówek"
     navBg: "Tło paska bocznego"
     navFg: "Tekst paska bocznego"
-    navHoverFg: "Tekst paska bocznego (zbliżenie)"
     navActive: "Tekst paska bocznego (aktywny)"
     navIndicator: "Wskaźnik paska bocznego"
     link: "Odnośnik"
@@ -1230,12 +1243,8 @@ _theme:
     buttonBg: "Tło przycisku"
     buttonHoverBg: "Tło przycisku (po najechaniu)"
     inputBorder: "Obramowanie pola wejścia"
-    driveFolderBg: "Tło folderu na dysku"
-    wallpaperOverlay: "Nakładka tapety"
     badge: "Odznaka"
     messageBg: "Tło czatu"
-    accentDarken: "Akcent (ciemniejszy)"
-    accentLighten: "Akcent (jaśniejszy)"
     fgHighlighted: "Wyróżniony tekst"
 _sfx:
   note: "Wpisy"
@@ -1300,6 +1309,7 @@ _permissions:
   "write:gallery": "Edytuj swoją galerię"
   "read:gallery-likes": "Wyświetlanie listy polubionych postów w galerii"
   "write:gallery-likes": "Edytowanie listy polubionych postów w galerii"
+  "write:chat": "Tworzenie lub usuwanie wiadomości czatu"
 _auth:
   shareAccessTitle: "Przyznawanie uprawnień aplikacji"
   shareAccess: "Czy chcesz autoryzować „{name}” do dostępu do tego konta?"
@@ -1351,6 +1361,14 @@ _widgets:
   _userList:
     chooseList: "Wybierz listę"
   clicker: "Clicker"
+_widgetOptions:
+  height: "Wysokość"
+  _button:
+    colored: "Kolorowe"
+  _clock:
+    size: "Rozmiar"
+  _birthdayFollowings:
+    period: "Czas trwania"
 _cw:
   hide: "Ukryj"
   show: "Załaduj więcej"
@@ -1392,6 +1410,9 @@ _postForm:
   replyPlaceholder: "Odpowiedz na ten wpis..."
   quotePlaceholder: "Zacytuj ten wpis…"
   channelPlaceholder: "Publikuj na kanale..."
+  _howToUse:
+    visibility_title: "Widoczność"
+    menu_title: "Menu"
   _placeholders:
     a: "Co się dzieje?"
     b: "Co się wydarzyło?"
@@ -1583,3 +1604,23 @@ _reversi:
 _remoteLookupErrors:
   _noSuchObject:
     title: "Nie znaleziono"
+_search:
+  searchScopeAll: "Wszystkie"
+  searchScopeLocal: "Lokalne"
+_watermarkEditor:
+  opacity: "Przezroczystość"
+  scale: "Rozmiar"
+  text: "Tekst"
+  type: "Typ"
+  image: "Zdjęcia"
+  advanced: "Zaawansowane"
+_imageEffector:
+  _fxProps:
+    scale: "Rozmiar"
+    size: "Rozmiar"
+    color: "Kolor"
+    opacity: "Przezroczystość"
+    lightness: "Rozjaśnij"
+_qr:
+  showTabTitle: "Wyświetlanie"
+  raw: "Tekst"

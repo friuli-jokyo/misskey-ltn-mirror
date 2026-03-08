@@ -21,12 +21,20 @@ export const meta = {
 				name: {
 					type: 'string',
 				},
+				state: {
+					type: 'string',
+					enum: ['completed', 'failed', 'delayed', 'active', 'waiting', 'waiting-children', 'prioritized', 'unknown'],
+				},
 				progress: {
 					type: 'number',
 					nullable: true,
 				},
 				timestamp: {
 					type: 'number',
+				},
+				completedAt: {
+					type: 'number',
+					nullable: true,
 				},
 			},
 		},
@@ -45,14 +53,22 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject('queue:db')
 		public dbQueue: DbQueue,
 	) {
-		super(meta, paramDef, async (ps, me) => {
+		super(meta, paramDef, async (_ps, me) => {
 			const jobs = await dbQueue.getJobs();
-			return jobs.filter((job) => job.data.user.id === me.id).map((job) => ({
-				id: job.id,
-				name: job.name,
-				progress: typeof job.progress === 'number' ? job.progress : null,
-				timestamp: job.timestamp,
-			}));
+			const userJobs = jobs.filter((job) => job.data.user.id === me.id);
+
+			const jobsWithState = await Promise.all(
+				userJobs.map(async (job) => ({
+					id: job.id ?? '',
+					name: job.name,
+					state: await job.getState(),
+					progress: typeof job.progress === 'number' ? job.progress : null,
+					timestamp: job.timestamp,
+					completedAt: job.finishedOn ?? null,
+				})),
+			);
+
+			return jobsWithState;
 		});
 	}
 }

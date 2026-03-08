@@ -51,7 +51,7 @@ export const paramDef = {
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
 		@Inject(DI.meta)
-		private serverSettings: MiMeta,
+		private meta: MiMeta,
 
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
@@ -79,7 +79,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			if (ps.excludePinned) {
 				const pinnedAccts = new Map<string | null, string[]>();
-				for (const acct of serverSettings.pinnedUsers) {
+				for (const acct of this.meta.pinnedUsers) {
 					const { host, username } = Acct.parse(acct);
 					if (host && ps.origin === 'local') continue;
 					if (!host && ps.origin === 'remote') continue;

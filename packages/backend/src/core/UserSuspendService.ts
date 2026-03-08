@@ -9,7 +9,6 @@ import type { FollowingsRepository, FollowRequestsRepository, UsersRepository } 
 import { DI } from '@/di-symbols.js';
 import type Logger from '@/logger.js';
 import type { MiUser } from '@/models/User.js';
-import type { FollowingsRepository } from '@/models/_.js';
 import { QueueService } from '@/core/QueueService.js';
 import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
@@ -60,7 +59,7 @@ export class UserSuspendService {
 
 		(async () => {
 			await this.doPostSuspend(user).catch(e => {});
-			await this.unFollowAll(user).catch(e => {});
+			await this.unFollowAll(user).catch(_ => {});
 		})();
 	}
 

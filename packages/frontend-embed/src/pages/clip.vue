@@ -18,7 +18,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<a :href="url" :class="$style.instanceIconLink" target="_blank" rel="noopener noreferrer">
 					<img
 						:class="$style.instanceIcon"
-						:src="serverMetadata.iconUrl || '/favicon.ico'"
+						:src="serverMetadata.iconUrl || '/favicon.png'"
 					/>
 				</a>
 			</div>
@@ -84,7 +84,7 @@ const pagination = computed(() => ({
 
 const notesEl = useTemplateRef('notesEl');
 
-function top(ev: MouseEvent) {
+function top(ev: PointerEvent) {
 	const target = ev.target as HTMLElement | null;
 	if (target && isLink(target)) return;
 

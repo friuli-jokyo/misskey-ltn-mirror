@@ -27,13 +27,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { onMounted, ref, shallowRef, watch } from 'vue';
-import { defaultStore } from '@/store.js';
+import { store } from '@/store.js';
 
 const dial = shallowRef<HTMLElement>();
 const grip = shallowRef<HTMLElement>();
 const y = ref<number | null>(null);
 const visibilityChanging = ref(false);
-const visibility = defaultStore.reactiveState.visibility;
+const visibility = store.r.visibility;
 
 onMounted(() => {
 	grip.value!.scrollTop = visibility.value === 'public' ? 0 : visibility.value === 'home' ? 25 : visibility.value === 'followers' ? 50 : 75;
@@ -54,7 +54,7 @@ const scroll = (ev: Event) => {
 	const newVisibility = scroll <= 0 ? 'public' : scroll === 1 ? 'home' : scroll === 2 ? 'followers' : 'specified';
 	if (visibility.value === newVisibility) return;
 	visibilityChanging.value = true;
-	defaultStore.set('visibility', newVisibility);
+	store.set('visibility', newVisibility);
 };
 
 const mousedown = (ev: MouseEvent) => {

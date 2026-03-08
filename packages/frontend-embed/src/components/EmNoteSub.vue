@@ -97,7 +97,7 @@ if (props.detail) {
 	position: absolute;
 	top: 8px;
 	right: 8px;
-	height: calc(100% - 16px);
+	height: calc(100% - 8px);
 	pointer-events: none;
 	border-right: 5px dotted;
 }
@@ -106,7 +106,7 @@ if (props.detail) {
 	position: absolute;
 	top: 8px;
 	right: 8px;
-	height: calc(100% - 16px);
+	height: calc(100% - 8px);
 	pointer-events: none;
 	border-right: 5px solid;
 	border-radius: 2.5px;

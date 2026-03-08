@@ -4,102 +4,66 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<MkStickyContainer>
-	<template #header><MkPageHeader v-model:tab="src" :actions="headerActions" :tabs="$i ? headerTabs : headerTabsWhenNotLogin" :displayMyAvatar="true"/></template>
-	<MkSpacer :contentMax="800">
-		<MkHorizontalSwipe v-model:tab="src" :tabs="$i ? headerTabs : headerTabsWhenNotLogin">
-			<div :key="src" ref="rootEl">
-				<TransitionGroup :name="defaultStore.state.animation ? '_transition_list' : ''">
-					<template v-if="a1on2024enabled">
-						<canvas ref="canvas2024" :class="$style.canvas"/>
-						<MkButton :class="$style.canvasActionButton" @click="canvas2024WithSound = !canvas2024WithSound"><i class="ti" :class="canvas2024WithSound ? 'ti-volume' : 'ti-volume-off'"></i></MkButton>
-					</template>
-					<MkInfo v-if="isBasicTimeline(src) && !defaultStore.reactiveState.timelineTutorials.value[src]" style="margin-bottom: var(--MI-margin);" closable @close="closeTutorial()">
-						{{ i18n.ts._timelineDescription[src] }}
-					</MkInfo>
-					<MkPostForm v-if="defaultStore.reactiveState.showFixedPostForm.value" :class="$style.postForm" class="post-form _panel" fixed style="margin-bottom: var(--MI-margin);"/>
-					<div v-if="queue > 0" :class="$style.new"><button class="_buttonPrimary" :class="$style.newButton" @click="top()">{{ i18n.ts.newNoteRecived }}</button></div>
-					<div :class="$style.tl">
-						<MkTimeline
-							ref="tlComponent"
-							:key="src + withRenotes + withReplies + onlyFiles + withSensitive"
-							:src="src.split(':')[0]"
-							:list="src.split(':')[1]"
-							:withRenotes="withRenotes"
-							:withReplies="withReplies"
-							:withSensitive="withSensitive"
-							:onlyFiles="onlyFiles"
-							:sound="true"
-							@queue="queueUpdated"
-						/>
-					</div>
-				</TransitionGroup>
-			</div>
-		</MkHorizontalSwipe>
-	</MkSpacer>
-</MkStickyContainer>
+<PageWithHeader v-model:tab="src" :actions="headerActions" :tabs="$i ? headerTabs : headerTabsWhenNotLogin" :swipable="true" :displayMyAvatar="true" :canOmitTitle="true">
+	<div class="_spacer" style="--MI_SPACER-w: 800px;">
+		<MkTip v-if="isBasicTimeline(src)" :k="`tl.${src}`" style="margin-bottom: var(--MI-margin);">
+			{{ i18n.ts._timelineDescription[src] }}
+		</MkTip>
+		<MkPostForm v-if="prefer.r.showFixedPostForm.value" :class="$style.postForm" class="_panel" fixed style="margin-bottom: var(--MI-margin);"/>
+		<MkStreamingNotesTimeline
+			ref="tlComponent"
+			:key="src + withRenotes + withReplies + onlyFiles + withSensitive"
+			:class="$style.tl"
+			:src="(src.split(':')[0] as (BasicTimelineType | 'list'))"
+			:list="src.split(':')[1]"
+			:withRenotes="withRenotes"
+			:withReplies="withReplies"
+			:withSensitive="withSensitive"
+			:onlyFiles="onlyFiles"
+			:sound="true"
+		/>
+	</div>
+</PageWithHeader>
 </template>
 
 <script lang="ts" setup>
-import { computed, watch, provide, shallowRef, ref, onMounted, onUnmounted, onActivated } from 'vue';
-import * as Matter from 'matter-js';
-import * as mfm from 'mfm-js';
-import * as Misskey from 'misskey-js';
+import { computed, watch, provide, useTemplateRef, ref, onMounted, onActivated } from 'vue';
 import type { Tab } from '@/components/global/MkPageHeader.tabs.vue';
-import MkButton from '@/components/MkButton.vue';
-import MkTimeline from '@/components/MkTimeline.vue';
-import MkInfo from '@/components/MkInfo.vue';
-import MkPostForm from '@/components/MkPostForm.vue';
-import MkHorizontalSwipe from '@/components/MkHorizontalSwipe.vue';
-import MkRippleEffect from '@/components/MkRippleEffect.vue';
-import { checkWordMute } from '@/scripts/check-word-mute.js';
-import { getStaticImageUrl } from '@/scripts/media-proxy';
-import { scroll } from '@@/js/scroll.js';
-import { globalEvents } from '@/events';
-import * as os from '@/os.js';
-import { misskeyApi } from '@/scripts/misskey-api.js';
-import { defaultStore } from '@/store.js';
-import { i18n } from '@/i18n.js';
-import { $i } from '@/account.js';
-import { localDate, a1on2024enabled } from '@/ref.js';
-import * as sound from '@/scripts/sound.js';
-import { definePageMetadata } from '@/scripts/page-metadata.js';
-import { antennasCache, userListsCache, favoritedChannelsCache } from '@/cache.js';
-import { deviceKind } from '@/scripts/device-kind.js';
-import { deepMerge } from '@/scripts/merge.js';
 import type { MenuItem } from '@/types/menu.js';
+import type { BasicTimelineType } from '@/timelines.js';
+import type { PageHeaderItem } from '@/types/page-header.js';
+import MkStreamingNotesTimeline from '@/components/MkStreamingNotesTimeline.vue';
+import MkPostForm from '@/components/MkPostForm.vue';
+import * as os from '@/os.js';
+import { store } from '@/store.js';
+import { i18n } from '@/i18n.js';
+import { $i } from '@/i.js';
+import { definePage } from '@/page.js';
+import { antennasCache, userListsCache, favoritedChannelsCache } from '@/cache.js';
+import { deviceKind } from '@/utility/device-kind.js';
+import { deepMerge } from '@/utility/merge.js';
 import { miLocalStorage } from '@/local-storage.js';
 import { availableBasicTimelines, hasWithReplies, isAvailableBasicTimeline, isBasicTimeline, basicTimelineIconClass } from '@/timelines.js';
-import type { BasicTimelineType } from '@/timelines.js';
+import { prefer } from '@/preferences.js';
 
-provide('shouldOmitHeaderTitle', true);
-
-const tlComponent = shallowRef<InstanceType<typeof MkTimeline>>();
-const rootEl = shallowRef<HTMLElement>();
-const canvas2024 = shallowRef<HTMLCanvasElement>();
-const canvas2024WithSound = ref(false);
-const render2024Map = new Map<HTMLCanvasElement, Matter.Render>();
-const runner2024Map = new Map<HTMLCanvasElement, Matter.Runner>();
-const timelineHandler2024Map = new Map<HTMLCanvasElement, (note: Misskey.entities.Note) => void>();
-const reactionHandler2024Map = new Map<HTMLCanvasElement, (reaction: string) => void>();
+const tlComponent = useTemplateRef('tlComponent');
 
 type TimelinePageSrc = BasicTimelineType | `list:${string}`;
 
-const queue = ref(0);
 const srcWhenNotSignin = ref<'local' | 'global'>(isAvailableBasicTimeline('local') ? 'local' : 'global');
 const src = computed<TimelinePageSrc>({
-	get: () => ($i ? defaultStore.reactiveState.tl.value.src : srcWhenNotSignin.value),
+	get: () => ($i ? store.r.tl.value.src : srcWhenNotSignin.value),
 	set: (x) => saveSrc(x),
 });
 const withRenotes = computed<boolean>({
-	get: () => defaultStore.reactiveState.tl.value.filter.withRenotes,
+	get: () => store.r.tl.value.filter.withRenotes,
 	set: (x) => saveTlFilter('withRenotes', x),
 });
 
 // computed内での無限ループを防ぐためのフラグ
 const localSocialTLFilterSwitchStore = ref<'withReplies' | 'onlyFiles' | false>(
-	defaultStore.reactiveState.tl.value.filter.withReplies ? 'withReplies' :
-	defaultStore.reactiveState.tl.value.filter.onlyFiles ? 'onlyFiles' :
+	store.r.tl.value.filter.withReplies ? 'withReplies' :
+	store.r.tl.value.filter.onlyFiles ? 'onlyFiles' :
 	false,
 );
 
@@ -109,7 +73,7 @@ const withReplies = computed<boolean>({
 		if (['local', 'social'].includes(src.value) && localSocialTLFilterSwitchStore.value === 'onlyFiles') {
 			return false;
 		} else {
-			return defaultStore.reactiveState.tl.value.filter.withReplies;
+			return store.r.tl.value.filter.withReplies;
 		}
 	},
 	set: (x) => saveTlFilter('withReplies', x),
@@ -119,7 +83,7 @@ const onlyFiles = computed<boolean>({
 		if (['local', 'social'].includes(src.value) && localSocialTLFilterSwitchStore.value === 'withReplies') {
 			return false;
 		} else {
-			return defaultStore.reactiveState.tl.value.filter.onlyFiles;
+			return store.r.tl.value.filter.onlyFiles;
 		}
 	},
 	set: (x) => saveTlFilter('onlyFiles', x),
@@ -136,177 +100,15 @@ watch([withReplies, onlyFiles], ([withRepliesTo, onlyFilesTo]) => {
 });
 
 const withSensitive = computed<boolean>({
-	get: () => defaultStore.reactiveState.tl.value.filter.withSensitive,
+	get: () => store.r.tl.value.filter.withSensitive,
 	set: (x) => saveTlFilter('withSensitive', x),
 });
 
-watch(canvas2024, (value, oldValue) => {
-	if (oldValue) {
-		const render = render2024Map.get(oldValue);
-		if (render) {
-			Matter.Render.stop(render);
-		}
-		const runner = runner2024Map.get(oldValue);
-		if (runner) {
-			Matter.Runner.stop(runner);
-		}
-	}
-	if (!value) {
-		return;
-	}
-	const engine = Matter.Engine.create({
-		constraintIterations: 4,
-		positionIterations: 8,
-		velocityIterations: 8,
-	});
-	const render = Matter.Render.create({
-		canvas: value,
-		engine,
-		options: {
-			width: 800,
-			height: 450,
-			background: 'transparent',
-			wireframeBackground: 'transparent', // transparent to hide
-			wireframes: false,
-			showSleeping: false,
-			pixelRatio: window.devicePixelRatio,
-		},
-	});
-	value.removeAttribute('style');
-	render2024Map.set(value, render);
-	Matter.Render.run(render);
-	const runner = Matter.Runner.create();
-	runner2024Map.set(value, runner);
-	Matter.Runner.run(runner, engine);
-	const ground = Matter.Bodies.rectangle(400, 500, 800, 100, { isStatic: true, label: 'Ground', render: { visible: false }, chamfer: { radius: 12 } });
-	const pit = Matter.Bodies.rectangle(400, 5000, 80000, 100, { isStatic: true, label: 'Pit', render: { visible: false } });
-	Matter.Composite.add(engine.world, [ground, pit]);
-	Matter.Events.on(engine, 'collisionStart', (event) => {
-		for (const pair of event.pairs) {
-			if (pair.bodyA.label === 'Pit') {
-				Matter.Composite.remove(engine.world, pair.bodyB);
-			} else if (pair.bodyB.label === 'Pit') {
-				Matter.Composite.remove(engine.world, pair.bodyA);
-			} else if (pair.bodyA.label === pair.bodyB.label) {
-				const aspect = (Math.max(...pair.bodyA.vertices.map(v => v.x)) - Math.min(...pair.bodyA.vertices.map(v => v.x))) / (Math.max(...pair.bodyA.vertices.map(v => v.y)) - Math.min(...pair.bodyA.vertices.map(v => v.y)));
-				const rect = value.getBoundingClientRect();
-				const x = pair.activeContacts[0]?.vertex.x ?? (pair.bodyA.position.x + pair.bodyB.position.x) / 2;
-				const y = pair.activeContacts[0]?.vertex.y ?? (pair.bodyA.position.y + pair.bodyB.position.y) / 2;
-				os.popup(MkRippleEffect, { x: x * rect.width / 800 + rect.x, y: y * rect.height / 450 + rect.y }, {}, 'end');
-				Matter.Composite.remove(engine.world, [pair.bodyA, pair.bodyB]);
-				if (canvas2024WithSound.value) {
-					sound.playUrl('/client-assets/drop-and-fusion/fusion.mp3', {
-						volume: 1,
-						pan: (x - 400) / 400,
-						playbackRate: 1 / Math.log1p(aspect),
-					});
-				}
-			} else if (canvas2024WithSound.value) {
-				const x = pair.activeContacts[0]?.vertex.x ?? (pair.bodyA.position.x + pair.bodyB.position.x) / 2;
-				const aspectA = (Math.max(...pair.bodyA.vertices.map(v => v.x)) - Math.min(...pair.bodyA.vertices.map(v => v.x))) / (Math.max(...pair.bodyA.vertices.map(v => v.y)) - Math.min(...pair.bodyA.vertices.map(v => v.y)));
-				const aspectB = (Math.max(...pair.bodyB.vertices.map(v => v.x)) - Math.min(...pair.bodyB.vertices.map(v => v.x))) / (Math.max(...pair.bodyB.vertices.map(v => v.y)) - Math.min(...pair.bodyB.vertices.map(v => v.y)));
-				sound.playUrl('/client-assets/drop-and-fusion/collision.mp3', {
-					volume: Math.min(1, pair.separation),
-					pan: (x - 400) / 400,
-					playbackRate: 1 / Math.log1p(aspectA),
-				});
-				sound.playUrl('/client-assets/drop-and-fusion/collision.mp3', {
-					volume: Math.min(1, pair.separation),
-					pan: (x - 400) / 400,
-					playbackRate: 1 / Math.log1p(aspectB),
-				});
-			}
-		}
-	});
-	const drop = (name: string) => {
-		const path = `/emoji/${name}.webp`;
-		const url = defaultStore.reactiveState.disableShowingAnimatedImages.value
-			? getStaticImageUrl(path)
-			: path;
-		const ready: Promise<HTMLImageElement> = render.textures[url] ? Promise.resolve(render.textures[url]) : new Promise((resolve) => {
-			const image = new Image();
-			image.src = url;
-			image.decode().then(() => {
-				resolve(render.textures[url] = image);
-			});
-		});
-		ready.then(image => {
-			const aspect = image.naturalWidth / image.naturalHeight;
-			const marginX = Math.min(400, 12 * aspect);
-			const x = Math.random() * (800 - marginX * 2) + marginX;
-			const y = Math.min(0, ...Matter.Composite.allBodies(engine.world).map(b => b.position.y)) - 24;
-			const body = Matter.Bodies.rectangle(x, y, 24 * aspect, 24, {
-				label: `:${name}:`,
-				render: {
-					sprite: {
-						texture: url,
-						xScale: 24 / image.naturalHeight,
-						yScale: 24 / image.naturalHeight,
-					},
-				},
-			});
-			Matter.Composite.add(engine.world, body);
-		});
-	};
-	const timelineHandler = (note: Misskey.entities.Note) => {
-		const appearNote = note.renote && !note.text && note.cw == null && !note.files?.length && !note.poll ? note.renote : note;
-		if (appearNote.user.host || !appearNote.text || appearNote.cw != null || checkWordMute(note, $i, $i?.mutedWords as (string | string[])[])) {
-			return;
-		}
-		const ast = mfm.parseSimple(appearNote.text);
-		for (const node of ast) {
-			if (node.type !== 'emojiCode') {
-				continue;
-			}
-			drop(node.props.name);
-		}
-	};
-	globalEvents.on('prependTimeline', timelineHandler);
-	timelineHandler2024Map.set(value, timelineHandler);
-	const reactionHandler = (reaction: string) => {
-		if (reaction.startsWith(':') && reaction.endsWith('@.:')) {
-			drop(reaction.slice(1, -3));
-		}
-	};
-	globalEvents.on('appendReaction', reactionHandler);
-	reactionHandler2024Map.set(value, reactionHandler);
-});
+const showFixedPostForm = prefer.model('showFixedPostForm');
 
-watch(src, () => {
-	queue.value = 0;
-});
-
-watch(withSensitive, () => {
-	// これだけはクライアント側で完結する処理なので手動でリロード
-	tlComponent.value?.reloadTimeline();
-});
-
-onUnmounted(() => {
-	for (const render of render2024Map.values()) {
-		Matter.Render.stop(render);
-	}
-	for (const runner of runner2024Map.values()) {
-		Matter.Runner.stop(runner);
-	}
-	for (const handler of timelineHandler2024Map.values()) {
-		globalEvents.off('prependTimeline', handler);
-	}
-	for (const handler of reactionHandler2024Map.values()) {
-		globalEvents.off('appendReaction', handler);
-	}
-});
-
-function queueUpdated(q: number): void {
-	queue.value = q;
-}
-
-function top(): void {
-	if (rootEl.value) scroll(rootEl.value, { top: 0 });
-}
-
-async function chooseList(ev: MouseEvent): Promise<void> {
+async function chooseList(ev: PointerEvent): Promise<void> {
 	const lists = await userListsCache.fetch();
-	const items: MenuItem[] = [
+	const items: (MenuItem | undefined)[] = [
 		...lists.map(list => ({
 			type: 'link' as const,
 			text: list.name,
@@ -320,12 +122,12 @@ async function chooseList(ev: MouseEvent): Promise<void> {
 			to: '/my/lists',
 		},
 	];
-	os.popupMenu(items, ev.currentTarget ?? ev.target);
+	os.popupMenu(items.filter(i => i != null), ev.currentTarget ?? ev.target);
 }
 
-async function chooseAntenna(ev: MouseEvent): Promise<void> {
+async function chooseAntenna(ev: PointerEvent): Promise<void> {
 	const antennas = await antennasCache.fetch();
-	const items: MenuItem[] = [
+	const items: (MenuItem | undefined)[] = [
 		...antennas.map(antenna => ({
 			type: 'link' as const,
 			text: antenna.name,
@@ -340,12 +142,12 @@ async function chooseAntenna(ev: MouseEvent): Promise<void> {
 			to: '/my/antennas',
 		},
 	];
-	os.popupMenu(items, ev.currentTarget ?? ev.target);
+	os.popupMenu(items.filter(i => i != null), ev.currentTarget ?? ev.target);
 }
 
-async function chooseChannel(ev: MouseEvent): Promise<void> {
+async function chooseChannel(ev: PointerEvent): Promise<void> {
 	const channels = await favoritedChannelsCache.fetch();
-	const items: MenuItem[] = [
+	const items: (MenuItem | undefined)[] = [
 		...channels.map(channel => {
 			const lastReadedAt = miLocalStorage.getItemAsJson(`channelLastReadedAt:${channel.id}`) ?? null;
 			const hasUnreadNote = (lastReadedAt && channel.lastNotedAt) ? Date.parse(channel.lastNotedAt) > lastReadedAt : !!(!lastReadedAt && channel.lastNotedAt);
@@ -362,51 +164,31 @@ async function chooseChannel(ev: MouseEvent): Promise<void> {
 			type: 'link',
 			icon: 'ti ti-plus',
 			text: i18n.ts.createNew,
-			to: '/channels',
+			to: '/channels/new',
 		},
 	];
-	os.popupMenu(items, ev.currentTarget ?? ev.target);
+	os.popupMenu(items.filter(i => i != null), ev.currentTarget ?? ev.target);
 }
 
 function saveSrc(newSrc: TimelinePageSrc): void {
-	const out = deepMerge({ src: newSrc }, defaultStore.state.tl);
+	const out = deepMerge({ src: newSrc }, store.s.tl);
 
 	if (newSrc.startsWith('userList:')) {
 		const id = newSrc.substring('userList:'.length);
-		out.userList = defaultStore.reactiveState.pinnedUserLists.value.find(l => l.id === id) ?? null;
+		out.userList = prefer.r.pinnedUserLists.value.find(l => l.id === id) ?? null;
 	}
 
-	defaultStore.set('tl', out);
+	store.set('tl', out);
 	if (['local', 'global'].includes(newSrc)) {
 		srcWhenNotSignin.value = newSrc as 'local' | 'global';
 	}
 }
 
-function saveTlFilter(key: keyof typeof defaultStore.state.tl.filter, newValue: boolean) {
+function saveTlFilter(key: keyof typeof store.s.tl.filter, newValue: boolean) {
 	if (key !== 'withReplies' || $i) {
-		const out = deepMerge({ filter: { [key]: newValue } }, defaultStore.state.tl);
-		defaultStore.set('tl', out);
+		const out = deepMerge({ filter: { [key]: newValue } }, store.s.tl);
+		store.set('tl', out);
 	}
-}
-
-async function timetravel(): Promise<void> {
-	const { canceled, result: date } = await os.inputDate({
-		title: i18n.ts.date,
-	});
-	if (canceled) return;
-
-	tlComponent.value.timetravel(date);
-}
-
-function focus(): void {
-	tlComponent.value.focus();
-}
-
-function closeTutorial(): void {
-	if (!isBasicTimeline(src.value)) return;
-	const before = defaultStore.state.timelineTutorials;
-	before[src.value] = true;
-	defaultStore.set('timelineTutorials', before);
 }
 
 function switchTlIfNeeded() {
@@ -422,67 +204,67 @@ onActivated(() => {
 	switchTlIfNeeded();
 });
 
-const a1on2024 = computed(() => localDate.value.year === 2024 && localDate.value.month === 4 && localDate.value.day === 1);
-const headerActions = computed(() => {
-	const tmp = [
-		{
-			icon: 'ti ti-dots',
-			text: i18n.ts.options,
-			handler: (ev) => {
-				const menuItems: MenuItem[] = [];
+const headerActions = computed<PageHeaderItem[]>(() => {
+	const items: PageHeaderItem[] = [{
+		icon: 'ti ti-dots',
+		text: i18n.ts.options,
+		handler: (ev) => {
+			const menuItems: MenuItem[] = [];
 
+			menuItems.push({
+				type: 'switch',
+				icon: 'ti ti-repeat',
+				text: i18n.ts.showRenotes,
+				ref: withRenotes,
+			});
+
+			if (isBasicTimeline(src.value) && hasWithReplies(src.value)) {
 				menuItems.push({
 					type: 'switch',
-					text: i18n.ts.showRenotes,
-					ref: withRenotes,
+					icon: 'ti ti-messages',
+					text: i18n.ts.showRepliesToOthersInTimeline,
+					ref: withReplies,
+					disabled: onlyFiles,
 				});
+			}
 
-				if (isBasicTimeline(src.value) && hasWithReplies(src.value)) {
-					menuItems.push({
-						type: 'switch',
-						text: i18n.ts.showRepliesToOthersInTimeline,
-						ref: withReplies,
-						disabled: onlyFiles,
-					});
-				}
+			menuItems.push({
+				type: 'switch',
+				icon: 'ti ti-eye-exclamation',
+				text: i18n.ts.withSensitive,
+				ref: withSensitive,
+			}, {
+				type: 'switch',
+				icon: 'ti ti-photo',
+				text: i18n.ts.fileAttachedOnly,
+				ref: onlyFiles,
+				disabled: isBasicTimeline(src.value) && hasWithReplies(src.value) ? withReplies : false,
+			}, {
+				type: 'divider',
+			}, {
+				type: 'switch',
+				text: i18n.ts.showFixedPostForm,
+				ref: showFixedPostForm,
+			});
 
-				menuItems.push({
-					type: 'switch',
-					text: i18n.ts.withSensitive,
-					ref: withSensitive,
-				}, {
-					type: 'switch',
-					text: i18n.ts.fileAttachedOnly,
-					ref: onlyFiles,
-					disabled: isBasicTimeline(src.value) && hasWithReplies(src.value) ? withReplies : false,
-				});
-
-				os.popupMenu(menuItems, ev.currentTarget ?? ev.target);
-			},
+			os.popupMenu(menuItems, ev.currentTarget ?? ev.target);
 		},
-	];
+	}];
+
 	if (deviceKind === 'desktop') {
-		tmp.unshift({
+		items.unshift({
 			icon: 'ti ti-refresh',
 			text: i18n.ts.reload,
-			handler: (ev: Event) => {
+			handler: () => {
 				tlComponent.value?.reloadTimeline();
 			},
 		});
 	}
-	if (a1on2024.value) {
-		tmp.unshift({
-			icon: 'ti ti-mood-puzzled',
-			text: i18n.ts.headlineMisskey,
-			handler: (ev: Event) => {
-				a1on2024enabled.value = !a1on2024enabled.value;
-			},
-		});
-	}
-	return tmp;
+
+	return items;
 });
 
-const headerTabs = computed(() => [...(defaultStore.reactiveState.pinnedUserLists.value.map(l => ({
+const headerTabs = computed(() => [...(prefer.r.pinnedUserLists.value.map(l => ({
 	key: 'list:' + l.id,
 	title: l.name,
 	icon: 'ti ti-star',
@@ -516,7 +298,7 @@ const headerTabsWhenNotLogin = computed(() => [...availableBasicTimelines().map(
 	iconOnly: true,
 }))] as Tab[]);
 
-definePageMetadata(() => ({
+definePage(() => ({
 	title: i18n.ts.timeline,
 	icon: isBasicTimeline(src.value) ? basicTimelineIconClass(src.value) : 'ti ti-home',
 }));
@@ -530,7 +312,6 @@ definePageMetadata(() => ({
 	width: 100%;
 	margin: calc(-0.675em - 8px) 0;
 
-	.canvasActionButton + &,
 	&:first-child {
 		margin-top: calc(-0.675em - 8px - var(--MI-margin));
 	}
@@ -551,17 +332,5 @@ definePageMetadata(() => ({
 	background: var(--MI_THEME-bg);
 	border-radius: var(--MI-radius);
 	overflow: clip;
-}
-
-.canvas {
-	display: block;
-	width: 100%;
-	aspect-ratio: 16 / 9;
-}
-
-.canvasActionButton {
-	position: absolute;
-	top: 12px;
-	right: 12px;
 }
 </style>

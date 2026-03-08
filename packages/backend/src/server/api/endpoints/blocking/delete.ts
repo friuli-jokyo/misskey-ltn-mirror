@@ -76,13 +76,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		super(meta, paramDef, async (ps, me) => {
 			const blocker = await this.usersRepository.findOneByOrFail({ id: me.id });
 
-			// Check if the blockee is yourself
-			/*
-			if (me.id === ps.userId) {
-				throw new ApiError(meta.errors.blockeeIsYourself);
-			}
-			 */
-
 			// Get blockee
 			const blockee = await this.getterService.getUser(ps.userId).catch(err => {
 				if (err.id === '15348ddd-432d-49c2-8a5a-8069753becff') throw new ApiError(meta.errors.noSuchUser);

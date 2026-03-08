@@ -70,7 +70,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw new ApiError(meta.errors.noSuchRole);
 			}
 
-			if (!(role.canEditMembersByModerator ? await this.roleService.isModerator(me) : await this.roleService.isAdministrator(me)) && (me.id !== ps.userId || !(await this.roleService.canSelfAssign(ps.userId, ps.roleId)) || ps.expiresAt && !(await this.roleService.canSelfUnassign(ps.userId, ps.roleId)))) {
+			if (!role.canEditMembersByModerator && !(await this.roleService.isAdministrator(me)) && (me.id !== ps.userId || !(await this.roleService.canSelfAssign(ps.userId, ps.roleId)) || ps.expiresAt && !(await this.roleService.canSelfUnassign(ps.userId, ps.roleId)))) {
 				throw new ApiError(meta.errors.accessDenied);
 			}
 
