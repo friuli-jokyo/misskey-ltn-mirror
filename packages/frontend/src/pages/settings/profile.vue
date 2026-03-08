@@ -25,6 +25,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</div>
 		</div>
 
+		<SearchMarker :keywords="['name']">
+			<MkInput v-model="profile.name" :max="30" manualSave :mfmAutocomplete="['emoji']">
+				<template #label><SearchLabel>{{ i18n.ts._profile.name }}</SearchLabel></template>
+			</MkInput>
+		</SearchMarker>
+
 		<SearchMarker :keywords="['pinned', 'gallery', 'post']">
 			<MkButton :disabled="!hasPinnedGalleryPost" primary rounded :class="$style.galleryPostRemove" @click="removePinnedGalleryPost"><SearchLabel>{{ i18n.ts.unpin }} ({{ i18n.ts.gallery }})</SearchLabel></MkButton>
 		</SearchMarker>
