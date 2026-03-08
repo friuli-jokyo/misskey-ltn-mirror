@@ -501,12 +501,15 @@ async function search() {
 
 .range {
 	display: flex;
+	flex-direction: row;
+	flex-wrap: nowrap;
 	align-items: center;
 	gap: 8px;
 }
 
 .dtl {
-	flex: 1;
+	flex: 1 1 0;
+	min-width: 0;
 }
 
 .userSelectLabel {
