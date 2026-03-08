@@ -4,6 +4,7 @@
  */
 
 import { compareVersions } from 'compare-versions';
+import { version as currentVersion } from '@@/js/config.js';
 import type { DeckProfile } from '@/deck.js';
 import { genId } from '@/utility/id.js';
 import { store } from '@/store.js';
@@ -169,7 +170,12 @@ export function migrateOldSettings(lastVersion: string | null) {
 		return;
 	}
 
-	const pendingMigrations = MIGRATIONS.filter(({ version }) => compareVersions(lastVersion, version) <= 0);
+	// lastVersion < migrationVersion <= currentVersion の場合のみ実行
+	// （前回のバージョンより新しく、現在のバージョン以下のマイグレーションのみ）
+	const pendingMigrations = MIGRATIONS.filter(({ version }) =>
+		compareVersions(lastVersion, version) < 0 &&
+		compareVersions(version, currentVersion) <= 0,
+	);
 
 	if (!pendingMigrations.length) {
 		return;
@@ -177,6 +183,7 @@ export function migrateOldSettings(lastVersion: string | null) {
 
 	console.log('Preferences migration required:', {
 		lastVersion,
+		currentVersion,
 		pendingVersions: pendingMigrations.map(m => m.version),
 	});
 	os.waiting({ text: i18n.ts.settingsMigrating });
