@@ -57,7 +57,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 				try {
 					await this.userAuthService.twoFactorAuthenticate(profile, token);
-				} catch (e) {
+				} catch (_) {
 					throw new Error('authentication failed');
 				}
 			}
@@ -71,9 +71,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				twoFactorSecret: null,
 				twoFactorBackupSecret: null,
 				twoFactorEnabled: false,
-				/*
-				usePasswordLessLogin: false,
-				 */
 			});
 
 			// Publish meUpdated event

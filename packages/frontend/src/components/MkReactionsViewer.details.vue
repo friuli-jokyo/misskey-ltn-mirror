@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<MkTooltip ref="tooltip" :showing="showing" :targetElement="targetElement" :maxWidth="340" @closed="emit('closed')">
+<MkTooltip ref="tooltip" :showing="showing" :anchorElement="anchorElement" :maxWidth="340" @closed="emit('closed')">
 	<div :class="$style.root">
 		<div :class="$style.reaction">
 			<MkReactionIcon :reaction="reaction" :class="$style.reactionIcon" :noStyle="true"/>
@@ -12,7 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 		<div :class="$style.users">
 			<div v-for="u in users" :key="u.id" :class="$style.user">
-				<MkAvatar :class="$style.avatar" :user="u" small/>
+			<MkAvatar :class="$style.avatar" :user="u" small/>
 				<MkUserName :user="u" :nowrap="true"/>
 			</div>
 			<div v-if="count > 10" :class="$style.more">+{{ count - 10 }}</div>
@@ -33,7 +33,7 @@ defineProps<{
 	reaction: string;
 	users: Misskey.entities.UserLite[];
 	count: number;
-	targetElement: HTMLElement;
+	anchorElement: HTMLElement;
 }>();
 
 const emit = defineEmits<{

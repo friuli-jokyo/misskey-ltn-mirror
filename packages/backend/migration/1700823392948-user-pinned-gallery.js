@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and misskey-project
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 export class UserPinnedGallery1700823392948 {
     name = 'UserPinnedGallery1700823392948'
 

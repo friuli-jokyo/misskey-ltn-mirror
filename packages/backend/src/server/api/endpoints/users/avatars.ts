@@ -11,11 +11,8 @@ import { UserEntityService } from '@/core/entities/UserEntityService.js';
 
 export const meta = {
 	tags: ['users'],
-
 	requireCredential: false,
-
 	description: 'List avatars of users.',
-
 	res: {
 		type: 'array',
 		optional: false, nullable: false,
@@ -86,11 +83,10 @@ export const paramDef = {
 } as const;
 
 @Injectable()
-export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
+export default class extends Endpoint<typeof meta, typeof paramDef> {
 	constructor(
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
-
 		private userEntityService: UserEntityService,
 	) {
 		super(meta, paramDef, async (ps) => {

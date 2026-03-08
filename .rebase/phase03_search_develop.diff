@@ -1,0 +1,1286 @@
+diff --git a/packages/backend/src/config.ts b/packages/backend/src/config.ts
+index 32ea700748..4cd82bed87 100644
+--- a/packages/backend/src/config.ts
++++ b/packages/backend/src/config.ts
+@@ -6,9 +6,11 @@
+ import * as fs from 'node:fs';
+ import { fileURLToPath } from 'node:url';
+ import { dirname, resolve } from 'node:path';
+-import * as yaml from 'js-yaml';
+-import * as Sentry from '@sentry/node';
++import { type FastifyServerOptions } from 'fastify';
++import type * as Sentry from '@sentry/node';
++import type * as SentryVue from '@sentry/vue';
+ import type { RedisOptions } from 'ioredis';
++import type { ManifestChunk } from 'vite';
+ 
+ type RedisOptionsSource = Partial<RedisOptions> & {
+ 	host: string;
+@@ -26,7 +28,9 @@ type Source = {
+ 	url?: string;
+ 	port?: number;
+ 	socket?: string;
++	trustProxy?: FastifyServerOptions['trustProxy'];
+ 	chmodSocket?: string;
++	enableIpRateLimit?: boolean;
+ 	disableHsts?: boolean;
+ 	db: {
+ 		host: string;
+@@ -62,7 +66,12 @@ type Source = {
+ 		scope?: 'local' | 'global' | string[];
+ 	};
+ 	sentryForBackend?: { options: Partial<Sentry.NodeOptions>; enableNodeProfiling: boolean; };
+-	sentryForFrontend?: { options: Partial<Sentry.NodeOptions> };
++	sentryForFrontend?: {
++		options: Partial<SentryVue.BrowserOptions> & { dsn: string };
++		vueIntegration?: SentryVue.VueIntegrationOptions | null;
++		browserTracingIntegration?: Parameters<typeof SentryVue.browserTracingIntegration>[0] | null;
++		replayIntegration?: Parameters<typeof SentryVue.replayIntegration>[0] | null;
++	};
+ 
+ 	publishTarballInsteadOfProvideRepositoryUrl?: boolean;
+ 
+@@ -73,7 +82,6 @@ type Source = {
+ 	proxyBypassHosts?: string[];
+ 
+ 	allowedPrivateNetworks?: string[];
+-	disallowExternalApRedirect?: boolean;
+ 
+ 	maxFileSize?: number;
+ 
+@@ -94,11 +102,8 @@ type Source = {
+ 	inboxJobMaxAttempts?: number;
+ 
+ 	mediaProxy?: string;
+-	proxyRemoteFiles?: boolean;
+ 	videoThumbnailGenerator?: string;
+ 
+-	signToActivityPubGet?: boolean;
+-
+ 	perChannelMaxNoteCacheCount?: number;
+ 	perUserNotificationsMaxCount?: number;
+ 	deactivateAntennaThreshold?: number;
+@@ -116,7 +121,9 @@ export type Config = {
+ 	url: string;
+ 	port: number;
+ 	socket: string | undefined;
++	trustProxy: NonNullable<FastifyServerOptions['trustProxy']>;
+ 	chmodSocket: string | undefined;
++	enableIpRateLimit: boolean;
+ 	disableHsts: boolean | undefined;
+ 	db: {
+ 		host: string;
+@@ -150,7 +157,6 @@ export type Config = {
+ 	proxySmtp: string | undefined;
+ 	proxyBypassHosts: string[] | undefined;
+ 	allowedPrivateNetworks: string[] | undefined;
+-	disallowExternalApRedirect: boolean;
+ 	maxFileSize: number;
+ 	clusterLimit: number | undefined;
+ 	id: string;
+@@ -164,8 +170,6 @@ export type Config = {
+ 	relationshipJobPerSec: number | undefined;
+ 	deliverJobMaxAttempts: number | undefined;
+ 	inboxJobMaxAttempts: number | undefined;
+-	proxyRemoteFiles: boolean | undefined;
+-	signToActivityPubGet: boolean | undefined;
+ 	logging?: {
+ 		sql?: {
+ 			disableQueryTruncation?: boolean,
+@@ -185,9 +189,9 @@ export type Config = {
+ 	authUrl: string;
+ 	driveUrl: string;
+ 	userAgent: string;
+-	frontendEntry: string;
++	frontendEntry: ManifestChunk;
+ 	frontendManifestExists: boolean;
+-	frontendEmbedEntry: string;
++	frontendEmbedEntry: ManifestChunk;
+ 	frontendEmbedManifestExists: boolean;
+ 	mediaProxy: string;
+ 	externalMediaProxyEnabled: boolean;
+@@ -198,7 +202,12 @@ export type Config = {
+ 	redisForTimelines: RedisOptions & RedisOptionsSource;
+ 	redisForReactions: RedisOptions & RedisOptionsSource;
+ 	sentryForBackend: { options: Partial<Sentry.NodeOptions>; enableNodeProfiling: boolean; } | undefined;
+-	sentryForFrontend: { options: Partial<Sentry.NodeOptions> } | undefined;
++	sentryForFrontend: {
++		options: Partial<SentryVue.BrowserOptions> & { dsn: string };
++		vueIntegration?: SentryVue.VueIntegrationOptions | null;
++		browserTracingIntegration?: Parameters<typeof SentryVue.browserTracingIntegration>[0] | null;
++		replayIntegration?: Parameters<typeof SentryVue.replayIntegration>[0] | null;
++	} | undefined;
+ 	perChannelMaxNoteCacheCount: number;
+ 	perUserNotificationsMaxCount: number;
+ 	deactivateAntennaThreshold: number;
+@@ -210,33 +219,45 @@ export type FulltextSearchProvider = 'sqlLike' | 'sqlPgroonga' | 'meilisearch';
+ const _filename = fileURLToPath(import.meta.url);
+ const _dirname = dirname(_filename);
+ 
+-/**
+- * Path of configuration directory
+- */
+-const dir = `${_dirname}/../../../.config`;
++/** Path of repository root directory */
++let rootDir = _dirname;
++// 見つかるまで上に遡る
++while (!fs.existsSync(resolve(rootDir, 'packages'))) {
++	const parentDir = dirname(rootDir);
++	if (parentDir === rootDir) {
++		throw new Error('Cannot find root directory');
++	}
++	rootDir = parentDir;
++}
+ 
+-/**
+- * Path of configuration file
+- */
+-const path = process.env.MISSKEY_CONFIG_YML
+-	? resolve(dir, process.env.MISSKEY_CONFIG_YML)
+-	: process.env.NODE_ENV === 'test'
+-		? resolve(dir, 'test.yml')
+-		: resolve(dir, 'default.yml');
++/** Path of configuration directory */
++const configDir = resolve(rootDir, '.config');
++/** Path of built directory */
++const projectBuiltDir = resolve(rootDir, 'built');
++
++const compiledConfigFilePathForTest = resolve(projectBuiltDir, '._config_.json');
++
++export const compiledConfigFilePath = fs.existsSync(compiledConfigFilePathForTest)
++	? compiledConfigFilePathForTest
++	: resolve(projectBuiltDir, '.config.json');
+ 
+ export function loadConfig(): Config {
+-	const meta = JSON.parse(fs.readFileSync(`${_dirname}/../../../built/meta.json`, 'utf-8'));
++	if (!fs.existsSync(compiledConfigFilePath)) {
++		throw new Error('Compiled configuration file not found. Try running \'pnpm compile-config\'.');
++	}
++
++	const meta = JSON.parse(fs.readFileSync(resolve(projectBuiltDir, 'meta.json'), 'utf-8'));
+ 
+-	const frontendManifestExists = fs.existsSync(_dirname + '/../../../built/_frontend_vite_/manifest.json');
+-	const frontendEmbedManifestExists = fs.existsSync(_dirname + '/../../../built/_frontend_embed_vite_/manifest.json');
++	const frontendManifestExists = fs.existsSync(resolve(projectBuiltDir, '_frontend_vite_/manifest.json'));
++	const frontendEmbedManifestExists = fs.existsSync(resolve(projectBuiltDir, '_frontend_embed_vite_/manifest.json'));
+ 	const frontendManifest = frontendManifestExists ?
+-		JSON.parse(fs.readFileSync(`${_dirname}/../../../built/_frontend_vite_/manifest.json`, 'utf-8'))
+-		: { 'src/_boot_.ts': { file: 'src/_boot_.ts' } };
++		JSON.parse(fs.readFileSync(resolve(projectBuiltDir, '_frontend_vite_/manifest.json'), 'utf-8'))
++		: { 'src/_boot_.ts': { file: null } };
+ 	const frontendEmbedManifest = frontendEmbedManifestExists ?
+-		JSON.parse(fs.readFileSync(`${_dirname}/../../../built/_frontend_embed_vite_/manifest.json`, 'utf-8'))
+-		: { 'src/boot.ts': { file: 'src/boot.ts' } };
++		JSON.parse(fs.readFileSync(resolve(projectBuiltDir, '_frontend_embed_vite_/manifest.json'), 'utf-8'))
++		: { 'src/boot.ts': { file: null } };
+ 
+-	const config = yaml.load(fs.readFileSync(path, 'utf-8')) as Source;
++	const config = JSON.parse(fs.readFileSync(compiledConfigFilePath, 'utf-8')) as Source;
+ 
+ 	const url = tryCreateUrl(config.url ?? process.env.MISSKEY_URL ?? '');
+ 	const version = meta.version;
+@@ -262,8 +283,17 @@ export function loadConfig(): Config {
+ 		url: url.origin,
+ 		port: config.port ?? parseInt(process.env.PORT ?? '', 10),
+ 		socket: config.socket,
++		trustProxy: config.trustProxy ?? [
++			'10.0.0.0/8',
++			'172.16.0.0/12',
++			'192.168.0.0/16',
++			'127.0.0.1/32',
++			'::1/128',
++			'fc00::/7',
++		],
+ 		chmodSocket: config.chmodSocket,
+ 		disableHsts: config.disableHsts,
++		enableIpRateLimit: config.enableIpRateLimit ?? true,
+ 		host,
+ 		hostname,
+ 		scheme,
+@@ -289,7 +319,6 @@ export function loadConfig(): Config {
+ 		proxySmtp: config.proxySmtp,
+ 		proxyBypassHosts: config.proxyBypassHosts,
+ 		allowedPrivateNetworks: config.allowedPrivateNetworks,
+-		disallowExternalApRedirect: config.disallowExternalApRedirect ?? false,
+ 		maxFileSize: config.maxFileSize ?? 262144000,
+ 		clusterLimit: config.clusterLimit,
+ 		outgoingAddress: config.outgoingAddress,
+@@ -302,8 +331,6 @@ export function loadConfig(): Config {
+ 		relationshipJobPerSec: config.relationshipJobPerSec,
+ 		deliverJobMaxAttempts: config.deliverJobMaxAttempts,
+ 		inboxJobMaxAttempts: config.inboxJobMaxAttempts,
+-		proxyRemoteFiles: config.proxyRemoteFiles,
+-		signToActivityPubGet: config.signToActivityPubGet ?? true,
+ 		mediaProxy: externalMediaProxy ?? internalMediaProxy,
+ 		externalMediaProxyEnabled: externalMediaProxy !== null && externalMediaProxy !== internalMediaProxy,
+ 		videoThumbnailGenerator: config.videoThumbnailGenerator ?
+@@ -325,7 +352,7 @@ export function loadConfig(): Config {
+ function tryCreateUrl(url: string) {
+ 	try {
+ 		return new URL(url);
+-	} catch (e) {
++	} catch (_) {
+ 		throw new Error(`url="${url}" is not a valid URL.`);
+ 	}
+ }
+diff --git a/packages/backend/src/core/IdService.ts b/packages/backend/src/core/IdService.ts
+index 10df6ef266..223a8de678 100644
+--- a/packages/backend/src/core/IdService.ts
++++ b/packages/backend/src/core/IdService.ts
+@@ -7,13 +7,13 @@ import { Inject, Injectable } from '@nestjs/common';
+ import { ulid } from 'ulid';
+ import { DI } from '@/di-symbols.js';
+ import type { Config } from '@/config.js';
+-import { genAid, isSafeAidT, parseAid } from '@/misc/id/aid.js';
+-import { genAidx, isSafeAidxT, parseAidx } from '@/misc/id/aidx.js';
+-import { genMeid, isSafeMeidT, parseMeid } from '@/misc/id/meid.js';
+-import { genMeidg, isSafeMeidgT, parseMeidg } from '@/misc/id/meidg.js';
+-import { genObjectId, isSafeObjectIdT, parseObjectId } from '@/misc/id/object-id.js';
++import { genAid, isSafeAidT, parseAid, parseAidFull } from '@/misc/id/aid.js';
++import { genAidx, isSafeAidxT, parseAidx, parseAidxFull } from '@/misc/id/aidx.js';
++import { genMeid, isSafeMeidT, parseMeid, parseMeidFull } from '@/misc/id/meid.js';
++import { genMeidg, isSafeMeidgT, parseMeidg, parseMeidgFull } from '@/misc/id/meidg.js';
++import { genObjectId, isSafeObjectIdT, parseObjectId, parseObjectIdFull } from '@/misc/id/object-id.js';
+ import { bindThis } from '@/decorators.js';
+-import { parseUlid } from '@/misc/id/ulid.js';
++import { parseUlid, parseUlidFull } from '@/misc/id/ulid.js';
+ 
+ @Injectable()
+ export class IdService {
+@@ -70,4 +70,18 @@ export class IdService {
+ 			default: throw new Error('unrecognized id generation method');
+ 		}
+ 	}
++
++	// Note: additional is at most 64 bits
++	@bindThis
++	public parseFull(id: string): { date: number; additional: bigint; } {
++		switch (this.method) {
++			case 'aid': return parseAidFull(id);
++			case 'aidx': return parseAidxFull(id);
++			case 'objectid': return parseObjectIdFull(id);
++			case 'meid': return parseMeidFull(id);
++			case 'meidg': return parseMeidgFull(id);
++			case 'ulid': return parseUlidFull(id);
++			default: throw new Error('unrecognized id generation method');
++		}
++	}
+ }
+diff --git a/packages/backend/src/core/QueryService.ts b/packages/backend/src/core/QueryService.ts
+index c4feeaf971..49f93ad108 100644
+--- a/packages/backend/src/core/QueryService.ts
++++ b/packages/backend/src/core/QueryService.ts
+@@ -7,7 +7,7 @@ import { Inject, Injectable } from '@nestjs/common';
+ import { Brackets, ObjectLiteral } from 'typeorm';
+ import { DI } from '@/di-symbols.js';
+ import type { MiUser } from '@/models/User.js';
+-import type { UserProfilesRepository, FollowingsRepository, ChannelFollowingsRepository, BlockingsRepository, NoteThreadMutingsRepository, MutingsRepository, RenoteMutingsRepository } from '@/models/_.js';
++import type { UserProfilesRepository, FollowingsRepository, ChannelFollowingsRepository, BlockingsRepository, NoteThreadMutingsRepository, MutingsRepository, RenoteMutingsRepository, MiMeta } from '@/models/_.js';
+ import { bindThis } from '@/decorators.js';
+ import { IdService } from '@/core/IdService.js';
+ import type { SelectQueryBuilder } from 'typeorm';
+@@ -36,40 +36,92 @@ export class QueryService {
+ 		@Inject(DI.renoteMutingsRepository)
+ 		private renoteMutingsRepository: RenoteMutingsRepository,
+ 
++		@Inject(DI.meta)
++		private meta: MiMeta,
++
+ 		private idService: IdService,
+ 	) {
+ 	}
+ 
+-	public makePaginationQuery<T extends ObjectLiteral>(q: SelectQueryBuilder<T>, sinceId?: string | null, untilId?: string | null, sinceDate?: number | null, untilDate?: number | null): SelectQueryBuilder<T> {
++	public makePaginationQuery<T extends ObjectLiteral>(
++		q: SelectQueryBuilder<T>,
++		sinceId?: string | null,
++		untilId?: string | null,
++		sinceDate?: number | null,
++		untilDate?: number | null,
++		targetColumn = 'id',
++	): SelectQueryBuilder<T> {
+ 		if (sinceId && untilId) {
+-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: sinceId });
+-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: untilId });
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.andWhere(`${q.alias}.${targetColumn} > :sinceId`, { sinceId: sinceId });
++			q.andWhere(`${q.alias}.${targetColumn} < :untilId`, { untilId: untilId });
++			q.orderBy(`${q.alias}.${targetColumn}`, 'DESC');
+ 		} else if (sinceId) {
+-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: sinceId });
+-			q.orderBy(`${q.alias}.id`, 'ASC');
++			q.andWhere(`${q.alias}.${targetColumn} > :sinceId`, { sinceId: sinceId });
++			q.orderBy(`${q.alias}.${targetColumn}`, 'ASC');
+ 		} else if (untilId) {
+-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: untilId });
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.andWhere(`${q.alias}.${targetColumn} < :untilId`, { untilId: untilId });
++			q.orderBy(`${q.alias}.${targetColumn}`, 'DESC');
+ 		} else if (sinceDate && untilDate) {
+-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: this.idService.gen(sinceDate) });
+-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: this.idService.gen(untilDate) });
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.andWhere(`${q.alias}.${targetColumn} > :sinceId`, { sinceId: this.idService.gen(sinceDate) });
++			q.andWhere(`${q.alias}.${targetColumn} < :untilId`, { untilId: this.idService.gen(untilDate) });
++			q.orderBy(`${q.alias}.${targetColumn}`, 'DESC');
+ 		} else if (sinceDate) {
+-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: this.idService.gen(sinceDate) });
+-			q.orderBy(`${q.alias}.id`, 'ASC');
++			q.andWhere(`${q.alias}.${targetColumn} > :sinceId`, { sinceId: this.idService.gen(sinceDate) });
++			q.orderBy(`${q.alias}.${targetColumn}`, 'ASC');
+ 		} else if (untilDate) {
+-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: this.idService.gen(untilDate) });
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.andWhere(`${q.alias}.${targetColumn} < :untilId`, { untilId: this.idService.gen(untilDate) });
++			q.orderBy(`${q.alias}.${targetColumn}`, 'DESC');
+ 		} else {
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.orderBy(`${q.alias}.${targetColumn}`, 'DESC');
+ 		}
+ 		return q;
+ 	}
+ 
++	/**
++	 * ミュートやブロックのようにすべてのタイムラインで共通に使用するフィルターを定義します。
++	 *
++	 * 特別な事情がない限り、各タイムラインはこの関数を呼び出してフィルターを適用してください。
++	 *
++	 * Notes for future maintainers:
++	 * 1) この関数で生成するクエリと同等の処理が FanoutTimelineEndpointService にあります。
++	 *    この関数を変更した場合、FanoutTimelineEndpointService の方も変更する必要があります。
++	 * 2) 以下のエンドポイントでは特別な事情があるため queryService のそれぞれの関数を呼び出しています。
++	 *    この関数を変更した場合、以下のエンドポイントの方も変更する必要があることがあります。
++	 *    - packages/backend/src/server/api/endpoints/clips/notes.ts
++	 */
++	@bindThis
++	public generateBaseNoteFilteringQuery(
++		query: SelectQueryBuilder<any>,
++		me: { id: MiUser['id'] } | null,
++		{
++			excludeUserFromMute,
++			excludeAuthor,
++		}: {
++			excludeUserFromMute?: MiUser['id'],
++			excludeAuthor?: boolean,
++		} = {},
++	): void {
++		this.generateBlockedHostQueryForNote(query, excludeAuthor);
++		this.generateSuspendedUserQueryForNote(query, excludeAuthor);
++		if (me) {
++			this.generateMutedUserQueryForNotes(query, me, { excludeUserFromMute });
++			this.generateBlockedUserQueryForNotes(query, me);
++			this.generateMutedUserQueryForNotes(query, me, { noteColumn: 'renote', excludeUserFromMute });
++			this.generateBlockedUserQueryForNotes(query, me, { noteColumn: 'renote' });
++		}
++	}
++
+ 	// ここでいうBlockedは被Blockedの意
+ 	@bindThis
+-	public generateBlockedUserQuery(q: SelectQueryBuilder<any>, me: { id: MiUser['id'] }): void {
++	public generateBlockedUserQueryForNotes(
++		q: SelectQueryBuilder<any>,
++		me: { id: MiUser['id'] },
++		{
++			noteColumn = 'note',
++		}: {
++			noteColumn?: string,
++		} = {},
++	): void {
+ 		const blockingQuery = this.blockingsRepository.createQueryBuilder('blocking')
+ 			.select('blocking.blockerId')
+ 			.where('blocking.blockeeId = :blockeeId', { blockeeId: me.id });
+@@ -78,16 +130,20 @@ export class QueryService {
+ 		// 投稿の返信先の作者にブロックされていない かつ
+ 		// 投稿の引用元の作者にブロックされていない
+ 		q
+-			.andWhere(`note.userId NOT IN (${ blockingQuery.getQuery() })`)
+ 			.andWhere(new Brackets(qb => {
+ 				qb
+-					.where('note.replyUserId IS NULL')
+-					.orWhere(`note.replyUserId NOT IN (${ blockingQuery.getQuery() })`);
++					.where(`${noteColumn}.userId IS NULL`)
++					.orWhere(`${noteColumn}.userId NOT IN (${ blockingQuery.getQuery() })`);
+ 			}))
+ 			.andWhere(new Brackets(qb => {
+ 				qb
+-					.where('note.renoteUserId IS NULL')
+-					.orWhere(`note.renoteUserId NOT IN (${ blockingQuery.getQuery() })`);
++					.where(`${noteColumn}.replyUserId IS NULL`)
++					.orWhere(`${noteColumn}.replyUserId NOT IN (${ blockingQuery.getQuery() })`);
++			}))
++			.andWhere(new Brackets(qb => {
++				qb
++					.where(`${noteColumn}.renoteUserId IS NULL`)
++					.orWhere(`${noteColumn}.renoteUserId NOT IN (${ blockingQuery.getQuery() })`);
+ 			}));
+ 
+ 		q.setParameters(blockingQuery.getParameters());
+@@ -127,13 +183,23 @@ export class QueryService {
+ 	}
+ 
+ 	@bindThis
+-	public generateMutedUserQuery(q: SelectQueryBuilder<any>, me: { id: MiUser['id'] }, exclude?: { id: MiUser['id'] }): void {
++	public generateMutedUserQueryForNotes(
++		q: SelectQueryBuilder<any>,
++		me: { id: MiUser['id'] },
++		{
++			excludeUserFromMute,
++			noteColumn = 'note',
++		}: {
++			excludeUserFromMute?: MiUser['id'],
++			noteColumn?: string,
++		} = {},
++	): void {
+ 		const mutingQuery = this.mutingsRepository.createQueryBuilder('muting')
+ 			.select('muting.muteeId')
+ 			.where('muting.muterId = :muterId', { muterId: me.id });
+ 
+-		if (exclude) {
+-			mutingQuery.andWhere('muting.muteeId != :excludeId', { excludeId: exclude.id });
++		if (excludeUserFromMute) {
++			mutingQuery.andWhere('muting.muteeId != :excludeId', { excludeId: excludeUserFromMute });
+ 		}
+ 
+ 		const mutingInstanceQuery = this.userProfilesRepository.createQueryBuilder('user_profile')
+@@ -144,32 +210,36 @@ export class QueryService {
+ 		// 投稿の返信先の作者をミュートしていない かつ
+ 		// 投稿の引用元の作者をミュートしていない
+ 		q
+-			.andWhere(`note.userId NOT IN (${ mutingQuery.getQuery() })`)
+ 			.andWhere(new Brackets(qb => {
+ 				qb
+-					.where('note.replyUserId IS NULL')
+-					.orWhere(`note.replyUserId NOT IN (${ mutingQuery.getQuery() })`);
++					.where(`${noteColumn}.userId IS NULL`)
++					.orWhere(`${noteColumn}.userId NOT IN (${ mutingQuery.getQuery() })`);
++			}))
++			.andWhere(new Brackets(qb => {
++				qb
++					.where(`${noteColumn}.replyUserId IS NULL`)
++					.orWhere(`${noteColumn}.replyUserId NOT IN (${ mutingQuery.getQuery() })`);
+ 			}))
+ 			.andWhere(new Brackets(qb => {
+ 				qb
+-					.where('note.renoteUserId IS NULL')
+-					.orWhere(`note.renoteUserId NOT IN (${ mutingQuery.getQuery() })`);
++					.where(`${noteColumn}.renoteUserId IS NULL`)
++					.orWhere(`${noteColumn}.renoteUserId NOT IN (${ mutingQuery.getQuery() })`);
+ 			}))
+ 			// mute instances
+ 			.andWhere(new Brackets(qb => {
+ 				qb
+-					.andWhere('note.userHost IS NULL')
+-					.orWhere(`NOT ((${ mutingInstanceQuery.getQuery() })::jsonb ? note.userHost)`);
++					.andWhere(`${noteColumn}.userHost IS NULL`)
++					.orWhere(`NOT ((${ mutingInstanceQuery.getQuery() })::jsonb ? ${noteColumn}.userHost)`);
+ 			}))
+ 			.andWhere(new Brackets(qb => {
+ 				qb
+-					.where('note.replyUserHost IS NULL')
+-					.orWhere(`NOT ((${ mutingInstanceQuery.getQuery() })::jsonb ? note.replyUserHost)`);
++					.where(`${noteColumn}.replyUserHost IS NULL`)
++					.orWhere(`NOT ((${ mutingInstanceQuery.getQuery() })::jsonb ? ${noteColumn}.replyUserHost)`);
+ 			}))
+ 			.andWhere(new Brackets(qb => {
+ 				qb
+-					.where('note.renoteUserHost IS NULL')
+-					.orWhere(`NOT ((${ mutingInstanceQuery.getQuery() })::jsonb ? note.renoteUserHost)`);
++					.where(`${noteColumn}.renoteUserHost IS NULL`)
++					.orWhere(`NOT ((${ mutingInstanceQuery.getQuery() })::jsonb ? ${noteColumn}.renoteUserHost)`);
+ 			}));
+ 
+ 		q.setParameters(mutingQuery.getParameters());
+@@ -251,4 +321,59 @@ export class QueryService {
+ 
+ 		q.setParameters(mutingQuery.getParameters());
+ 	}
++
++	@bindThis
++	public generateBlockedHostQueryForNote(q: SelectQueryBuilder<any>, excludeAuthor?: boolean): void {
++		let nonBlockedHostQuery: (part: string) => string;
++		if (this.meta.blockedHosts.length === 0) {
++			nonBlockedHostQuery = () => '1=1';
++		} else {
++			nonBlockedHostQuery = (match: string) => `${match} NOT ILIKE ALL(ARRAY[:...blocked])`;
++			q.setParameters({ blocked: this.meta.blockedHosts.flatMap(x => [x, `%.${x}`]) });
++		}
++
++		if (excludeAuthor) {
++			const instanceSuspension = (user: string) => new Brackets(qb => qb
++				.where(`note.${user}Id IS NULL`) // no corresponding user
++				.orWhere(`note.userId = note.${user}Id`)
++				.orWhere(`note.${user}Host IS NULL`) // local
++				.orWhere(nonBlockedHostQuery(`note.${user}Host`)));
++
++			q
++				.andWhere(instanceSuspension('replyUser'))
++				.andWhere(instanceSuspension('renoteUser'));
++		} else {
++			const instanceSuspension = (user: string) => new Brackets(qb => qb
++				.where(`note.${user}Id IS NULL`) // no corresponding user
++				.orWhere(`note.${user}Host IS NULL`) // local
++				.orWhere(nonBlockedHostQuery(`note.${user}Host`)));
++
++			q
++				.andWhere(instanceSuspension('user'))
++				.andWhere(instanceSuspension('replyUser'))
++				.andWhere(instanceSuspension('renoteUser'));
++		}
++	}
++
++	// Requirements: user replyUser renoteUser must be joined
++	@bindThis
++	public generateSuspendedUserQueryForNote(q: SelectQueryBuilder<any>, excludeAuthor?: boolean): void {
++		if (excludeAuthor) {
++			const brakets = (user: string) => new Brackets(qb => qb
++				.where(`${user}.id IS NULL`) // そもそもreplyやrenoteではない、もしくはleftjoinなどでuserが存在しなかった場合を考慮
++				.orWhere(`user.id = ${user}.id`)
++				.orWhere(`${user}.isSuspended = FALSE`));
++			q
++				.andWhere(brakets('replyUser'))
++				.andWhere(brakets('renoteUser'));
++		} else {
++			const brakets = (user: string) => new Brackets(qb => qb
++				.where(`${user}.id IS NULL`) // そもそもreplyやrenoteではない、もしくはleftjoinなどでuserが存在しなかった場合を考慮
++				.orWhere(`${user}.isSuspended = FALSE`));
++			q
++				.andWhere('user.isSuspended = FALSE')
++				.andWhere(brakets('replyUser'))
++				.andWhere(brakets('renoteUser'));
++		}
++	}
+ }
+diff --git a/packages/backend/src/core/SearchService.ts b/packages/backend/src/core/SearchService.ts
+index bc62559e46..87097ada93 100644
+--- a/packages/backend/src/core/SearchService.ts
++++ b/packages/backend/src/core/SearchService.ts
+@@ -190,8 +190,7 @@ export class SearchService {
+ 				return this.searchNoteByMeiliSearch(q, me, opts, pagination);
+ 			}
+ 			default: {
+-				// eslint-disable-next-line @typescript-eslint/no-unused-vars
+-				const typeCheck: never = this.provider;
++				const _: never = this.provider;
+ 				return [];
+ 			}
+ 		}
+@@ -227,15 +226,14 @@ export class SearchService {
+ 
+ 		if (opts.host) {
+ 			if (opts.host === '.') {
+-				query.andWhere('user.host IS NULL');
++				query.andWhere('note.userHost IS NULL');
+ 			} else {
+-				query.andWhere('user.host = :host', { host: opts.host });
++				query.andWhere('note.userHost = :host', { host: opts.host });
+ 			}
+ 		}
+ 
+ 		this.queryService.generateVisibilityQuery(query, me);
+-		if (me) this.queryService.generateMutedUserQuery(query, me);
+-		if (me) this.queryService.generateBlockedUserQuery(query, me);
++		this.queryService.generateBaseNoteFilteringQuery(query, me);
+ 
+ 		return query.limit(pagination.limit).getMany();
+ 	}
+@@ -295,9 +293,20 @@ export class SearchService {
+ 				this.cacheService.userBlockedCache.fetch(me.id),
+ 			])
+ 			: [new Set<string>(), new Set<string>()];
+-		const notes = (await this.notesRepository.findBy({
+-			id: In(res.hits.map(x => x.id)),
+-		})).filter(note => {
++
++		const query = this.notesRepository.createQueryBuilder('note')
++			.innerJoinAndSelect('note.user', 'user')
++			.leftJoinAndSelect('note.reply', 'reply')
++			.leftJoinAndSelect('note.renote', 'renote')
++			.leftJoinAndSelect('reply.user', 'replyUser')
++			.leftJoinAndSelect('renote.user', 'renoteUser');
++
++		query.where('note.id IN (:...noteIds)', { noteIds: res.hits.map(x => x.id) });
++
++		this.queryService.generateBlockedHostQueryForNote(query);
++		this.queryService.generateSuspendedUserQueryForNote(query);
++
++		const notes = (await query.getMany()).filter(note => {
+ 			if (me && isUserRelated(note, userIdsWhoBlockingMe)) return false;
+ 			if (me && isUserRelated(note, userIdsWhoMeMuting)) return false;
+ 			return true;
+diff --git a/packages/backend/src/misc/id/aid.ts b/packages/backend/src/misc/id/aid.ts
+index 60ba788e44..c0e8478db5 100644
+--- a/packages/backend/src/misc/id/aid.ts
++++ b/packages/backend/src/misc/id/aid.ts
+@@ -7,6 +7,7 @@
+ // 長さ8の[2000年1月1日からの経過ミリ秒をbase36でエンコードしたもの] + 長さ2の[ノイズ文字列]
+ 
+ import * as crypto from 'node:crypto';
++import { parseBigInt36 } from '@/misc/bigint.js';
+ 
+ export const aidRegExp = /^[0-9a-z]{10}$/;
+ 
+@@ -35,6 +36,12 @@ export function parseAid(id: string): { date: Date; } {
+ 	return { date: new Date(time) };
+ }
+ 
++export function parseAidFull(id: string): { date: number; additional: bigint; } {
++	const date = parseInt(id.slice(0, 8), 36) + TIME2000;
++	const additional = parseBigInt36(id.slice(8, 10));
++	return { date, additional };
++}
++
+ export function isSafeAidT(t: number): boolean {
+ 	return t > TIME2000;
+ }
+diff --git a/packages/backend/src/misc/id/aidx.ts b/packages/backend/src/misc/id/aidx.ts
+index 1b087e70af..006673a6d0 100644
+--- a/packages/backend/src/misc/id/aidx.ts
++++ b/packages/backend/src/misc/id/aidx.ts
+@@ -9,6 +9,7 @@
+ // https://misskey.m544.net/notes/71899acdcc9859ec5708ac24
+ 
+ import { customAlphabet } from 'nanoid';
++import { parseBigInt36 } from '@/misc/bigint.js';
+ 
+ export const aidxRegExp = /^[0-9a-z]{16}$/;
+ 
+@@ -16,6 +17,7 @@ const TIME2000 = 946684800000;
+ const TIME_LENGTH = 8;
+ const NODE_LENGTH = 4;
+ const NOISE_LENGTH = 4;
++const AIDX_LENGTH = TIME_LENGTH + NODE_LENGTH + NOISE_LENGTH;
+ 
+ const nodeId = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', NODE_LENGTH)();
+ let counter = 0;
+@@ -42,6 +44,12 @@ export function parseAidx(id: string): { date: Date; } {
+ 	return { date: new Date(time) };
+ }
+ 
++export function parseAidxFull(id: string): { date: number; additional: bigint; } {
++	const date = parseInt(id.slice(0, TIME_LENGTH), 36) + TIME2000;
++	const additional = parseBigInt36(id.slice(TIME_LENGTH, AIDX_LENGTH));
++	return { date, additional };
++}
++
+ export function isSafeAidxT(t: number): boolean {
+ 	return t > TIME2000;
+ }
+diff --git a/packages/backend/src/misc/id/meid.ts b/packages/backend/src/misc/id/meid.ts
+index dfab48a369..563e07ed8f 100644
+--- a/packages/backend/src/misc/id/meid.ts
++++ b/packages/backend/src/misc/id/meid.ts
+@@ -3,6 +3,8 @@
+  * SPDX-License-Identifier: AGPL-3.0-only
+  */
+ 
++import { parseBigInt16 } from '@/misc/bigint.js';
++
+ const CHARS = '0123456789abcdef';
+ 
+ // same as object-id
+@@ -39,6 +41,13 @@ export function parseMeid(id: string): { date: Date; } {
+ 	};
+ }
+ 
++export function parseMeidFull(id: string): { date: number; additional: bigint; } {
++	return {
++		date: parseInt(id.slice(0, 12), 16) - 0x800000000000,
++		additional: parseBigInt16(id.slice(12, 24)),
++	};
++}
++
+ export function isSafeMeidT(t: number): boolean {
+ 	return t > 0;
+ }
+diff --git a/packages/backend/src/misc/id/meidg.ts b/packages/backend/src/misc/id/meidg.ts
+index b9c0cc3dda..b825807114 100644
+--- a/packages/backend/src/misc/id/meidg.ts
++++ b/packages/backend/src/misc/id/meidg.ts
+@@ -3,6 +3,8 @@
+  * SPDX-License-Identifier: AGPL-3.0-only
+  */
+ 
++import { parseBigInt16 } from '@/misc/bigint.js';
++
+ const CHARS = '0123456789abcdef';
+ 
+ //  4bit Fixed hex value 'g'
+@@ -39,6 +41,13 @@ export function parseMeidg(id: string): { date: Date; } {
+ 	};
+ }
+ 
++export function parseMeidgFull(id: string): { date: number; additional: bigint; } {
++	return {
++		date: parseInt(id.slice(1, 12), 16),
++		additional: parseBigInt16(id.slice(12, 24)),
++	};
++}
++
+ export function isSafeMeidgT(t: number): boolean {
+ 	return t > 0;
+ }
+diff --git a/packages/backend/src/misc/id/object-id.ts b/packages/backend/src/misc/id/object-id.ts
+index 243f92bbac..68409c7a61 100644
+--- a/packages/backend/src/misc/id/object-id.ts
++++ b/packages/backend/src/misc/id/object-id.ts
+@@ -3,6 +3,8 @@
+  * SPDX-License-Identifier: AGPL-3.0-only
+  */
+ 
++import { parseBigInt16 } from '@/misc/bigint.js';
++
+ const CHARS = '0123456789abcdef';
+ 
+ // same as meid
+@@ -39,6 +41,13 @@ export function parseObjectId(id: string): { date: Date; } {
+ 	};
+ }
+ 
++export function parseObjectIdFull(id: string): { date: number; additional: bigint; } {
++	return {
++		date: parseInt(id.slice(0, 8), 16) * 1000,
++		additional: parseBigInt16(id.slice(8, 24)),
++	};
++}
++
+ export function isSafeObjectIdT(t: number): boolean {
+ 	return t > 0;
+ }
+diff --git a/packages/backend/src/server/api/endpoints/notes/search.ts b/packages/backend/src/server/api/endpoints/notes/search.ts
+index 3fe19806e3..ab1bd934fb 100644
+--- a/packages/backend/src/server/api/endpoints/notes/search.ts
++++ b/packages/backend/src/server/api/endpoints/notes/search.ts
+@@ -8,6 +8,7 @@ import { Endpoint } from '@/server/api/endpoint-base.js';
+ import { SearchService } from '@/core/SearchService.js';
+ import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
+ import { RoleService } from '@/core/RoleService.js';
++import { IdService } from '@/core/IdService.js';
+ import { ApiError } from '../../error.js';
+ 
+ export const meta = {
+@@ -40,6 +41,8 @@ export const paramDef = {
+ 		query: { type: 'string' },
+ 		sinceId: { type: 'string', format: 'misskey:id' },
+ 		untilId: { type: 'string', format: 'misskey:id' },
++		sinceDate: { type: 'integer' },
++		untilDate: { type: 'integer' },
+ 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
+ 		offset: { type: 'integer', default: 0 },
+ 		host: {
+@@ -60,8 +63,12 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 		private noteEntityService: NoteEntityService,
+ 		private searchService: SearchService,
+ 		private roleService: RoleService,
++		private idService: IdService,
+ 	) {
+ 		super(meta, paramDef, async (ps, me) => {
++			const untilId = ps.untilId ?? (ps.untilDate ? this.idService.gen(ps.untilDate!) : undefined);
++			const sinceId = ps.sinceId ?? (ps.sinceDate ? this.idService.gen(ps.sinceDate!) : undefined);
++
+ 			const policies = await this.roleService.getUserPolicies(me ? me.id : null);
+ 			if (!policies.canSearchNotes) {
+ 				throw new ApiError(meta.errors.unavailable);
+@@ -72,8 +79,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				channelId: ps.channelId,
+ 				host: ps.host,
+ 			}, {
+-				untilId: ps.untilId,
+-				sinceId: ps.sinceId,
++				untilId: untilId,
++				sinceId: sinceId,
+ 				limit: ps.limit,
+ 			});
+ 
+diff --git a/packages/frontend/src/pages/search.note.vue b/packages/frontend/src/pages/search.note.vue
+index 14b9f7a741..ab36f2e6c5 100644
+--- a/packages/frontend/src/pages/search.note.vue
++++ b/packages/frontend/src/pages/search.note.vue
+@@ -6,69 +6,127 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <template>
+ <div class="_gaps">
+ 	<div class="_gaps">
+-		<MkInput v-model="searchQuery" :large="true" :autofocus="true" type="search" @enter.prevent="search">
++		<MkInput
++			v-model="searchQuery"
++			large
++			autofocus
++			type="search"
++			@enter.prevent="search"
++		>
+ 			<template #prefix><i class="ti ti-search"></i></template>
+ 		</MkInput>
+-		<MkFoldableSection :expanded="true">
++		<MkFoldableSection expanded>
+ 			<template #header>{{ i18n.ts.options }}</template>
+ 
+ 			<div class="_gaps_m">
+-				<template v-if="instance.federation !== 'none'">
+-					<MkRadios v-model="hostSelect">
+-						<template #label>{{ i18n.ts.host }}</template>
+-						<option value="all" default>{{ i18n.ts.all }}</option>
+-						<option value="local">{{ i18n.ts.local }}</option>
+-						<option v-if="noteSearchableScope === 'global'" value="specified">{{ i18n.ts.specifyHost }}</option>
+-					</MkRadios>
+-					<MkInput v-if="noteSearchableScope === 'global'" v-model="hostInput" :disabled="hostSelect !== 'specified'" :large="true" type="search">
++				<MkRadios
++					v-model="searchScope"
++					:options="searchScopeDef"
++				>
++				</MkRadios>
++
++				<div v-if="instance.federation !== 'none' && searchScope === 'server'" :class="$style.subOptionRoot">
++					<MkInput
++						v-model="hostInput"
++						:placeholder="i18n.ts._search.serverHostPlaceholder"
++						@enter.prevent="search"
++					>
++						<template #label>{{ i18n.ts._search.pleaseEnterServerHost }}</template>
+ 						<template #prefix><i class="ti ti-server"></i></template>
+ 					</MkInput>
+-				</template>
+-
+-				<MkFolder :defaultOpen="true">
+-					<template #label>{{ i18n.ts.specifyUser }}</template>
+-					<template v-if="user" #suffix>@{{ user.username }}{{ user.host ? `@${user.host}` : "" }}</template>
++				</div>
+ 
++				<div v-if="searchScope === 'user'" :class="$style.subOptionRoot">
++					<div :class="$style.userSelectLabel">{{ i18n.ts._search.pleaseSelectUser }}</div>
+ 					<div class="_gaps">
+-						<div :class="$style.userItem">
+-							<MkUserCardMini v-if="user" :class="$style.userCard" :user="user" :withChart="false"/>
+-							<MkButton v-if="user == null && $i != null" transparent :class="$style.addMeButton" @click="selectSelf"><div :class="$style.addUserButtonInner"><span><i class="ti ti-plus"></i><i class="ti ti-user"></i></span><span>{{ i18n.ts.selectSelf }}</span></div></MkButton>
+-							<MkButton v-if="user == null" transparent :class="$style.addUserButton" @click="selectUser"><div :class="$style.addUserButtonInner"><i class="ti ti-plus"></i><span>{{ i18n.ts.selectUser }}</span></div></MkButton>
+-							<button class="_button" :class="$style.remove" :disabled="user == null" @click="removeUser"><i class="ti ti-x"></i></button>
++						<div v-if="user == null" :class="$style.userSelectButtons">
++							<div v-if="$i != null">
++								<MkButton
++									transparent
++									:class="$style.userSelectButton"
++									@click="selectSelf"
++								>
++									<div :class="$style.userSelectButtonInner">
++										<span><i class="ti ti-plus"></i><i class="ti ti-user"></i></span>
++										<span>{{ i18n.ts.selectSelf }}</span>
++									</div>
++								</MkButton>
++							</div>
++							<div :style="$i == null ? 'grid-column: span 2;' : undefined">
++								<MkButton
++									transparent
++									:class="$style.userSelectButton"
++									@click="selectUser"
++								>
++									<div :class="$style.userSelectButtonInner">
++										<span><i class="ti ti-plus"></i></span>
++										<span>{{ i18n.ts.selectUser }}</span>
++									</div>
++								</MkButton>
++							</div>
++						</div>
++						<div v-else :class="$style.userSelectedButtons">
++							<div style="overflow: hidden;">
++								<MkUserCardMini
++									:user="user"
++									:withChart="false"
++								/>
++							</div>
++							<div>
++								<button
++									class="_button"
++									:class="$style.userSelectedRemoveButton"
++									@click="removeUser"
++								>
++									<i class="ti ti-x"></i>
++								</button>
++							</div>
+ 						</div>
+ 					</div>
+-				</MkFolder>
++				</div>
+ 			</div>
+ 		</MkFoldableSection>
+ 		<div>
+-			<MkButton large primary gradate rounded style="margin: 0 auto;" @click="search">{{ i18n.ts.search }}</MkButton>
++			<MkButton
++				large
++				primary
++				gradate
++				rounded
++				:disabled="searchParams == null"
++				style="margin: 0 auto;"
++				@click="search"
++			>
++				{{ i18n.ts.search }}
++			</MkButton>
+ 		</div>
+ 	</div>
+ 
+-	<MkFoldableSection v-if="notePagination">
++	<MkFoldableSection v-if="paginator">
+ 		<template #header>{{ i18n.ts.searchResult }}</template>
+-		<MkNotes :key="key" :pagination="notePagination"/>
++		<MkNotesTimeline :key="`searchNotes:${key}`" :paginator="paginator"/>
+ 	</MkFoldableSection>
+ </div>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, ref, toRef, watch } from 'vue';
+-import type { UserDetailed } from 'misskey-js/entities.js';
+-import type { Paging } from '@/components/MkPagination.vue';
+-import MkNotes from '@/components/MkNotes.vue';
+-import MkInput from '@/components/MkInput.vue';
+-import MkButton from '@/components/MkButton.vue';
++import { computed, markRaw, ref, shallowRef, toRef } from 'vue';
++import { host as localHost } from '@@/js/config.js';
++import type * as Misskey from 'misskey-js';
++import { $i } from '@/i.js';
+ import { i18n } from '@/i18n.js';
++import { instance } from '@/instance.js';
+ import * as os from '@/os.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
++import { apLookup } from '@/utility/lookup.js';
++import { useRouter } from '@/router.js';
++import MkButton from '@/components/MkButton.vue';
+ import MkFoldableSection from '@/components/MkFoldableSection.vue';
+-import MkFolder from '@/components/MkFolder.vue';
+-import { useRouter } from '@/router/supplier.js';
+-import MkUserCardMini from '@/components/MkUserCardMini.vue';
++import MkInput from '@/components/MkInput.vue';
++import MkNotesTimeline from '@/components/MkNotesTimeline.vue';
+ import MkRadios from '@/components/MkRadios.vue';
+-import { $i } from '@/account.js';
+-import { instance } from '@/instance.js';
++import MkUserCardMini from '@/components/MkUserCardMini.vue';
++import { Paginator } from '@/utility/paginator.js';
++import type { MkRadiosOption } from '@/components/MkRadios.vue';
+ 
+ const props = withDefaults(defineProps<{
+ 	query?: string;
+@@ -83,86 +141,158 @@ const props = withDefaults(defineProps<{
+ });
+ 
+ const router = useRouter();
++
+ const key = ref(0);
++const paginator = shallowRef<Paginator<'notes/search'> | null>(null);
++
+ const searchQuery = ref(toRef(props, 'query').value);
+-const notePagination = ref<Paging>();
+-const user = ref<UserDetailed | null>(null);
+ const hostInput = ref(toRef(props, 'host').value);
+ 
++const user = shallowRef<Misskey.entities.UserDetailed | null>(null);
++
++// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+ const noteSearchableScope = instance.noteSearchableScope ?? 'local';
+ 
+-const hostSelect = ref<'all' | 'local' | 'specified'>('all');
++//#region set user
++let fetchedUser: Misskey.entities.UserDetailed | null = null;
+ 
+-const setHostSelectWithInput = (after: string | undefined | null, before: string | undefined | null) => {
+-	if (before === after) return;
+-	if (after === '') hostSelect.value = 'all';
+-	else hostSelect.value = 'specified';
+-};
++if (props.userId) {
++	fetchedUser = await misskeyApi('users/show', {
++		userId: props.userId,
++	}).catch(() => null);
++}
+ 
+-setHostSelectWithInput(hostInput.value, undefined);
++if (props.username && fetchedUser == null) {
++	fetchedUser = await misskeyApi('users/show', {
++		username: props.username,
++		...(props.host ? { host: props.host } : {}),
++	}).catch(() => null);
++}
+ 
+-watch(hostInput, setHostSelectWithInput);
++if (fetchedUser != null) {
++	if (!(noteSearchableScope === 'local' && fetchedUser.host != null)) {
++		user.value = fetchedUser;
++	}
++}
++//#endregion
++
++const searchScope = ref<'all' | 'local' | 'server' | 'user'>((() => {
++	if (user.value != null) return 'user';
++	if (noteSearchableScope === 'local') return 'local';
++	if (hostInput.value) return 'server';
++	return 'all';
++})());
++
++const searchScopeDef = computed<MkRadiosOption[]>(() => {
++	const options: MkRadiosOption[] = [];
++
++	if (instance.federation !== 'none' && noteSearchableScope === 'global') {
++		options.push({ value: 'all', label: i18n.ts._search.searchScopeAll });
++	}
++
++	options.push({ value: 'local', label: instance.federation === 'none' ? i18n.ts._search.searchScopeAll : i18n.ts._search.searchScopeLocal });
++
++	if (instance.federation !== 'none' && noteSearchableScope === 'global') {
++		options.push({ value: 'server', label: i18n.ts._search.searchScopeServer });
++	}
+ 
+-const searchHost = computed(() => {
+-	if (hostSelect.value === 'local' || instance.federation === 'none') return '.';
+-	if (hostSelect.value === 'specified') return hostInput.value;
+-	return null;
++	options.push({ value: 'user', label: i18n.ts._search.searchScopeUser });
++
++	return options;
+ });
+ 
+-if (props.userId != null) {
+-	misskeyApi('users/show', { userId: props.userId }).then(_user => {
+-		user.value = _user;
+-	});
+-} else if (props.username != null) {
+-	misskeyApi('users/show', {
+-		username: props.username,
+-		...(props.host != null && props.host !== '') ? { host: props.host } : {},
+-	}).then(_user => {
+-		user.value = _user;
+-	});
+-}
++type SearchParams = {
++	readonly query: string;
++	readonly host?: string;
++	readonly userId?: string;
++};
++
++const fixHostIfLocal = (target: string | null | undefined) => {
++	if (!target || target === localHost) return '.';
++	return target;
++};
++
++const searchParams = computed<SearchParams | null>(() => {
++	const trimmedQuery = searchQuery.value.trim();
++	if (!trimmedQuery) return null;
++
++	if (searchScope.value === 'user') {
++		if (user.value == null) return null;
++		return {
++			query: trimmedQuery,
++			host: fixHostIfLocal(user.value.host),
++			userId: user.value.id,
++		};
++	}
++
++	if (instance.federation !== 'none' && searchScope.value === 'server') {
++		let trimmedHost = hostInput.value?.trim();
++		if (!trimmedHost) return null;
++		if (trimmedHost.startsWith('https://') || trimmedHost.startsWith('http://')) {
++			try {
++				trimmedHost = new URL(trimmedHost).host;
++			} catch (err) { /* empty */ }
++		}
++		return {
++			query: trimmedQuery,
++			host: fixHostIfLocal(trimmedHost),
++		};
++	}
++
++	if (instance.federation === 'none' || searchScope.value === 'local') {
++		return {
++			query: trimmedQuery,
++			host: '.',
++		};
++	}
++
++	return {
++		query: trimmedQuery,
++	};
++});
+ 
+ function selectUser() {
+-	os.selectUser({ includeSelf: true, localOnly: instance.noteSearchableScope === 'local' }).then(_user => {
++	os.selectUser({
++		includeSelf: true,
++		localOnly: instance.noteSearchableScope === 'local',
++	}).then(_user => {
+ 		user.value = _user;
+-		hostInput.value = _user.host ?? '';
+ 	});
+ }
+ 
+ function selectSelf() {
+-	user.value = $i as UserDetailed | null;
+-	hostInput.value = null;
++	user.value = $i;
+ }
+ 
+ function removeUser() {
+ 	user.value = null;
+-	hostInput.value = '';
+ }
+ 
+ async function search() {
+-	const query = searchQuery.value.toString().trim();
+-
+-	if (query == null || query === '') return;
++	if (searchParams.value == null) return;
+ 
+ 	//#region AP lookup
+-	if (query.startsWith('https://') && !query.includes(' ')) {
++	if (searchParams.value.query.startsWith('https://') && !searchParams.value.query.includes(' ')) {
+ 		const confirm = await os.confirm({
+ 			type: 'info',
+ 			text: i18n.ts.lookupConfirm,
+ 		});
+ 		if (!confirm.canceled) {
+-			const promise = misskeyApi('ap/show', {
+-				uri: query,
+-			});
+-
+-			os.promiseDialog(promise, null, null, i18n.ts.fetchingAsApObject);
+-
+-			const res = await promise;
++			const res = await apLookup(searchParams.value.query);
+ 
+ 			if (res.type === 'User') {
+-				router.push(`/@${res.object.username}@${res.object.host}`);
++				router.push('/@:acct/:page?', {
++					params: {
++						acct: `${res.object.username}@${res.object.host}`,
++					},
++				});
++			// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+ 			} else if (res.type === 'Note') {
+-				router.push(`/notes/${res.object.id}`);
++				router.push('/notes/:noteId/:initialTab?', {
++					params: {
++						noteId: res.object.id,
++					},
++				});
+ 			}
+ 
+ 			return;
+@@ -170,79 +300,87 @@ async function search() {
+ 	}
+ 	//#endregion
+ 
+-	if (query.length > 1 && !query.includes(' ')) {
+-		if (query.startsWith('@')) {
++	if (searchParams.value.query.length > 1 && !searchParams.value.query.includes(' ')) {
++		if (searchParams.value.query.startsWith('@')) {
+ 			const confirm = await os.confirm({
+ 				type: 'info',
+ 				text: i18n.ts.lookupConfirm,
+ 			});
+ 			if (!confirm.canceled) {
+-				router.push(`/${query}`);
++				router.pushByPath(`/${searchParams.value.query}`);
+ 				return;
+ 			}
+ 		}
+ 
+-		if (query.startsWith('#')) {
++		if (searchParams.value.query.startsWith('#')) {
+ 			const confirm = await os.confirm({
+ 				type: 'info',
+ 				text: i18n.ts.openTagPageConfirm,
+ 			});
+ 			if (!confirm.canceled) {
+-				router.push(`/tags/${encodeURIComponent(query.substring(1))}`);
++				router.push('/tags/:tag', {
++					params: {
++						tag: searchParams.value.query.substring(1),
++					},
++				});
+ 				return;
+ 			}
+ 		}
+ 	}
+ 
+-	notePagination.value = {
+-		endpoint: 'notes/search',
++	paginator.value = markRaw(new Paginator('notes/search', {
+ 		limit: 10,
+ 		params: {
+-			query: searchQuery.value,
+-			userId: user.value ? user.value.id : null,
+-			...(searchHost.value ? { host: searchHost.value } : {}),
++			...searchParams.value,
+ 		},
+-	};
++	}));
+ 
+ 	key.value++;
+ }
+ </script>
+ <style lang="scss" module>
+-.userItem {
+-	display: flex;
+-	justify-content: center;
++.subOptionRoot {
++	background: var(--MI_THEME-panel);
++	border-radius: var(--MI-radius);
++	padding: var(--MI-margin);
+ }
+-.addMeButton {
+-  border: 2px dashed var(--MI_THEME-fgTransparent);
+-	padding: 12px;
+-	margin-right: 16px;
++
++.userSelectLabel {
++	font-size: 0.85em;
++	padding: 0 0 8px;
++	user-select: none;
++}
++
++.userSelectButtons {
++	display: grid;
++	grid-template-columns: auto 1fr;
++	gap: 16px;
+ }
+-.addUserButton {
+-  border: 2px dashed var(--MI_THEME-fgTransparent);
++
++.userSelectButton {
++	width: 100%;
++	height: 100%;
+ 	padding: 12px;
+-	flex-grow: 1;
++	border: 2px dashed color(from var(--MI_THEME-fg) srgb r g b / 0.5);
+ }
+-.addUserButtonInner {
++
++.userSelectButtonInner {
+ 	display: flex;
+ 	flex-direction: column;
+ 	align-items: center;
+ 	justify-content: space-between;
+ 	min-height: 38px;
+ }
+-.userCard {
+-	flex-grow: 1;
++
++.userSelectedButtons {
++	display: grid;
++	grid-template-columns: 1fr auto;
++	align-items: center;
+ }
+-.remove {
++
++.userSelectedRemoveButton {
+ 	width: 32px;
+ 	height: 32px;
+-	align-self: center;
+-
+-	& > i:before {
+-		color: #ff2a2a;
+-	}
+-
+-	&:disabled {
+-		opacity: 0;
+-	}
++	color: #ff2a2a;
+ }
+ </style>

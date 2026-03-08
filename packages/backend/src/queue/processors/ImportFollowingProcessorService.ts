@@ -71,8 +71,19 @@ export class ImportFollowingProcessorService {
 				this.queueService.createImportFollowingToDbJob(user, job.data.remaining, job.data.withReplies);
 			}
 
-			const acct = line.split(',')[0].trim();
+			const parts = line.split(',');
+			const acct = parts[0].trim();
 			const { username, host } = Acct.parse(acct);
+			let withReplies: boolean | null = null;
+
+			for (const keyValue of parts.slice(2)) {
+				const [key, value] = keyValue.split('=');
+				switch (key) {
+					case 'withReplies':
+						withReplies = value === 'true';
+						break;
+				}
+			}
 
 			if (!host) return;
 
@@ -99,7 +110,7 @@ export class ImportFollowingProcessorService {
 
 			this.logger.info(`Follow ${target.id} ${job.data.withReplies ? 'with replies' : 'without replies'} ...`);
 
-			this.queueService.createFollowJob([{ from: user, to: { id: target.id }, silent: true, withReplies: job.data.withReplies }]);
+			await this.queueService.createFollowJob([{ from: user, to: { id: target.id }, silent: true, withReplies: withReplies ?? job.data.withReplies }]);
 		} catch (e) {
 			this.logger.warn(`Error: ${e}`);
 		}

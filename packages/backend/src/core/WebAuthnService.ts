@@ -4,6 +4,7 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import * as Redis from 'ioredis';
 import {
 	generateAuthenticationOptions,
@@ -24,6 +25,7 @@ import type {
 	PublicKeyCredentialCreationOptionsJSON,
 	PublicKeyCredentialRequestOptionsJSON,
 	RegistrationResponseJSON,
+	UserVerificationRequirement,
 } from '@simplewebauthn/types';
 
 @Injectable()
@@ -66,7 +68,6 @@ export class WebAuthnService {
 			userID: isoUint8Array.fromUTF8String(userId),
 			userName: userName,
 			userDisplayName: userDisplayName,
-			attestationType: 'indirect',
 			excludeCredentials: keys.map(key => (<{ id: string; transports?: AuthenticatorTransportFuture[]; }>{
 				id: key.id,
 				transports: key.transports ?? undefined,
@@ -260,7 +261,7 @@ export class WebAuthnService {
 			allowCredentials: [],
 			userVerification: 'preferred',
 		});
-		const id = crypto.randomUUID();
+		const id = randomUUID();
 
 		await this.redisClient.setex(`webauthn:challenge:_${id}`, 300, authenticationOptions.challenge);
 

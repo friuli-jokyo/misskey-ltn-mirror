@@ -40,6 +40,11 @@ export const packedChannelSchema = {
 			format: 'url',
 			nullable: true, optional: false,
 		},
+		bannerId: {
+			type: 'string',
+			nullable: true, optional: false,
+			format: 'id',
+		},
 		pinnedNoteIds: {
 			type: 'array',
 			nullable: false, optional: false,
@@ -73,6 +78,10 @@ export const packedChannelSchema = {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
+		requirePublicWriteAccess: {
+			type: 'boolean',
+			optional: false, nullable: false,
+		},
 		allowRenoteToExternal: {
 			type: 'boolean',
 			optional: false, nullable: false,
@@ -82,6 +91,10 @@ export const packedChannelSchema = {
 			optional: true, nullable: false,
 		},
 		isFavorited: {
+			type: 'boolean',
+			optional: true, nullable: false,
+		},
+		isMuting: {
 			type: 'boolean',
 			optional: true, nullable: false,
 		},

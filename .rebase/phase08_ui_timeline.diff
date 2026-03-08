@@ -1,0 +1,899 @@
+diff --git a/packages/frontend/src/components/MkVisibilityDial.stories.impl.ts b/packages/frontend/src/components/MkVisibilityDial.stories.impl.ts
+new file mode 100644
+index 0000000000..0bd771eacd
+--- /dev/null
++++ b/packages/frontend/src/components/MkVisibilityDial.stories.impl.ts
+@@ -0,0 +1,30 @@
++/* eslint-disable @typescript-eslint/explicit-function-return-type */
++import { StoryObj } from '@storybook/vue3';
++import MkVisibilityDial from './MkVisibilityDial.vue';
++export const Default = {
++	render(args) {
++		return {
++			components: {
++				MkVisibilityDial,
++			},
++			setup() {
++				return {
++					args,
++				};
++			},
++			computed: {
++				props() {
++					return {
++						...this.args,
++					};
++				},
++			},
++			template: '<MkVisibilityDial v-bind="props" />',
++		};
++	},
++	args: {
++	},
++	parameters: {
++		layout: 'centered',
++	},
++} satisfies StoryObj<typeof MkVisibilityDial>;
+diff --git a/packages/frontend/src/components/MkVisibilityDial.vue b/packages/frontend/src/components/MkVisibilityDial.vue
+new file mode 100644
+index 0000000000..933488f0da
+--- /dev/null
++++ b/packages/frontend/src/components/MkVisibilityDial.vue
+@@ -0,0 +1,187 @@
++<!--
++SPDX-FileCopyrightText: syuilo and misskey-project
++SPDX-License-Identifier: AGPL-3.0-only
++-->
++
++<template>
++<div :class="$style.container">
++	<div ref="dial" :class="$style.dial">
++		<div :class="[$style.dialItem, { [$style.active]: visibility === 'public' }]">
++			<i class="ti ti-world"></i>
++		</div>
++		<div :class="[$style.dialItem, { [$style.active]: visibility === 'home' }]">
++			<i class="ti ti-home"></i>
++		</div>
++		<div :class="[$style.dialItem, { [$style.active]: visibility === 'followers' }]">
++			<i class="ti ti-lock"></i>
++		</div>
++		<div :class="[$style.dialItem, { [$style.active]: visibility === 'specified' }]">
++			<i class="ti ti-mail"></i>
++		</div>
++	</div>
++	<div ref="grip" :class="$style.grip" @scroll.passive="scroll" @mousedown.passive="mousedown">
++		<div v-for="_ in 11" :class="$style.gripItem"></div>
++	</div>
++</div>
++</template>
++
++<script lang="ts" setup>
++import { onMounted, ref, shallowRef, watch } from 'vue';
++import { defaultStore } from '@/store.js';
++
++const dial = shallowRef<HTMLElement>();
++const grip = shallowRef<HTMLElement>();
++const y = ref<number | null>(null);
++const visibilityChanging = ref(false);
++const visibility = defaultStore.reactiveState.visibility;
++
++onMounted(() => {
++	grip.value!.scrollTop = visibility.value === 'public' ? 0 : visibility.value === 'home' ? 25 : visibility.value === 'followers' ? 50 : 75;
++});
++
++watch(visibility, (value) => {
++	if (y.value !== null) return;
++	if (visibilityChanging.value) {
++		visibilityChanging.value = false;
++		return;
++	}
++	grip.value!.scrollTop = value === 'public' ? 0 : value === 'home' ? 25 : value === 'followers' ? 50 : 75;
++});
++
++const scroll = (ev: Event) => {
++	dial.value!.style.transform = `rotate(${(ev.target as HTMLElement).scrollTop * 0.48}deg)`;
++	const scroll = Math.round((ev.target as HTMLElement).scrollTop / 25);
++	const newVisibility = scroll <= 0 ? 'public' : scroll === 1 ? 'home' : scroll === 2 ? 'followers' : 'specified';
++	if (visibility.value === newVisibility) return;
++	visibilityChanging.value = true;
++	defaultStore.set('visibility', newVisibility);
++};
++
++const mousedown = (ev: MouseEvent) => {
++	if (ev.button !== 0) return;
++	y.value = grip.value!.scrollTop + ev.screenY;
++	grip.value!.style.setProperty('scroll-snap-type', 'none');
++	grip.value!.style.setProperty('cursor', 'grabbing');
++	document.body.style.setProperty('cursor', 'grabbing');
++	document.body.addEventListener('mousemove', mousemove, { passive: true });
++	document.body.addEventListener('mouseup', mouseup, { passive: true });
++};
++
++const mousemove = (ev: MouseEvent) => {
++	grip.value!.scrollTop = y.value! - ev.screenY;
++};
++
++const mouseup = (ev: MouseEvent) => {
++	if (ev.button !== 0) return;
++	y.value = null;
++	grip.value!.style.removeProperty('scroll-snap-type');
++	grip.value!.style.removeProperty('cursor');
++	document.body.style.removeProperty('cursor');
++	document.body.removeEventListener('mousemove', mousemove);
++	document.body.removeEventListener('mouseup', mouseup);
++	grip.value!.scrollBy({ behavior: 'smooth' });
++};
++</script>
++
++<style lang="scss" module>
++.container {
++	display: grid;
++	width: 48px;
++	height: 200px;
++	align-items: center;
++	align-content: center;
++
++	&::after {
++		display: block;
++		content: '';
++		width: 0;
++		height: 0;
++		grid-area: 1 / 1 / 2 / 2;
++		z-index: 1;
++		margin: 0 0 0 40px;
++		border: solid 4px transparent;
++		border-right-color: var(--MI_THEME-accent);
++	}
++}
++
++.dial {
++	display: grid;
++	width: 254px;
++	height: 254px;
++	grid: 1fr / 1fr;
++	grid-area: 1 / 1 / 2 / 2;
++	background: var(--MI_THEME-panel);
++	border: dashed 1px var(--MI_THEME-divider);
++	border-radius: 128px;
++	box-shadow: 0 0 8px #0003;
++}
++
++.dialItem {
++	display: flex;
++	width: 247px;
++	height: 254px;
++	align-items: center;
++	grid-area: 1 / 1 / 2 / 2;
++	padding: 0 0 0 7px;
++
++	&:nth-child(1) {
++		transform: rotate(0deg);
++	}
++
++	&:nth-child(2) {
++		transform: rotate(-12deg);
++	}
++
++	&:nth-child(3) {
++		transform: rotate(-24deg);
++	}
++
++	&:nth-child(4) {
++		transform: rotate(-36deg);
++	}
++
++	&::after {
++		display: block;
++		content: '';
++		width: 8px;
++		margin: 0 0 0 8px;
++		border-top: solid 1px var(--MI_THEME-divider);
++		transition: border-top-color 0.2s;
++	}
++
++	& > :global(.ti) {
++		opacity: 0.5;
++		transition: opacity 0.2s;
++	}
++
++	&.active::after {
++		border-top-color: var(--MI_THEME-accent);
++	}
++
++	&.active > :global(.ti) {
++		opacity: 1;
++	}
++}
++
++.grip {
++	width: 256px;
++	height: 200px;
++	grid-area: 1 / 1 / 2 / 2;
++	z-index: 2;
++	overflow: clip auto;
++	scrollbar-width: none;
++	scroll-snap-type: y mandatory;
++	cursor: grab;
++	user-select: none;
++
++	&::-webkit-scrollbar {
++		display: none;
++	}
++}
++
++.gripItem {
++	width: 48px;
++	height: 25px;
++	scroll-snap-align: start;
++}
++</style>
+diff --git a/packages/frontend/src/os.ts b/packages/frontend/src/os.ts
+index 6e48366092..2254b34d09 100644
+--- a/packages/frontend/src/os.ts
++++ b/packages/frontend/src/os.ts
+@@ -16,6 +16,8 @@ import type { PostFormProps } from '@/types/post-form.js';
+ import { misskeyApi } from '@/scripts/misskey-api.js';
+ import { defaultStore } from '@/store.js';
+ import { i18n } from '@/i18n.js';
++import { miLocalStorage } from '@/local-storage.js';
++import type { Resolved } from '@/nirax.js';
+ import MkPostFormDialog from '@/components/MkPostFormDialog.vue';
+ import MkWaitingDialog from '@/components/MkWaitingDialog.vue';
+ import MkPageWindow from '@/components/MkPageWindow.vue';
+@@ -754,6 +756,28 @@ export function post(props: PostFormProps = {}): Promise<void> {
+ 	});
+ }
+ 
++export async function postButtonTriggered({ props, route }: Resolved): Promise<void> {
++	if (defaultStore.state.postFormOnChannelShouldPostToChannel && route.name === 'channel') {
++		const channelId = props.get('channelId');
++		if (typeof channelId === 'string') {
++			// NOTE: チャンネルを開いているならば、チャンネルの情報がキャッシュされていることを期待できるはずである
++			const channelJSON = miLocalStorage.getItem(`channel:${channelId}`);
++			if (channelJSON) {
++				const channel = JSON.parse(channelJSON);
++				if (channel) {
++					await post({ channel });
++					return;
++				}
++				miLocalStorage.removeItem(`channel:${channelId}`);
++			}
++			const channel = await api('channels/show', { channelId });
++			await post({ channel });
++			return;
++		}
++	}
++	await post();
++}
++
+ export const deckGlobalEvents = new EventEmitter();
+ 
+ /*
+diff --git a/packages/frontend/src/pages/note.vue b/packages/frontend/src/pages/note.vue
+index e6b4a0b222..62fa323010 100644
+--- a/packages/frontend/src/pages/note.vue
++++ b/packages/frontend/src/pages/note.vue
+@@ -11,12 +11,16 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<Transition :name="defaultStore.state.animation ? 'fade' : ''" mode="out-in">
+ 				<div v-if="note">
+ 					<div v-if="showNext" class="_margin">
+-						<MkNotes class="" :pagination="showNext === 'channel' ? nextChannelPagination : nextUserPagination" :noGap="true" :disableAutoLoad="true"/>
++						<MkNotes class="" :pagination="nextPagination" :noGap="true" :disableAutoLoad="true"/>
+ 					</div>
+ 
+ 					<div class="_margin">
+ 						<div v-if="!showNext" class="_buttons" :class="$style.loadNext">
+ 							<MkButton v-if="note.channelId" rounded :class="$style.loadButton" @click="showNext = 'channel'"><i class="ti ti-chevron-up"></i> <i class="ti ti-device-tv"></i></MkButton>
++							<template v-else-if="note.visibility === 'public'">
++								<MkButton v-if="defaultStore.state.localNeighborNotes" rounded :class="$style.loadButton" @click="showNext = 'local'"><i class="ti ti-chevron-up"></i> <i class="ti ti-planet"></i></MkButton>
++								<MkButton v-if="defaultStore.state.globalNeighborNotes" rounded :class="$style.loadButton" @click="showNext = 'global'"><i class="ti ti-chevron-up"></i> <i class="ti ti-whirl"></i></MkButton>
++							</template>
+ 							<MkButton rounded :class="$style.loadButton" @click="showNext = 'user'"><i class="ti ti-chevron-up"></i> <i class="ti ti-user"></i></MkButton>
+ 						</div>
+ 						<div class="_margin _gaps_s">
+@@ -31,12 +35,16 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 						</div>
+ 						<div v-if="!showPrev" class="_buttons" :class="$style.loadPrev">
+ 							<MkButton v-if="note.channelId" rounded :class="$style.loadButton" @click="showPrev = 'channel'"><i class="ti ti-chevron-down"></i> <i class="ti ti-device-tv"></i></MkButton>
++							<template v-else-if="note.visibility === 'public'">
++								<MkButton v-if="defaultStore.state.localNeighborNotes" rounded :class="$style.loadButton" @click="showPrev = 'local'"><i class="ti ti-chevron-down"></i> <i class="ti ti-planet"></i></MkButton>
++								<MkButton v-if="defaultStore.state.globalNeighborNotes" rounded :class="$style.loadButton" @click="showPrev = 'global'"><i class="ti ti-chevron-down"></i> <i class="ti ti-whirl"></i></MkButton>
++							</template>
+ 							<MkButton rounded :class="$style.loadButton" @click="showPrev = 'user'"><i class="ti ti-chevron-down"></i> <i class="ti ti-user"></i></MkButton>
+ 						</div>
+ 					</div>
+ 
+ 					<div v-if="showPrev" class="_margin">
+-						<MkNotes class="" :pagination="showPrev === 'channel' ? prevChannelPagination : prevUserPagination" :noGap="true"/>
++						<MkNotes class="" :pagination="prevPagination" :noGap="true"/>
+ 					</div>
+ 				</div>
+ 				<MkError v-else-if="error" @retry="fetchNote()"/>
+@@ -58,6 +66,7 @@ import MkRemoteCaution from '@/components/MkRemoteCaution.vue';
+ import MkButton from '@/components/MkButton.vue';
+ import { misskeyApi } from '@/scripts/misskey-api.js';
+ import { definePageMetadata } from '@/scripts/page-metadata.js';
++import { hostname } from '@@/js/config.js';
+ import { i18n } from '@/i18n.js';
+ import { dateString } from '@/filters/date.js';
+ import MkClipPreview from '@/components/MkClipPreview.vue';
+@@ -74,10 +83,32 @@ const props = defineProps<{
+ 	initialTab?: string;
+ }>();
+ 
++function userOf(note: Misskey.entities.Note): Misskey.entities.User {
++	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
++}
++
+ const note = ref<null | Misskey.entities.Note>(CTX_NOTE);
+ const clips = ref<Misskey.entities.Clip[]>();
+-const showPrev = ref<'user' | 'channel' | false>(false);
+-const showNext = ref<'user' | 'channel' | false>(false);
++const showPrev = ref<'user' | 'global' | 'local' | 'channel' | false>(false);
++const showNext = ref<'user' | 'global' | 'local' | 'channel' | false>(false);
++const prevPagination = computed(() => {
++	switch (showPrev.value) {
++		case 'channel': return prevChannelPagination;
++		case 'local': return prevLocalPagination;
++		case 'global': return prevGlobalPagination;
++		case 'user': return prevUserPagination;
++		default: return undefined as never;
++	}
++});
++const nextPagination = computed(() => {
++	switch (showNext.value) {
++		case 'channel': return nextChannelPagination;
++		case 'local': return nextLocalPagination;
++		case 'global': return nextGlobalPagination;
++		case 'user': return nextUserPagination;
++		default: return undefined as never;
++	}
++});
+ const error = ref();
+ 
+ const prevUserPagination: Paging = {
+@@ -99,6 +130,40 @@ const nextUserPagination: Paging = {
+ 	}) : undefined),
+ };
+ 
++const prevGlobalPagination: Paging = {
++	endpoint: 'notes/global-timeline',
++	limit: 10,
++	params: computed(() => note.value ? ({
++		untilId: note.value.id,
++	}) : undefined),
++};
++
++const nextGlobalPagination: Paging = {
++	reversed: true,
++	endpoint: 'notes/global-timeline',
++	limit: 10,
++	params: computed(() => note.value ? ({
++		sinceId: note.value.id,
++	}) : undefined),
++};
++
++const prevLocalPagination: Paging = {
++	endpoint: 'notes/local-timeline',
++	limit: 10,
++	params: computed(() => note.value ? ({
++		untilId: note.value.id,
++	}) : undefined),
++};
++
++const nextLocalPagination: Paging = {
++	reversed: true,
++	endpoint: 'notes/local-timeline',
++	limit: 10,
++	params: computed(() => note.value ? ({
++		sinceId: note.value.id,
++	}) : undefined),
++};
++
+ const prevChannelPagination: Paging = {
+ 	endpoint: 'channels/timeline',
+ 	limit: 10,
+@@ -167,10 +232,12 @@ definePageMetadata(() => ({
+ 	title: i18n.ts.note,
+ 	...note.value ? {
+ 		subtitle: dateString(note.value.createdAt),
+-		avatar: note.value.user,
++		avatar: note.value.anonymouslySendToUser ? undefined : userOf(note.value),
+ 		path: `/notes/${note.value.id}`,
+ 		share: {
+-			title: i18n.tsx.noteOf({ user: note.value.user.name }),
++			title: note.value.anonymouslySendToUser
++				? i18n.tsx.anonymouslySendToUser({ user: note.value.anonymouslySendToUser.name ?? note.value.anonymouslySendToUser.username })
++				: i18n.tsx.noteOf({ user: note.value.anonymousChannelUsername ?? note.value.user.name ?? note.value.user.username }),
+ 			text: note.value.text,
+ 		},
+ 	} : {},
+diff --git a/packages/frontend/src/pages/settings/general.vue b/packages/frontend/src/pages/settings/general.vue
+index 4449d6169f..ce46711b30 100644
+--- a/packages/frontend/src/pages/settings/general.vue
++++ b/packages/frontend/src/pages/settings/general.vue
+@@ -35,6 +35,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<MkButton v-if="defaultStore.reactiveState.pinnedUserLists.value.length === 0" @click="setPinnedList()">{{ i18n.ts.add }}</MkButton>
+ 				<MkButton v-else danger @click="removePinnedList()"><i class="ti ti-trash"></i> {{ i18n.ts.remove }}</MkButton>
+ 			</MkFolder>
++			<MkSwitch v-model="postFormOnChannelShouldPostToChannel">{{ i18n.ts.postToTheChannelYouHaveOpen }}</MkSwitch>
+ 		</div>
+ 	</FormSection>
+ 
+@@ -49,6 +50,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</MkSwitch>
+ 				<MkSwitch v-model="showNoteActionsOnlyHover">{{ i18n.ts.showNoteActionsOnlyHover }}</MkSwitch>
+ 				<MkSwitch v-model="showClipButtonInNoteFooter">{{ i18n.ts.showClipButtonInNoteFooter }}</MkSwitch>
++				<MkSwitch v-model="showTranslateButtonInNoteFooter">{{ i18n.ts.showTranslateButtonInNoteFooter }}</MkSwitch>
++				<MkSwitch v-model="collapseRenotes">{{ i18n.ts.collapseRenotes }}</MkSwitch>
+ 				<MkSwitch v-model="advancedMfm">{{ i18n.ts.enableAdvancedMfm }}</MkSwitch>
+ 				<MkSwitch v-if="advancedMfm" v-model="animatedMfm">{{ i18n.ts.enableAnimatedMfm }}</MkSwitch>
+ 				<MkSwitch v-if="advancedMfm" v-model="enableQuickAddMfmFunction">{{ i18n.ts.enableQuickAddMfmFunction }}</MkSwitch>
+@@ -61,6 +64,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<option value="medium">{{ i18n.ts.medium }}</option>
+ 					<option value="large">{{ i18n.ts.large }}</option>
+ 				</MkRadios>
++				<MkSwitch v-model="adaptiveReactionsDisplaySize">{{ i18n.ts.adaptiveReactionsDisplaySize }}</MkSwitch>
++				<MkSwitch v-model="showReactedUserAvatars">{{ i18n.ts.showReactedUserAvatars }}</MkSwitch>
+ 				<MkSwitch v-model="limitWidthOfReaction">{{ i18n.ts.limitWidthOfReaction }}</MkSwitch>
+ 			</div>
+ 
+@@ -124,6 +129,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<MkSwitch v-model="highlightSensitiveMedia">{{ i18n.ts.highlightSensitiveMedia }}</MkSwitch>
+ 				<MkSwitch v-model="squareAvatars">{{ i18n.ts.squareAvatars }}</MkSwitch>
+ 				<MkSwitch v-model="showAvatarDecorations">{{ i18n.ts.showAvatarDecorations }}</MkSwitch>
++				<MkSwitch v-model="localNeighborNotes">{{ i18n.ts.localNeighborNotes }}</MkSwitch>
++				<MkSwitch v-model="globalNeighborNotes">{{ i18n.ts.globalNeighborNotes }}</MkSwitch>
+ 				<MkSwitch v-model="useSystemFont">{{ i18n.ts.useSystemFont }}</MkSwitch>
+ 				<MkSwitch v-model="forceShowAds">{{ i18n.ts.forceShowAds }}</MkSwitch>
+ 				<MkSwitch v-model="enableSeasonalScreenEffect">{{ i18n.ts.seasonalScreenEffect }}</MkSwitch>
+@@ -219,6 +226,9 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					</div>
+ 				</div>
+ 			</MkFolder>
++			<MkTextarea v-model="autoOpenCws">
++				<template #label>{{ i18n.ts.autoOpenCws }}</template>
++			</MkTextarea>
+ 		</div>
+ 	</FormSection>
+ 
+@@ -262,6 +272,7 @@ import FormSection from '@/components/form/section.vue';
+ import FormLink from '@/components/form/link.vue';
+ import MkLink from '@/components/MkLink.vue';
+ import MkInfo from '@/components/MkInfo.vue';
++import MkTextarea from '@/components/MkTextarea.vue';
+ import { defaultStore } from '@/store.js';
+ import * as os from '@/os.js';
+ import { instance } from '@/instance.js';
+@@ -283,7 +294,10 @@ const overridedDeviceKind = computed(defaultStore.makeGetterSetter('overridedDev
+ const serverDisconnectedBehavior = computed(defaultStore.makeGetterSetter('serverDisconnectedBehavior'));
+ const showNoteActionsOnlyHover = computed(defaultStore.makeGetterSetter('showNoteActionsOnlyHover'));
+ const showClipButtonInNoteFooter = computed(defaultStore.makeGetterSetter('showClipButtonInNoteFooter'));
++const showTranslateButtonInNoteFooter = computed(defaultStore.makeGetterSetter('showTranslateButtonInNoteFooter'));
+ const reactionsDisplaySize = computed(defaultStore.makeGetterSetter('reactionsDisplaySize'));
++const adaptiveReactionsDisplaySize = computed(defaultStore.makeGetterSetter('adaptiveReactionsDisplaySize'));
++const showReactedUserAvatars = computed(defaultStore.makeGetterSetter('showReactedUserAvatars'));
+ const limitWidthOfReaction = computed(defaultStore.makeGetterSetter('limitWidthOfReaction'));
+ const collapseRenotes = computed(defaultStore.makeGetterSetter('collapseRenotes'));
+ const reduceAnimation = computed(defaultStore.makeGetterSetter('animation', v => !v, v => !v));
+@@ -310,6 +324,8 @@ const enableInfiniteScroll = computed(defaultStore.makeGetterSetter('enableInfin
+ const useReactionPickerForContextMenu = computed(defaultStore.makeGetterSetter('useReactionPickerForContextMenu'));
+ const squareAvatars = computed(defaultStore.makeGetterSetter('squareAvatars'));
+ const showAvatarDecorations = computed(defaultStore.makeGetterSetter('showAvatarDecorations'));
++const localNeighborNotes = computed(defaultStore.makeGetterSetter('localNeighborNotes'));
++const globalNeighborNotes = computed(defaultStore.makeGetterSetter('globalNeighborNotes'));
+ const mediaListWithOneImageAppearance = computed(defaultStore.makeGetterSetter('mediaListWithOneImageAppearance'));
+ const notificationPosition = computed(defaultStore.makeGetterSetter('notificationPosition'));
+ const notificationStackAxis = computed(defaultStore.makeGetterSetter('notificationStackAxis'));
+@@ -318,6 +334,15 @@ const disableStreamingTimeline = computed(defaultStore.makeGetterSetter('disable
+ const useGroupedNotifications = computed(defaultStore.makeGetterSetter('useGroupedNotifications'));
+ const enableSeasonalScreenEffect = computed(defaultStore.makeGetterSetter('enableSeasonalScreenEffect'));
+ const enableHorizontalSwipe = computed(defaultStore.makeGetterSetter('enableHorizontalSwipe'));
++const postFormOnChannelShouldPostToChannel = computed(defaultStore.makeGetterSetter('postFormOnChannelShouldPostToChannel'));
++const autoOpenCws = computed({
++	get() {
++		return defaultStore.state.autoOpenCws.join('\n');
++	},
++	set(value: string) {
++		defaultStore.set('autoOpenCws', value.split('\n').filter(v => v));
++	},
++});
+ const useNativeUIForVideoAudioPlayer = computed(defaultStore.makeGetterSetter('useNativeUIForVideoAudioPlayer'));
+ const alwaysConfirmFollow = computed(defaultStore.makeGetterSetter('alwaysConfirmFollow'));
+ const confirmWhenRevealingSensitiveMedia = computed(defaultStore.makeGetterSetter('confirmWhenRevealingSensitiveMedia'));
+diff --git a/packages/frontend/src/pages/settings/privacy.vue b/packages/frontend/src/pages/settings/privacy.vue
+index 54a5aeb6c1..87025c2bd0 100644
+--- a/packages/frontend/src/pages/settings/privacy.vue
++++ b/packages/frontend/src/pages/settings/privacy.vue
+@@ -151,6 +151,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<MkSwitch v-model="defaultNoteLocalOnly">{{ i18n.ts._visibility.disableFederation }}</MkSwitch>
+ 				</div>
+ 			</MkFolder>
++			<MkSwitch v-else v-model="showNoteVisibilityDial" @update:modelValue="save()">{{ i18n.ts.showNoteVisibilityDial }}</MkSwitch>
+ 		</div>
+ 	</FormSection>
+ 
+@@ -193,6 +194,7 @@ const followersVisibility = ref($i.followersVisibility);
+ const defaultNoteVisibility = computed(defaultStore.makeGetterSetter('defaultNoteVisibility'));
+ const defaultNoteLocalOnly = computed(defaultStore.makeGetterSetter('defaultNoteLocalOnly'));
+ const rememberNoteVisibility = computed(defaultStore.makeGetterSetter('rememberNoteVisibility'));
++const showNoteVisibilityDial = computed(defaultStore.makeGetterSetter('showNoteVisibilityDial'));
+ const keepCw = computed(defaultStore.makeGetterSetter('keepCw'));
+ 
+ const makeNotesFollowersOnlyBefore_type = computed(() => {
+diff --git a/packages/frontend/src/store.ts b/packages/frontend/src/store.ts
+index e2243e067a..dd61b4944d 100644
+--- a/packages/frontend/src/store.ts
++++ b/packages/frontend/src/store.ts
+@@ -101,6 +101,10 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'account',
+ 		default: false,
+ 	},
++	showNoteVisibilityDial: {
++		where: 'account',
++		default: false,
++	},
+ 	defaultNoteVisibility: {
+ 		where: 'account',
+ 		default: 'public' as (typeof Misskey.noteVisibilities)[number],
+@@ -141,6 +145,18 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'account',
+ 		default: [] as string[],
+ 	},
++	showTimelineReplies: {
++		where: 'account',
++		default: false,
++	},
++	postFormOnChannelShouldPostToChannel: {
++		where: 'account',
++		default: false,
++	},
++	autoOpenCws: {
++		where: 'account',
++		default: [] as string[],
++	},
+ 
+ 	menu: {
+ 		where: 'deviceAccount',
+@@ -343,6 +359,14 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'device',
+ 		default: true,
+ 	},
++	localNeighborNotes: {
++		where: 'device',
++		default: true,
++	},
++	globalNeighborNotes: {
++		where: 'device',
++		default: false,
++	},
+ 	postFormWithHashtags: {
+ 		where: 'device',
+ 		default: false,
+@@ -367,6 +391,18 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'device',
+ 		default: false,
+ 	},
++	showTranslateButtonInNoteFooter: {
++		where: 'device',
++		default: false,
++	},
++	showReactedUserAvatars: {
++		where: 'device',
++		default: false,
++	},
++	adaptiveReactionsDisplaySize: {
++		where: 'device',
++		default: false,
++	},
+ 	reactionsDisplaySize: {
+ 		where: 'device',
+ 		default: 'medium' as 'small' | 'medium' | 'large',
+diff --git a/packages/frontend/src/ui/_common_/common.vue b/packages/frontend/src/ui/_common_/common.vue
+index d145b9b6c6..fe12c4ad50 100644
+--- a/packages/frontend/src/ui/_common_/common.vue
++++ b/packages/frontend/src/ui/_common_/common.vue
+@@ -37,6 +37,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ <XStreamIndicator/>
+ 
++<MkVisibilityDial v-if="showNoteVisibilityDial" :class="$style.dial"/>
++
+ <div v-if="pendingApiRequestsCount > 0" id="wait"></div>
+ 
+ <div v-if="dev" id="devTicker"><span style="animation: dev-ticker-blink 2s infinite;">DEV BUILD</span></div>
+@@ -61,9 +63,11 @@ import { globalEvents } from '@/events.js';
+ 
+ const XStreamIndicator = defineAsyncComponent(() => import('./stream-indicator.vue'));
+ const XUpload = defineAsyncComponent(() => import('./upload.vue'));
++const MkVisibilityDial = defineAsyncComponent(() => import('@/components/MkVisibilityDial.vue'));
+ 
+ const dev = _DEV_;
+ 
++const showNoteVisibilityDial = defaultStore.reactiveState.showNoteVisibilityDial;
+ const notifications = ref<Misskey.entities.Notification[]>([]);
+ 
+ function onNotification(notification: Misskey.entities.Notification, isClient = false) {
+@@ -198,6 +202,13 @@ if ($i) {
+ 	}
+ }
+ 
++.dial {
++	position: fixed;
++	inset: 0 0 0 auto;
++	z-index: 1;
++	margin: auto 0;
++}
++
+ .notification {
+ 	container-type: inline-size;
+ }
+diff --git a/packages/frontend/src/ui/_common_/navbar-for-mobile.vue b/packages/frontend/src/ui/_common_/navbar-for-mobile.vue
+index 44253e93bd..87521973e8 100644
+--- a/packages/frontend/src/ui/_common_/navbar-for-mobile.vue
++++ b/packages/frontend/src/ui/_common_/navbar-for-mobile.vue
+@@ -8,7 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<div :class="$style.top">
+ 		<div :class="$style.banner" :style="{ backgroundImage: `url(${ instance.bannerUrl })` }"></div>
+ 		<button class="_button" :class="$style.instance" @click="openInstanceMenu">
+-			<img :src="instance.iconUrl || instance.faviconUrl || '/favicon.ico'" alt="" :class="$style.instanceIcon"/>
++			<img :src="instance.iconUrl || instance.faviconUrl || '/favicon.png'" alt="" :class="$style.instanceIcon"/>
+ 		</button>
+ 	</div>
+ 	<div :class="$style.middle">
+@@ -36,13 +36,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		<MkA :class="$style.item" :activeClass="$style.active" to="/settings">
+ 			<i :class="$style.itemIcon" class="ti ti-settings ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.settings }}</span>
+ 		</MkA>
++		<MkSettingSuggestion :class="$style.info"/>
+ 	</div>
+ 	<div :class="$style.bottom">
+-		<button class="_button" :class="$style.post" data-cy-open-post-form @click="os.post">
++		<button class="_button" :class="$style.post" data-cy-open-post-form @click="post">
+ 			<i :class="$style.postIcon" class="ti ti-pencil ti-fw"></i><span style="position: relative;">{{ i18n.ts.note }}</span>
+ 		</button>
+ 		<button class="_button" :class="$style.account" @click="openAccountMenu">
+-			<MkAvatar :user="$i" :class="$style.avatar"/><MkAcct :class="$style.acct" class="_nowrap" :user="$i"/>
++			<MkAvatar :user="$i" :class="$style.avatar" small/><MkAcct :class="$style.acct" class="_nowrap" :user="$i"/>
+ 		</button>
+ 	</div>
+ </div>
+@@ -54,10 +55,13 @@ import { openInstanceMenu } from './common.js';
+ import * as os from '@/os.js';
+ import { navbarItemDef } from '@/navbar.js';
+ import { $i, openAccountMenu as openAccountMenu_ } from '@/account.js';
++import MkSettingSuggestion from '@/components/MkSettingSuggestion.vue';
+ import { defaultStore } from '@/store.js';
+ import { i18n } from '@/i18n.js';
+ import { instance } from '@/instance.js';
++import { useRouter } from '@/router/supplier.js';
+ 
++const router = useRouter();
+ const menu = toRef(defaultStore.state, 'menu');
+ const otherMenuItemIndicated = computed(() => {
+ 	for (const def in navbarItemDef) {
+@@ -67,6 +71,10 @@ const otherMenuItemIndicated = computed(() => {
+ 	return false;
+ });
+ 
++function post() {
++	os.postButtonTriggered(router.currentRef.value);
++}
++
+ function openAccountMenu(ev: MouseEvent) {
+ 	openAccountMenu_({
+ 		withExtraOperation: true,
+@@ -269,4 +277,8 @@ function more() {
+ 	position: relative;
+ 	font-size: 0.9em;
+ }
++
++.info {
++	margin: 16px 19px 0;
++}
+ </style>
+diff --git a/packages/frontend/src/ui/_common_/navbar.vue b/packages/frontend/src/ui/_common_/navbar.vue
+index 9724905e02..357d3e413f 100644
+--- a/packages/frontend/src/ui/_common_/navbar.vue
++++ b/packages/frontend/src/ui/_common_/navbar.vue
+@@ -9,7 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		<div :class="$style.top">
+ 			<div :class="$style.banner" :style="{ backgroundImage: `url(${ instance.bannerUrl })` }"></div>
+ 			<button v-tooltip.noDelay.right="instance.name ?? i18n.ts.instance" class="_button" :class="$style.instance" @click="openInstanceMenu">
+-				<img :src="instance.iconUrl || instance.faviconUrl || '/favicon.ico'" alt="" :class="$style.instanceIcon"/>
++				<img :src="instance.iconUrl || instance.faviconUrl || '/favicon.png'" alt="" :class="$style.instanceIcon"/>
+ 			</button>
+ 		</div>
+ 		<div :class="$style.middle">
+@@ -46,13 +46,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<MkA v-tooltip.noDelay.right="i18n.ts.settings" :class="$style.item" :activeClass="$style.active" to="/settings">
+ 				<i :class="$style.itemIcon" class="ti ti-settings ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.settings }}</span>
+ 			</MkA>
++			<MkSettingSuggestion :class="$style.info"/>
+ 		</div>
+ 		<div :class="$style.bottom">
+-			<button v-tooltip.noDelay.right="i18n.ts.note" class="_button" :class="[$style.post]" data-cy-open-post-form @click="() => { os.post(); }">
++			<button v-tooltip.noDelay.right="i18n.ts.note" class="_button" :class="[$style.post]" data-cy-open-post-form @click="post">
+ 				<i class="ti ti-pencil ti-fw" :class="$style.postIcon"></i><span :class="$style.postText">{{ i18n.ts.note }}</span>
+ 			</button>
+ 			<button v-if="$i != null" v-tooltip.noDelay.right="`${i18n.ts.account}: @${$i.username}`" class="_button" :class="[$style.account]" @click="openAccountMenu">
+-				<MkAvatar :user="$i" :class="$style.avatar"/><MkAcct class="_nowrap" :class="$style.acct" :user="$i"/>
++				<MkAvatar :user="$i" :class="$style.avatar" small/><MkAcct class="_nowrap" :class="$style.acct" :user="$i"/>
+ 			</button>
+ 		</div>
+ 	</div>
+@@ -80,12 +81,15 @@ import { openInstanceMenu } from './common.js';
+ import * as os from '@/os.js';
+ import { navbarItemDef } from '@/navbar.js';
+ import { $i, openAccountMenu as openAccountMenu_ } from '@/account.js';
++import MkSettingSuggestion from '@/components/MkSettingSuggestion.vue';
+ import { defaultStore } from '@/store.js';
+ import { i18n } from '@/i18n.js';
+ import { instance } from '@/instance.js';
++import { useRouter } from '@/router/supplier.js';
+ import { getHTMLElementOrNull } from '@/scripts/get-dom-node-or-null.js';
+ 
+ const forceIconOnly = ref(window.innerWidth <= 1279);
++const router = useRouter();
+ const iconOnly = computed(() => {
+ 	return forceIconOnly.value || (defaultStore.reactiveState.menuDisplay.value === 'sideIcon');
+ });
+@@ -113,6 +117,10 @@ function toggleIconOnly() {
+ 	defaultStore.set('menuDisplay', iconOnly.value ? 'sideFull' : 'sideIcon');
+ }
+ 
++function post() {
++	os.postButtonTriggered(router.currentRef.value);
++}
++
+ function openAccountMenu(ev: MouseEvent) {
+ 	openAccountMenu_({
+ 		withExtraOperation: true,
+@@ -422,6 +430,10 @@ function more(ev: MouseEvent) {
+ 	.toggleButton {
+ 		left: var(--nav-width);
+ 	}
++
++	.info {
++		margin: 16px 19px 0;
++	}
+ }
+ 
+ .root.iconOnly {
+@@ -626,5 +638,9 @@ function more(ev: MouseEvent) {
+ 	.toggleButton {
+ 		left: var(--nav-icon-only-width);
+ 	}
++
++	.info {
++		display: none;
++	}
+ }
+ </style>
+diff --git a/packages/frontend/src/ui/classic.header.vue b/packages/frontend/src/ui/classic.header.vue
+index f4633314ae..a0f4696053 100644
+--- a/packages/frontend/src/ui/classic.header.vue
++++ b/packages/frontend/src/ui/classic.header.vue
+@@ -8,7 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<div class="body">
+ 		<div class="left">
+ 			<button v-click-anime class="item _button instance" @click="openInstanceMenu">
+-				<img :src="instance.iconUrl ?? instance.faviconUrl ?? '/favicon.ico'" class="_ghost"/>
++				<img :src="instance.iconUrl ?? instance.faviconUrl ?? '/favicon.png'" class="_ghost"/>
+ 			</button>
+ 			<MkA v-click-anime v-tooltip="i18n.ts.timeline" class="item index" activeClass="active" to="/" exact>
+ 				<i class="ti ti-home ti-fw"></i>
+@@ -34,7 +34,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<i class="ti ti-settings ti-fw"></i>
+ 			</MkA>
+ 			<button v-click-anime class="item _button account" @click="openAccountMenu">
+-				<MkAvatar :user="$i" class="avatar"/><MkAcct class="acct" :user="$i"/>
++				<MkAvatar :user="$i" class="avatar" small/><MkAcct class="acct" :user="$i"/>
+ 			</button>
+ 			<div class="post" @click="os.post()">
+ 				<MkButton class="button" gradate full rounded>
+diff --git a/packages/frontend/src/ui/classic.sidebar.vue b/packages/frontend/src/ui/classic.sidebar.vue
+index 5acef0bef8..f53a6e7553 100644
+--- a/packages/frontend/src/ui/classic.sidebar.vue
++++ b/packages/frontend/src/ui/classic.sidebar.vue
+@@ -6,7 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <template>
+ <div class="npcljfve" :class="{ iconOnly }">
+ 	<button v-click-anime class="item _button account" @click="openAccountMenu">
+-		<MkAvatar :user="$i" class="avatar"/><MkAcct class="text" :user="$i"/>
++		<MkAvatar :user="$i" class="avatar" small/><MkAcct class="text" :user="$i"/>
+ 	</button>
+ 	<div class="post" data-cy-open-post-form @click="os.post">
+ 		<MkButton class="button" gradate full rounded>
+@@ -41,7 +41,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<div class="divider"></div>
+ 	<div class="about">
+ 		<button v-click-anime class="item _button" @click="openInstanceMenu">
+-			<img :src="instance.iconUrl ?? instance.faviconUrl ?? '/favicon.ico'" class="_ghost"/>
++			<img :src="instance.iconUrl ?? instance.faviconUrl ?? '/favicon.png'" class="_ghost"/>
+ 		</button>
+ 	</div>
+ 	<!--<MisskeyLogo class="misskey"/>-->
+diff --git a/packages/frontend/src/ui/deck.vue b/packages/frontend/src/ui/deck.vue
+index 8e99c457ad..6011d7bbe5 100644
+--- a/packages/frontend/src/ui/deck.vue
++++ b/packages/frontend/src/ui/deck.vue
+@@ -167,6 +167,7 @@ const menuIndicated = computed(() => {
+ 	for (const def in navbarItemDef) {
+ 		if (navbarItemDef[def].indicated) return true;
+ 	}
++	// if ($i && (!$i.securityKeys && supported() || instance.enableEmail && !$i.emailVerified || !$i.twoFactorEnabled)) return true;
+ 	return false;
+ });
+ 
+diff --git a/packages/frontend/src/ui/universal.vue b/packages/frontend/src/ui/universal.vue
+index 9fff5efe51..32f33ed573 100644
+--- a/packages/frontend/src/ui/universal.vue
++++ b/packages/frontend/src/ui/universal.vue
+@@ -34,7 +34,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			</span>
+ 		</button>
+ 		<button :class="$style.navButton" class="_button" @click="widgetsShowing = true"><i :class="$style.navButtonIcon" class="ti ti-apps"></i></button>
+-		<button :class="$style.postButton" class="_button" @click="os.post()"><i :class="$style.navButtonIcon" class="ti ti-pencil"></i></button>
++		<button :class="$style.postButton" class="_button" @click="post"><i :class="$style.navButtonIcon" class="ti ti-pencil"></i></button>
+ 	</div>
+ 
+ 	<Transition
+@@ -59,7 +59,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		:leaveToClass="defaultStore.state.animation ? $style.transition_menuDrawer_leaveTo : ''"
+ 	>
+ 		<div v-if="drawerMenuShowing" :class="$style.menuDrawer">
+-			<XDrawerMenu/>
++			<XDrawerMenu :class="$style.menuDrawerContent"/>
+ 		</div>
+ 	</Transition>
+ 
+@@ -97,7 +97,9 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { defineAsyncComponent, provide, onMounted, computed, ref, watch, shallowRef } from 'vue';
+ import type { Ref } from 'vue';
++import { supported } from '@github/webauthn-json/browser-ponyfill';
+ import { instanceName } from '@@/js/config.js';
++import { instance } from '@/instance.js';
+ import { CURRENT_STICKY_BOTTOM } from '@@/js/const.js';
+ import { isLink } from '@@/js/is-link.js';
+ import XCommon from './_common_/common.vue';
+@@ -156,6 +158,7 @@ const menuIndicated = computed(() => {
+ 		if (def === 'notifications') continue; // 通知は下にボタンとして表示されてるから
+ 		if (navbarItemDef[def].indicated) return true;
+ 	}
++	// if ($i && (!$i.securityKeys && supported() || instance.enableEmail && !$i.emailVerified || !$i.twoFactorEnabled)) return true;
+ 	return false;
+ });
+ 
+@@ -221,6 +224,10 @@ function top() {
+ 	});
+ }
+ 
++function post() {
++	os.postButtonTriggered(mainRouter.currentRef.value);
++}
++
+ const navFooterHeight = ref(0);
+ provide<Ref<number>>(CURRENT_STICKY_BOTTOM, navFooterHeight);
+ 
+@@ -469,6 +476,8 @@ $widgets-hide-threshold: 1090px;
+ 	top: 0;
+ 	left: 0;
+ 	z-index: 1001;
++	display: flex;
++	flex-flow: column;
+ 	height: 100dvh;
+ 	width: 240px;
+ 	box-sizing: border-box;
+@@ -478,6 +487,10 @@ $widgets-hide-threshold: 1090px;
+ 	background: var(--MI_THEME-navBg);
+ }
+ 
++.menuDrawerContent {
++	flex: 1;
++}
++
+ .statusbars {
+ 	position: sticky;
+ 	top: 0;

@@ -1,0 +1,2584 @@
+diff --git a/packages/backend/src/core/DriveService.ts b/packages/backend/src/core/DriveService.ts
+index 1550fe3d3c..816f83ec93 100644
+--- a/packages/backend/src/core/DriveService.ts
++++ b/packages/backend/src/core/DriveService.ts
+@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
+ import { Inject, Injectable } from '@nestjs/common';
+ import sharp from 'sharp';
+ import { sharpBmp } from '@misskey-dev/sharp-read-bmp';
+-import { IsNull } from 'typeorm';
++import { In, IsNull } from 'typeorm';
+ import { DeleteObjectCommandInput, PutObjectCommandInput, NoSuchKey } from '@aws-sdk/client-s3';
+ import { DI } from '@/di-symbols.js';
+ import type { DriveFilesRepository, UsersRepository, DriveFoldersRepository, UserProfilesRepository, MiMeta } from '@/models/_.js';
+@@ -469,13 +469,14 @@ export class DriveService {
+ 		if (user && this.meta.sensitiveMediaDetection === 'remote' && this.userEntityService.isLocalUser(user)) skipNsfwCheck = true;
+ 
+ 		const info = await this.fileInfoService.getFileInfo(path, {
++			fileName: name,
+ 			skipSensitiveDetection: skipNsfwCheck,
+ 			sensitiveThreshold: // 感度が高いほどしきい値は低くすることになる
+-			this.meta.sensitiveMediaDetectionSensitivity === 'veryHigh' ? 0.1 :
+-			this.meta.sensitiveMediaDetectionSensitivity === 'high' ? 0.3 :
+-			this.meta.sensitiveMediaDetectionSensitivity === 'low' ? 0.7 :
+-			this.meta.sensitiveMediaDetectionSensitivity === 'veryLow' ? 0.9 :
+-			0.5,
++				this.meta.sensitiveMediaDetectionSensitivity === 'veryHigh' ? 0.1 :
++				this.meta.sensitiveMediaDetectionSensitivity === 'high' ? 0.3 :
++				this.meta.sensitiveMediaDetectionSensitivity === 'low' ? 0.7 :
++				this.meta.sensitiveMediaDetectionSensitivity === 'veryLow' ? 0.9 :
++				0.5,
+ 			sensitiveThresholdForPorn: 0.75,
+ 			enableSensitiveMediaDetectionForVideos: this.meta.enableSensitiveMediaDetectionForVideos,
+ 		});
+@@ -515,22 +516,44 @@ export class DriveService {
+ 
+ 		this.registerLogger.debug(`ADD DRIVE FILE: user ${user?.id ?? 'not set'}, name ${detectedName}, tmp ${path}`);
+ 
+-		//#region Check drive usage
+-		if (user && !isLink) {
+-			const usage = await this.driveFileEntityService.calcDriveUsageOf(user);
++		//#region Check drive usage and mime type
++		if (user != null && !isLink) {
+ 			const isLocalUser = this.userEntityService.isLocalUser(user);
++			const isModerator = isLocalUser ? await this.roleService.isModerator(user) : false;
++			if (!isModerator) {
++				const policies = await this.roleService.getUserPolicies(user.id);
++
++				const allowedMimeTypes = policies.uploadableFileTypes;
++				const isAllowed = allowedMimeTypes.some((mimeType) => {
++					if (mimeType === '*' || mimeType === '*/*') return true;
++					if (mimeType.endsWith('/*')) return info.type.mime.startsWith(mimeType.slice(0, -1));
++					return info.type.mime === mimeType;
++				});
++				if (!isAllowed) {
++					throw new IdentifiableError('bd71c601-f9b0-4808-9137-a330647ced9b', `Unallowed file type: ${info.type.mime}`);
++				}
+ 
+-			const policies = await this.roleService.getUserPolicies(user.id);
+-			const driveCapacity = 1024 * 1024 * policies.driveCapacityMb;
+-			this.registerLogger.debug('drive capacity override applied');
+-			this.registerLogger.debug(`overrideCap: ${driveCapacity}bytes, usage: ${usage}bytes, u+s: ${usage + info.size}bytes`);
++				const driveCapacity = 1024 * 1024 * policies.driveCapacityMb;
++				const maxFileSize = 1024 * 1024 * policies.maxFileSizeMb;
+ 
+-			// If usage limit exceeded
+-			if (driveCapacity < usage + info.size) {
+-				if (isLocalUser) {
+-					throw new IdentifiableError('c6244ed2-a39a-4e1c-bf93-f0fbd7764fa6', 'No free space.');
++				if (maxFileSize < info.size) {
++					if (isLocalUser) {
++						throw new IdentifiableError('f9e4e5f3-4df4-40b5-b400-f236945f7073', 'Max file size exceeded.');
++					}
++				}
++
++				const usage = await this.driveFileEntityService.calcDriveUsageOf(user);
++
++				this.registerLogger.debug('drive capacity override applied');
++				this.registerLogger.debug(`overrideCap: ${driveCapacity}bytes, usage: ${usage}bytes, u+s: ${usage + info.size}bytes`);
++
++				// If usage limit exceeded
++				if (driveCapacity < usage + info.size) {
++					if (isLocalUser) {
++						throw new IdentifiableError('c6244ed2-a39a-4e1c-bf93-f0fbd7764fa6', 'No free space.');
++					}
++					await this.expireOldFile(await this.usersRepository.findOneByOrFail({ id: user.id }) as MiRemoteUser, driveCapacity - info.size);
+ 				}
+-				await this.expireOldFile(await this.usersRepository.findOneByOrFail({ id: user.id }) as MiRemoteUser, driveCapacity - info.size);
+ 			}
+ 		}
+ 		//#endregion
+@@ -713,6 +736,21 @@ export class DriveService {
+ 		return fileObj;
+ 	}
+ 
++	@bindThis
++	public async moveFiles(fileIds: MiDriveFile['id'][], folderId: MiDriveFolder['id'] | null, userId: MiUser['id']) {
++		const folder = folderId ? await this.driveFoldersRepository.findOneByOrFail({
++			id: folderId,
++			userId: userId,
++		}) : null;
++
++		await this.driveFilesRepository.update({
++			id: In(fileIds),
++			userId: userId,
++		}, {
++			folderId: folder ? folder.id : null,
++		});
++	}
++
+ 	@bindThis
+ 	public async deleteFile(file: MiDriveFile, isExpired = false, deleter?: MiUser) {
+ 		if (file.storedInternal) {
+@@ -768,14 +806,14 @@ export class DriveService {
+ 			await Promise.all(promises);
+ 		}
+ 
+-		this.deletePostProcess(file, isExpired, deleter);
++		await this.deletePostProcess(file, isExpired, deleter);
+ 	}
+ 
+ 	@bindThis
+ 	private async deletePostProcess(file: MiDriveFile, isExpired = false, deleter?: MiUser) {
+ 		// リモートファイル期限切れ削除後は直リンクにする
+ 		if (isExpired && file.userHost !== null && file.uri != null) {
+-			this.driveFilesRepository.update(file.id, {
++			await this.driveFilesRepository.update(file.id, {
+ 				isLink: true,
+ 				url: file.uri,
+ 				thumbnailUrl: null,
+@@ -787,7 +825,7 @@ export class DriveService {
+ 				webpublicAccessKey: 'webpublic-' + randomUUID(),
+ 			});
+ 		} else {
+-			this.driveFilesRepository.delete(file.id);
++			await this.driveFilesRepository.delete(file.id);
+ 		}
+ 
+ 		this.driveChart.update(file, false);
+diff --git a/packages/backend/src/core/RoleService.ts b/packages/backend/src/core/RoleService.ts
+index 5af6b05942..2ffee69c21 100644
+--- a/packages/backend/src/core/RoleService.ts
++++ b/packages/backend/src/core/RoleService.ts
+@@ -31,6 +31,7 @@ import { FanoutTimelineService } from '@/core/FanoutTimelineService.js';
+ import { NotificationService } from '@/core/NotificationService.js';
+ import type { OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
+ 
++// misskey-js の rolePolicies と同期すべし
+ export type RolePolicies = {
+ 	gtlAvailable: boolean;
+ 	ltlAvailable: boolean;
+@@ -43,9 +44,11 @@ export type RolePolicies = {
+ 	canManageCustomEmojis: boolean;
+ 	canManageAvatarDecorations: boolean;
+ 	canSearchNotes: boolean;
++	canSearchUsers: boolean;
+ 	canUseTranslator: boolean;
+ 	canHideAds: boolean;
+ 	driveCapacityMb: number;
++	maxFileSizeMb: number;
+ 	alwaysMarkNsfw: boolean;
+ 	canUpdateBioMedia: boolean;
+ 	pinLimit: number;
+@@ -63,6 +66,11 @@ export type RolePolicies = {
+ 	canImportFollowing: boolean;
+ 	canImportMuting: boolean;
+ 	canImportUserLists: boolean;
++	chatAvailability: 'available' | 'readonly' | 'unavailable';
++	uploadableFileTypes: string[];
++	noteDraftLimit: number;
++	scheduledNoteLimit: number;
++	watermarkAvailable: boolean;
+ };
+ 
+ export const DEFAULT_POLICIES: RolePolicies = {
+@@ -77,9 +85,11 @@ export const DEFAULT_POLICIES: RolePolicies = {
+ 	canManageCustomEmojis: false,
+ 	canManageAvatarDecorations: false,
+ 	canSearchNotes: false,
++	canSearchUsers: true,
+ 	canUseTranslator: true,
+ 	canHideAds: false,
+ 	driveCapacityMb: 100,
++	maxFileSizeMb: 30,
+ 	alwaysMarkNsfw: false,
+ 	canUpdateBioMedia: true,
+ 	pinLimit: 5,
+@@ -92,16 +102,26 @@ export const DEFAULT_POLICIES: RolePolicies = {
+ 	userEachUserListsLimit: 50,
+ 	rateLimitFactor: 1,
+ 	avatarDecorationLimit: 1,
+-	canImportAntennas: true,
+-	canImportBlocking: true,
+-	canImportFollowing: true,
+-	canImportMuting: true,
+-	canImportUserLists: true,
++	canImportAntennas: false,
++	canImportBlocking: false,
++	canImportFollowing: false,
++	canImportMuting: false,
++	canImportUserLists: false,
++	chatAvailability: 'available',
++	uploadableFileTypes: [
++		'text/*',
++		'application/json',
++		'image/*',
++		'video/*',
++		'audio/*',
++	],
++	noteDraftLimit: 10,
++	scheduledNoteLimit: 1,
++	watermarkAvailable: true,
+ };
+ 
+ @Injectable()
+ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+-	private rootUserIdCache: MemorySingleCache<MiUser['id']>;
+ 	private rolesCache: MemorySingleCache<MiRole[]>;
+ 	private roleAssignmentByUserIdCache: MemoryKVCache<MiRoleAssignment[]>;
+ 	private notificationService: NotificationService;
+@@ -137,7 +157,6 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 		private moderationLogService: ModerationLogService,
+ 		private fanoutTimelineService: FanoutTimelineService,
+ 	) {
+-		this.rootUserIdCache = new MemorySingleCache<MiUser['id']>(1000 * 60 * 60 * 24 * 7); // 1week. rootユーザのIDは不変なので長めに
+ 		this.rolesCache = new MemorySingleCache<MiRole[]>(1000 * 60 * 60); // 1h
+ 		this.roleAssignmentByUserIdCache = new MemoryKVCache<MiRoleAssignment[]>(1000 * 60 * 5); // 5m
+ 
+@@ -295,7 +314,7 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 				default:
+ 					return false;
+ 			}
+-		} catch (err) {
++		} catch (_) {
+ 			// TODO: log error
+ 			return false;
+ 		}
+@@ -370,6 +389,12 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 			return aggregate(policies.map(policy => policy.useDefault ? basePolicies[name] : policy.value));
+ 		}
+ 
++		function aggregateChatAvailability(vs: RolePolicies['chatAvailability'][]) {
++			if (vs.some(v => v === 'available')) return 'available';
++			if (vs.some(v => v === 'readonly')) return 'readonly';
++			return 'unavailable';
++		}
++
+ 		return {
+ 			gtlAvailable: calc('gtlAvailable', vs => vs.some(v => v === true)),
+ 			ltlAvailable: calc('ltlAvailable', vs => vs.some(v => v === true)),
+@@ -382,9 +407,11 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 			canManageCustomEmojis: calc('canManageCustomEmojis', vs => vs.some(v => v === true)),
+ 			canManageAvatarDecorations: calc('canManageAvatarDecorations', vs => vs.some(v => v === true)),
+ 			canSearchNotes: calc('canSearchNotes', vs => vs.some(v => v === true)),
++			canSearchUsers: calc('canSearchUsers', vs => vs.some(v => v === true)),
+ 			canUseTranslator: calc('canUseTranslator', vs => vs.some(v => v === true)),
+ 			canHideAds: calc('canHideAds', vs => vs.some(v => v === true)),
+ 			driveCapacityMb: calc('driveCapacityMb', vs => Math.max(...vs)),
++			maxFileSizeMb: calc('maxFileSizeMb', vs => Math.max(...vs)),
+ 			alwaysMarkNsfw: calc('alwaysMarkNsfw', vs => vs.some(v => v === true)),
+ 			canUpdateBioMedia: calc('canUpdateBioMedia', vs => vs.some(v => v === true)),
+ 			pinLimit: calc('pinLimit', vs => Math.max(...vs)),
+@@ -402,19 +429,33 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 			canImportFollowing: calc('canImportFollowing', vs => vs.some(v => v === true)),
+ 			canImportMuting: calc('canImportMuting', vs => vs.some(v => v === true)),
+ 			canImportUserLists: calc('canImportUserLists', vs => vs.some(v => v === true)),
++			chatAvailability: calc('chatAvailability', aggregateChatAvailability),
++			uploadableFileTypes: calc('uploadableFileTypes', vs => {
++				const set = new Set<string>();
++				for (const v of vs) {
++					for (const type of v) {
++						if (type.trim() === '') continue;
++						set.add(type.trim());
++					}
++				}
++				return [...set];
++			}),
++			noteDraftLimit: calc('noteDraftLimit', vs => Math.max(...vs)),
++			scheduledNoteLimit: calc('scheduledNoteLimit', vs => Math.max(...vs)),
++			watermarkAvailable: calc('watermarkAvailable', vs => vs.some(v => v === true)),
+ 		};
+ 	}
+ 
+ 	@bindThis
+-	public async isModerator(user: { id: MiUser['id']; isRoot: MiUser['isRoot'] } | null): Promise<boolean> {
++	public async isModerator(user: { id: MiUser['id'] } | null): Promise<boolean> {
+ 		if (user == null) return false;
+-		return user.isRoot || (await this.getUserRoles(user.id)).some(r => r.isModerator || r.isAdministrator);
++		return (this.meta.rootUserId === user.id) || (await this.getUserRoles(user.id)).some(r => r.isModerator || r.isAdministrator);
+ 	}
+ 
+ 	@bindThis
+-	public async isAdministrator(user: { id: MiUser['id']; isRoot: MiUser['isRoot'] } | null): Promise<boolean> {
++	public async isAdministrator(user: { id: MiUser['id'] } | null): Promise<boolean> {
+ 		if (user == null) return false;
+-		return user.isRoot || (await this.getUserRoles(user.id)).some(r => r.isAdministrator);
++		return (this.meta.rootUserId === user.id) || (await this.getUserRoles(user.id)).some(r => r.isAdministrator);
+ 	}
+ 
+ 	@bindThis
+@@ -463,16 +504,8 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 				.map(a => a.userId),
+ 		);
+ 
+-		if (includeRoot) {
+-			const rootUserId = await this.rootUserIdCache.fetch(async () => {
+-				const it = await this.usersRepository.createQueryBuilder('users')
+-					.select('id')
+-					.where({ isRoot: true })
+-					.getRawOne<{ id: string }>();
+-				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+-				return it!.id;
+-			});
+-			resultSet.add(rootUserId);
++		if (includeRoot && this.meta.rootUserId) {
++			resultSet.add(this.meta.rootUserId);
+ 		}
+ 
+ 		return [...resultSet].sort((x, y) => x.localeCompare(y));
+@@ -637,6 +670,7 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
+ 			isModerator: values.isModerator,
+ 			isExplorable: values.isExplorable,
+ 			asBadge: values.asBadge,
++			preserveAssignmentOnMoveAccount: values.preserveAssignmentOnMoveAccount,
+ 			canEditMembersByModerator: values.canEditMembersByModerator,
+ 			displayOrder: values.displayOrder,
+ 			policies: values.policies,
+diff --git a/packages/backend/src/core/entities/RoleEntityService.ts b/packages/backend/src/core/entities/RoleEntityService.ts
+index 2a7dc37bce..3fa38c9521 100644
+--- a/packages/backend/src/core/entities/RoleEntityService.ts
++++ b/packages/backend/src/core/entities/RoleEntityService.ts
+@@ -13,6 +13,7 @@ import type { MiRole } from '@/models/Role.js';
+ import { bindThis } from '@/decorators.js';
+ import { DEFAULT_POLICIES } from '@/core/RoleService.js';
+ import { IdService } from '@/core/IdService.js';
++import { Packed } from '@/misc/json-schema.js';
+ 
+ @Injectable()
+ export class RoleEntityService {
+@@ -31,7 +32,7 @@ export class RoleEntityService {
+ 	public async pack(
+ 		src: MiRole['id'] | MiRole,
+ 		me?: { id: MiUser['id'] } | null | undefined,
+-	) {
++	): Promise<Packed<'Role'>> {
+ 		const role = typeof src === 'object' ? src : await this.rolesRepository.findOneByOrFail({ id: src });
+ 
+ 		const assignedCount = await this.roleAssignmentsRepository.createQueryBuilder('assign')
+@@ -67,6 +68,7 @@ export class RoleEntityService {
+ 			isModerator: role.isModerator,
+ 			isExplorable: role.isExplorable,
+ 			asBadge: role.asBadge,
++			preserveAssignmentOnMoveAccount: role.preserveAssignmentOnMoveAccount,
+ 			canEditMembersByModerator: role.canEditMembersByModerator,
+ 			displayOrder: role.displayOrder,
+ 			policies: policies,
+diff --git a/packages/backend/src/models/Role.ts b/packages/backend/src/models/Role.ts
+index a173971b2c..4c7da252bd 100644
+--- a/packages/backend/src/models/Role.ts
++++ b/packages/backend/src/models/Role.ts
+@@ -248,6 +248,11 @@ export class MiRole {
+ 	})
+ 	public isExplorable: boolean;
+ 
++	@Column('boolean', {
++		default: false,
++	})
++	public preserveAssignmentOnMoveAccount: boolean;
++
+ 	@Column('boolean', {
+ 		default: false,
+ 	})
+diff --git a/packages/backend/src/models/json-schema/role.ts b/packages/backend/src/models/json-schema/role.ts
+index 3537de94c8..b9000152d4 100644
+--- a/packages/backend/src/models/json-schema/role.ts
++++ b/packages/backend/src/models/json-schema/role.ts
+@@ -212,6 +212,10 @@ export const packedRolePoliciesSchema = {
+ 			type: 'boolean',
+ 			optional: false, nullable: false,
+ 		},
++		canSearchUsers: {
++			type: 'boolean',
++			optional: false, nullable: false,
++		},
+ 		canUseTranslator: {
+ 			type: 'boolean',
+ 			optional: false, nullable: false,
+@@ -224,6 +228,18 @@ export const packedRolePoliciesSchema = {
+ 			type: 'integer',
+ 			optional: false, nullable: false,
+ 		},
++		maxFileSizeMb: {
++			type: 'integer',
++			optional: false, nullable: false,
++		},
++		uploadableFileTypes: {
++			type: 'array',
++			optional: false, nullable: false,
++			items: {
++				type: 'string',
++				optional: false, nullable: false,
++			},
++		},
+ 		alwaysMarkNsfw: {
+ 			type: 'boolean',
+ 			optional: false, nullable: false,
+@@ -292,6 +308,23 @@ export const packedRolePoliciesSchema = {
+ 			type: 'boolean',
+ 			optional: false, nullable: false,
+ 		},
++		chatAvailability: {
++			type: 'string',
++			optional: false, nullable: false,
++			enum: ['available', 'readonly', 'unavailable'],
++		},
++		noteDraftLimit: {
++			type: 'integer',
++			optional: false, nullable: false,
++		},
++		scheduledNoteLimit: {
++			type: 'integer',
++			optional: false, nullable: false,
++		},
++		watermarkAvailable: {
++			type: 'boolean',
++			optional: false, nullable: false,
++		},
+ 	},
+ } as const;
+ 
+@@ -385,6 +418,11 @@ export const packedRoleSchema = {
+ 					optional: false, nullable: false,
+ 					example: false,
+ 				},
++				preserveAssignmentOnMoveAccount: {
++					type: 'boolean',
++					optional: false, nullable: false,
++					example: false,
++				},
+ 				canEditMembersByModerator: {
+ 					type: 'boolean',
+ 					optional: false, nullable: false,
+diff --git a/packages/backend/src/server/api/endpoints/admin/roles/users.ts b/packages/backend/src/server/api/endpoints/admin/roles/users.ts
+index 198166bec2..63a8d513fd 100644
+--- a/packages/backend/src/server/api/endpoints/admin/roles/users.ts
++++ b/packages/backend/src/server/api/endpoints/admin/roles/users.ts
+@@ -49,6 +49,8 @@ export const paramDef = {
+ 		roleId: { type: 'string', format: 'misskey:id' },
+ 		sinceId: { type: 'string', format: 'misskey:id' },
+ 		untilId: { type: 'string', format: 'misskey:id' },
++		sinceDate: { type: 'integer' },
++		untilDate: { type: 'integer' },
+ 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
+ 	},
+ 	required: ['roleId'],
+@@ -76,7 +78,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				throw new ApiError(meta.errors.noSuchRole);
+ 			}
+ 
+-			const query = this.queryService.makePaginationQuery(this.roleAssignmentsRepository.createQueryBuilder('assign'), ps.sinceId, ps.untilId)
++			const query = this.queryService.makePaginationQuery(this.roleAssignmentsRepository.createQueryBuilder('assign'), ps.sinceId, ps.untilId, ps.sinceDate, ps.untilDate)
+ 				.andWhere('assign.roleId = :roleId', { roleId: role.id })
+ 				.andWhere(new Brackets(qb => {
+ 					qb
+diff --git a/packages/frontend-shared/js/const.ts b/packages/frontend-shared/js/const.ts
+index 9e20479e26..c8c437afe9 100644
+--- a/packages/frontend-shared/js/const.ts
++++ b/packages/frontend-shared/js/const.ts
+@@ -54,71 +54,6 @@ https://github.com/sindresorhus/file-type/blob/main/core.js
+ https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Containers
+ */
+ 
+-export const notificationTypes = [
+-	'note',
+-	'follow',
+-	'mention',
+-	'reply',
+-	'renote',
+-	'quote',
+-	'reaction',
+-	'pollEnded',
+-	'receiveFollowRequest',
+-	'followRequestAccepted',
+-	'roleAssigned',
+-	'achievementEarned',
+-	'exportCompleted',
+-	'login',
+-	'createToken',
+-	'test',
+-	'app',
+-] as const;
+-export const obsoleteNotificationTypes = ['pollVote', 'groupInvited'] as const;
+-
+-export const ROLE_POLICIES = [
+-	'gtlAvailable',
+-	'ltlAvailable',
+-	'canPublicNote',
+-	'mentionLimit',
+-	'canInvite',
+-	'inviteLimit',
+-	'inviteLimitCycle',
+-	'inviteExpirationTime',
+-	'canManageCustomEmojis',
+-	'canManageAvatarDecorations',
+-	'canSearchNotes',
+-	'canUseTranslator',
+-	'canHideAds',
+-	'driveCapacityMb',
+-	'alwaysMarkNsfw',
+-	'canUpdateBioMedia',
+-	'pinLimit',
+-	'antennaLimit',
+-	'wordMuteLimit',
+-	'webhookLimit',
+-	'clipLimit',
+-	'noteEachClipsLimit',
+-	'userListLimit',
+-	'userEachUserListsLimit',
+-	'rateLimitFactor',
+-	'avatarDecorationLimit',
+-	'canImportAntennas',
+-	'canImportBlocking',
+-	'canImportFollowing',
+-	'canImportMuting',
+-	'canImportUserLists',
+-] as const;
+-
+-// なんか動かない
+-//export const CURRENT_STICKY_TOP = Symbol('CURRENT_STICKY_TOP');
+-//export const CURRENT_STICKY_BOTTOM = Symbol('CURRENT_STICKY_BOTTOM');
+-export const CURRENT_STICKY_TOP = 'CURRENT_STICKY_TOP';
+-export const CURRENT_STICKY_BOTTOM = 'CURRENT_STICKY_BOTTOM';
+-
+-export const DEFAULT_SERVER_ERROR_IMAGE_URL = 'https://xn--931a.moe/assets/error.jpg';
+-export const DEFAULT_NOT_FOUND_IMAGE_URL = 'https://xn--931a.moe/assets/not-found.jpg';
+-export const DEFAULT_INFO_IMAGE_URL = 'https://xn--931a.moe/assets/info.jpg';
+-
+ export const MFM_TAGS = ['tada', 'jelly', 'twitch', 'shake', 'spin', 'jump', 'bounce', 'flip', 'x2', 'x3', 'x4', 'scale', 'position', 'fg', 'bg', 'border', 'font', 'blur', 'rainbow', 'sparkle', 'rotate', 'ruby', 'unixtime'];
+ export const MFM_PARAMS: Record<typeof MFM_TAGS[number], string[]> = {
+ 	tada: ['speed=', 'delay='],
+diff --git a/packages/frontend/src/components/MkRolePreview.vue b/packages/frontend/src/components/MkRolePreview.vue
+index 3f14c5b5e0..8e5cbde8c3 100644
+--- a/packages/frontend/src/components/MkRolePreview.vue
++++ b/packages/frontend/src/components/MkRolePreview.vue
+@@ -6,7 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <template>
+ <MkA :to="forModeration ? `/admin/roles/${role.id}` : `/roles/${role.id}`" :class="$style.root" tabindex="-1" :style="{ '--color': role.color }">
+ 	<template v-if="forModeration">
+-		<i v-if="role.isPublic" class="ti ti-world" :class="$style.icon" style="color: var(--MI_THEME-success)"></i>
++		<i v-if="'isPublic' in role && role.isPublic" class="ti ti-world" :class="$style.icon" style="color: var(--MI_THEME-success)"></i>
+ 		<i v-else class="ti ti-lock" :class="$style.icon" style="color: var(--MI_THEME-warn)"></i>
+ 	</template>
+ 
+@@ -23,7 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</template>
+ 			</span>
+ 			<span :class="$style.bodyName">{{ role.name }}</span>
+-			<template v-if="detailed">
++			<template v-if="detailed && 'target' in role && 'usersCount' in role">
+ 				<span v-if="role.target === 'manual'" :class="$style.bodyUsers">{{ role.usersCount }} users</span>
+ 				<span v-else-if="role.target === 'conditional'" :class="$style.bodyUsers">? users</span>
+ 			</template>
+@@ -39,9 +39,9 @@ import * as Misskey from 'misskey-js';
+ import { i18n } from '@/i18n.js';
+ 
+ const props = withDefaults(defineProps<{
+-	role: Misskey.entities.Role;
++	role: Misskey.entities.Role | Misskey.entities.IResponse['roles'][number];
+ 	forModeration: boolean;
+-	detailed: boolean;
++	detailed?: boolean;
+ }>(), {
+ 	detailed: true,
+ });
+diff --git a/packages/frontend/src/pages/admin/RolesEditorFormula.vue b/packages/frontend/src/pages/admin/RolesEditorFormula.vue
+index 4762ef3f97..13f66662d0 100644
+--- a/packages/frontend/src/pages/admin/RolesEditorFormula.vue
++++ b/packages/frontend/src/pages/admin/RolesEditorFormula.vue
+@@ -6,28 +6,9 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <template>
+ <div class="_gaps">
+ 	<div :class="$style.header">
+-		<MkSelect v-model="type" :class="$style.typeSelect">
+-			<option value="isLocal">{{ i18n.ts._role._condition.isLocal }}</option>
+-			<option value="isRemote">{{ i18n.ts._role._condition.isRemote }}</option>
+-			<option value="isSuspended">{{ i18n.ts._role._condition.isSuspended }}</option>
+-			<option value="isLocked">{{ i18n.ts._role._condition.isLocked }}</option>
+-			<option value="isBot">{{ i18n.ts._role._condition.isBot }}</option>
+-			<option value="isCat">{{ i18n.ts._role._condition.isCat }}</option>
+-			<option value="isExplorable">{{ i18n.ts._role._condition.isExplorable }}</option>
+-			<option value="roleAssignedTo">{{ i18n.ts._role._condition.roleAssignedTo }}</option>
+-			<option value="createdLessThan">{{ i18n.ts._role._condition.createdLessThan }}</option>
+-			<option value="createdMoreThan">{{ i18n.ts._role._condition.createdMoreThan }}</option>
+-			<option value="followersLessThanOrEq">{{ i18n.ts._role._condition.followersLessThanOrEq }}</option>
+-			<option value="followersMoreThanOrEq">{{ i18n.ts._role._condition.followersMoreThanOrEq }}</option>
+-			<option value="followingLessThanOrEq">{{ i18n.ts._role._condition.followingLessThanOrEq }}</option>
+-			<option value="followingMoreThanOrEq">{{ i18n.ts._role._condition.followingMoreThanOrEq }}</option>
+-			<option value="notesLessThanOrEq">{{ i18n.ts._role._condition.notesLessThanOrEq }}</option>
+-			<option value="notesMoreThanOrEq">{{ i18n.ts._role._condition.notesMoreThanOrEq }}</option>
+-			<option value="and">{{ i18n.ts._role._condition.and }}</option>
+-			<option value="or">{{ i18n.ts._role._condition.or }}</option>
+-			<option value="not">{{ i18n.ts._role._condition.not }}</option>
++		<MkSelect v-model="typeModelForMkSelect" :items="typeDef" :class="$style.typeSelect">
+ 		</MkSelect>
+-		<button v-if="draggable" class="drag-handle _button" :class="$style.dragHandle">
++		<button v-if="draggable" class="_button" :class="$style.dragHandle" :draggable="true" @dragstart.stop="dragStartCallback">
+ 			<i class="ti ti-menu-2"></i>
+ 		</button>
+ 		<button v-if="draggable" class="_button" :class="$style.remove" @click="removeSelf">
+@@ -35,55 +16,69 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		</button>
+ 	</div>
+ 
+-	<div v-if="type === 'and' || type === 'or'" class="_gaps">
+-		<Sortable v-model="v.values" tag="div" class="_gaps" itemKey="id" handle=".drag-handle" :group="{ name: 'roleFormula' }" :animation="150" :swapThreshold="0.5">
+-			<template #item="{element}">
++	<div v-if="v.type === 'and' || v.type === 'or'" class="_gaps">
++		<MkDraggable
++			v-model="v.values"
++			direction="vertical"
++			withGaps
++			canNest
++			manualDragStart
++			group="roleFormula"
++		>
++			<template #default="{ item, dragStart }">
+ 				<div :class="$style.item">
+ 					<!-- divが無いとエラーになる https://github.com/SortableJS/vue.draggable.next/issues/189 -->
+-					<RolesEditorFormula :modelValue="element" draggable @update:modelValue="updated => valuesItemUpdated(updated)" @remove="removeItem(element)"/>
++					<RolesEditorFormula
++						:modelValue="item"
++						:dragStartCallback="dragStart"
++						draggable
++						@update:modelValue="updated => childValuesItemUpdated(updated)"
++						@remove="removeChildItem(item.id)"
++					/>
+ 				</div>
+ 			</template>
+-		</Sortable>
+-		<MkButton rounded style="margin: 0 auto;" @click="addValue"><i class="ti ti-plus"></i> {{ i18n.ts.add }}</MkButton>
++		</MkDraggable>
++		<MkButton rounded style="margin: 0 auto;" @click="addChildValue"><i class="ti ti-plus"></i> {{ i18n.ts.add }}</MkButton>
+ 	</div>
+ 
+-	<div v-else-if="type === 'not'" :class="$style.item">
++	<div v-else-if="v.type === 'not'" :class="$style.item">
+ 		<RolesEditorFormula v-model="v.value"/>
+ 	</div>
+ 
+-	<MkInput v-else-if="type === 'createdLessThan' || type === 'createdMoreThan'" v-model="v.sec" type="number">
++	<MkInput v-else-if="v.type === 'createdLessThan' || v.type === 'createdMoreThan'" v-model="v.sec" type="number">
+ 		<template #suffix>sec</template>
+ 	</MkInput>
+ 
+-	<MkInput v-else-if="['followersLessThanOrEq', 'followersMoreThanOrEq', 'followingLessThanOrEq', 'followingMoreThanOrEq', 'notesLessThanOrEq', 'notesMoreThanOrEq'].includes(type)" v-model="v.value" type="number">
++	<MkInput v-else-if="v.type === 'followersLessThanOrEq' || v.type === 'followersMoreThanOrEq' || v.type === 'followingLessThanOrEq' || v.type === 'followingMoreThanOrEq' || v.type === 'notesLessThanOrEq' || v.type === 'notesMoreThanOrEq'" v-model="v.value" type="number">
+ 	</MkInput>
+ 
+-	<MkSelect v-else-if="type === 'roleAssignedTo'" v-model="v.roleId">
+-		<option v-for="role in roles.filter(r => r.target === 'manual')" :key="role.id" :value="role.id">{{ role.name }}</option>
++	<MkSelect v-else-if="v.type === 'roleAssignedTo'" v-model="v.roleId" :items="assignedToDef">
+ 	</MkSelect>
+ </div>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, defineAsyncComponent, ref, watch } from 'vue';
+-import { v4 as uuid } from 'uuid';
++import { computed, ref, watch } from 'vue';
++import * as Misskey from 'misskey-js';
++import type { GetMkSelectValueTypesFromDef, MkSelectItem } from '@/components/MkSelect.vue';
++import { genId } from '@/utility/id.js';
+ import MkInput from '@/components/MkInput.vue';
+ import MkSelect from '@/components/MkSelect.vue';
+ import MkButton from '@/components/MkButton.vue';
++import MkDraggable from '@/components/MkDraggable.vue';
+ import { i18n } from '@/i18n.js';
+-import { deepClone } from '@/scripts/clone.js';
++import { deepClone } from '@/utility/clone.js';
+ import { rolesCache } from '@/cache.js';
+ 
+-const Sortable = defineAsyncComponent(() => import('vuedraggable').then(x => x.default));
+-
+ const emit = defineEmits<{
+-	(ev: 'update:modelValue', value: any): void;
++	(ev: 'update:modelValue', value: Misskey.entities.Role['condFormula']): void;
+ 	(ev: 'remove'): void;
+ }>();
+ 
+ const props = defineProps<{
+-	modelValue: any;
++	modelValue: Misskey.entities.Role['condFormula'];
+ 	draggable?: boolean;
++	dragStartCallback?: (ev: DragEvent) => void;
+ }>();
+ 
+ const v = ref(deepClone(props.modelValue));
+@@ -99,36 +94,73 @@ watch(v, () => {
+ 	emit('update:modelValue', v.value);
+ }, { deep: true });
+ 
+-const type = computed({
++const typeDef = [
++	{ label: i18n.ts._role._condition.isLocal, value: 'isLocal' },
++	{ label: i18n.ts._role._condition.isRemote, value: 'isRemote' },
++	{ label: i18n.ts._role._condition.isSuspended, value: 'isSuspended' },
++	{ label: i18n.ts._role._condition.isLocked, value: 'isLocked' },
++	{ label: i18n.ts._role._condition.isBot, value: 'isBot' },
++	{ label: i18n.ts._role._condition.isCat, value: 'isCat' },
++	{ label: i18n.ts._role._condition.isExplorable, value: 'isExplorable' },
++	{ label: i18n.ts._role._condition.roleAssignedTo, value: 'roleAssignedTo' },
++	{ label: i18n.ts._role._condition.createdLessThan, value: 'createdLessThan' },
++	{ label: i18n.ts._role._condition.createdMoreThan, value: 'createdMoreThan' },
++	{ label: i18n.ts._role._condition.followersLessThanOrEq, value: 'followersLessThanOrEq' },
++	{ label: i18n.ts._role._condition.followersMoreThanOrEq, value: 'followersMoreThanOrEq' },
++	{ label: i18n.ts._role._condition.followingLessThanOrEq, value: 'followingLessThanOrEq' },
++	{ label: i18n.ts._role._condition.followingMoreThanOrEq, value: 'followingMoreThanOrEq' },
++	{ label: i18n.ts._role._condition.notesLessThanOrEq, value: 'notesLessThanOrEq' },
++	{ label: i18n.ts._role._condition.notesMoreThanOrEq, value: 'notesMoreThanOrEq' },
++	{ label: i18n.ts._role._condition.and, value: 'and' },
++	{ label: i18n.ts._role._condition.or, value: 'or' },
++	{ label: i18n.ts._role._condition.not, value: 'not' },
++] as const satisfies MkSelectItem[];
++
++type KeyOfUnion<T> = T extends T ? keyof T : never;
++
++type DistributiveOmit<T, K extends KeyOfUnion<T>> = T extends T
++	? Omit<T, K>
++	: never;
++
++const typeModelForMkSelect = computed<GetMkSelectValueTypesFromDef<typeof typeDef>>({
+ 	get: () => v.value.type,
+ 	set: (t) => {
+-		if (t === 'and') v.value.values = [];
+-		if (t === 'or') v.value.values = [];
+-		if (t === 'not') v.value.value = { id: uuid(), type: 'isRemote' };
+-		if (t === 'roleAssignedTo') v.value.roleId = '';
+-		if (t === 'createdLessThan') v.value.sec = 86400;
+-		if (t === 'createdMoreThan') v.value.sec = 86400;
+-		if (t === 'followersLessThanOrEq') v.value.value = 10;
+-		if (t === 'followersMoreThanOrEq') v.value.value = 10;
+-		if (t === 'followingLessThanOrEq') v.value.value = 10;
+-		if (t === 'followingMoreThanOrEq') v.value.value = 10;
+-		if (t === 'notesLessThanOrEq') v.value.value = 10;
+-		if (t === 'notesMoreThanOrEq') v.value.value = 10;
+-		v.value.type = t;
++		let newValue: DistributiveOmit<Misskey.entities.Role['condFormula'], 'id'>;
++		switch (t) {
++			case 'and': newValue = { type: 'and', values: [] }; break;
++			case 'or': newValue = { type: 'or', values: [] }; break;
++			case 'not': newValue = { type: 'not', value: { id: genId(), type: 'isRemote' } }; break;
++			case 'roleAssignedTo': newValue = { type: 'roleAssignedTo', roleId: '' }; break;
++			case 'createdLessThan': newValue = { type: 'createdLessThan', sec: 86400 }; break;
++			case 'createdMoreThan': newValue = { type: 'createdMoreThan', sec: 86400 }; break;
++			case 'followersLessThanOrEq': newValue = { type: 'followersLessThanOrEq', value: 10 }; break;
++			case 'followersMoreThanOrEq': newValue = { type: 'followersMoreThanOrEq', value: 10 }; break;
++			case 'followingLessThanOrEq': newValue = { type: 'followingLessThanOrEq', value: 10 }; break;
++			case 'followingMoreThanOrEq': newValue = { type: 'followingMoreThanOrEq', value: 10 }; break;
++			case 'notesLessThanOrEq': newValue = { type: 'notesLessThanOrEq', value: 10 }; break;
++			case 'notesMoreThanOrEq': newValue = { type: 'notesMoreThanOrEq', value: 10 }; break;
++			default: newValue = { type: t }; break;
++		}
++		v.value = { id: v.value.id, ...newValue };
+ 	},
+ });
+ 
+-function addValue() {
+-	v.value.values.push({ id: uuid(), type: 'isRemote' });
++const assignedToDef = computed(() => roles.filter(r => r.target === 'manual').map(r => ({ label: r.name, value: r.id })) satisfies MkSelectItem[]);
++
++function addChildValue() {
++	if (v.value.type !== 'and' && v.value.type !== 'or') return;
++	v.value.values.push({ id: genId(), type: 'isRemote' });
+ }
+ 
+-function valuesItemUpdated(item) {
++function childValuesItemUpdated(item: Misskey.entities.Role['condFormula']) {
++	if (v.value.type !== 'and' && v.value.type !== 'or') return;
+ 	const i = v.value.values.findIndex(_item => _item.id === item.id);
+ 	v.value.values[i] = item;
+ }
+ 
+-function removeItem(item) {
+-	v.value.values = v.value.values.filter(_item => _item.id !== item.id);
++function removeChildItem(itemId: string) {
++	if (v.value.type !== 'and' && v.value.type !== 'or') return;
++	v.value.values = v.value.values.filter(_item => _item.id !== itemId);
+ }
+ 
+ function removeSelf() {
+diff --git a/packages/frontend/src/pages/admin/roles.editor.vue b/packages/frontend/src/pages/admin/roles.editor.vue
+index d05f52334e..7de973a394 100644
+--- a/packages/frontend/src/pages/admin/roles.editor.vue
++++ b/packages/frontend/src/pages/admin/roles.editor.vue
+@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ <template>
+ <div class="_gaps">
+-	<MkInput v-if="readonly" :modelValue="role.id" :readonly="true">
++	<MkInput v-if="readonly && role.id != null" :modelValue="role.id" :readonly="true">
+ 		<template #label>ID</template>
+ 	</MkInput>
+ 
+@@ -30,19 +30,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		<template #caption>{{ i18n.ts._role.descriptionOfDisplayOrder }}</template>
+ 	</MkInput>
+ 
+-	<MkSelect v-model="rolePermission" :readonly="readonly">
++	<MkSelect v-model="rolePermission" :items="rolePermissionDef" :readonly="readonly">
+ 		<template #label><i class="ti ti-shield-lock"></i> {{ i18n.ts._role.permission }}</template>
+ 		<template #caption><div v-html="i18n.ts._role.descriptionOfPermission.replaceAll('\n', '<br>')"></div></template>
+-		<option value="normal">{{ i18n.ts.normalUser }}</option>
+-		<option value="moderator">{{ i18n.ts.moderator }}</option>
+-		<option value="administrator">{{ i18n.ts.administrator }}</option>
+ 	</MkSelect>
+ 
+-	<MkSelect v-model="role.target" :readonly="readonly">
++	<MkSelect v-model="role.target" :items="[{ label: i18n.ts._role.manual, value: 'manual' }, { label: i18n.ts._role.conditional, value: 'conditional' }]" :readonly="readonly">
+ 		<template #label><i class="ti ti-users"></i> {{ i18n.ts._role.assignTarget }}</template>
+ 		<template #caption><div v-html="i18n.ts._role.descriptionOfAssignTarget.replaceAll('\n', '<br>')"></div></template>
+-		<option value="manual">{{ i18n.ts._role.manual }}</option>
+-		<option value="conditional">{{ i18n.ts._role.conditional }}</option>
+ 	</MkSelect>
+ 
+ 	<MkFolder v-if="role.target === 'conditional'" defaultOpen>
+@@ -52,6 +47,11 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		</div>
+ 	</MkFolder>
+ 
++	<MkSwitch v-model="role.preserveAssignmentOnMoveAccount" :readonly="readonly">
++		<template #label>{{ i18n.ts._role.preserveAssignmentOnMoveAccount }}</template>
++		<template #caption>{{ i18n.ts._role.preserveAssignmentOnMoveAccount_description }}</template>
++	</MkSwitch>
++
+ 	<MkSwitch v-model="role.canEditMembersByModerator" :readonly="readonly">
+ 		<template #label>{{ i18n.ts._role.canEditMembersByModerator }}</template>
+ 		<template #caption>{{ i18n.ts._role.descriptionOfCanEditMembersByModerator }}</template>
+@@ -160,6 +160,35 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</div>
+ 			</MkFolder>
+ 
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.chatAvailability, 'chatAvailability'])">
++				<template #label>{{ i18n.ts._role._options.chatAvailability }}</template>
++				<template #suffix>
++					<span v-if="role.policies.chatAvailability.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ role.policies.chatAvailability.value === 'available' ? i18n.ts.yes : role.policies.chatAvailability.value === 'readonly' ? i18n.ts.readonly : i18n.ts.no }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.chatAvailability)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.chatAvailability.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkSelect
++						v-model="role.policies.chatAvailability.value"
++						:items="[
++							{ label: i18n.ts.enabled, value: 'available' },
++							{ label: i18n.ts.readonly, value: 'readonly' },
++							{ label: i18n.ts.disabled, value: 'unavailable' },
++						]"
++						:disabled="role.policies.chatAvailability.useDefault"
++						:readonly="readonly"
++					>
++						<template #label>{{ i18n.ts.enable }}</template>
++					</MkSelect>
++					<MkRange v-model="role.policies.chatAvailability.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
+ 			<MkFolder v-if="matchQuery([i18n.ts._role._options.mentionMax, 'mentionLimit'])">
+ 				<template #label>{{ i18n.ts._role._options.mentionMax }}</template>
+ 				<template #suffix>
+@@ -318,6 +347,26 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</div>
+ 			</MkFolder>
+ 
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.canSearchUsers, 'canSearchUsers'])">
++				<template #label>{{ i18n.ts._role._options.canSearchUsers }}</template>
++				<template #suffix>
++					<span v-if="role.policies.canSearchUsers.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ role.policies.canSearchUsers.value ? i18n.ts.yes : i18n.ts.no }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.canSearchUsers)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.canSearchUsers.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkSwitch v-model="role.policies.canSearchUsers.value" :disabled="role.policies.canSearchUsers.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts.enable }}</template>
++					</MkSwitch>
++					<MkRange v-model="role.policies.canSearchUsers.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
+ 			<MkFolder v-if="matchQuery([i18n.ts._role._options.canUseTranslator, 'canUseTranslator'])">
+ 				<template #label>{{ i18n.ts._role._options.canUseTranslator }}</template>
+ 				<template #suffix>
+@@ -358,6 +407,52 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</div>
+ 			</MkFolder>
+ 
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.maxFileSize, 'maxFileSizeMb'])">
++				<template #label>{{ i18n.ts._role._options.maxFileSize }}</template>
++				<template #suffix>
++					<span v-if="role.policies.maxFileSizeMb.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ role.policies.maxFileSizeMb.value + 'MB' }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.maxFileSizeMb)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.maxFileSizeMb.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkInput v-model="role.policies.maxFileSizeMb.value" :disabled="role.policies.maxFileSizeMb.useDefault" type="number" :readonly="readonly">
++						<template #suffix>MB</template>
++						<template #caption>
++							<div><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.ts._role._options.maxFileSize_caption }}</div>
++						</template>
++					</MkInput>
++					<MkRange v-model="role.policies.maxFileSizeMb.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.uploadableFileTypes, 'uploadableFileTypes'])">
++				<template #label>{{ i18n.ts._role._options.uploadableFileTypes }}</template>
++				<template #suffix>
++					<span v-if="role.policies.uploadableFileTypes.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>...</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.uploadableFileTypes)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.uploadableFileTypes.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkTextarea :modelValue="role.policies.uploadableFileTypes.value.join('\n')" :disabled="role.policies.uploadableFileTypes.useDefault" :readonly="readonly" @update:modelValue="role.policies.uploadableFileTypes.value = $event.split('\n')">
++						<template #caption>
++							<div>{{ i18n.ts._role._options.uploadableFileTypes_caption }}</div>
++							<div><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.tsx._role._options.uploadableFileTypes_caption2({ x: 'application/octet-stream' }) }}</div>
++						</template>
++					</MkTextarea>
++					<MkRange v-model="role.policies.uploadableFileTypes.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
+ 			<MkFolder v-if="matchQuery([i18n.ts._role._options.alwaysMarkNsfw, 'alwaysMarkNsfw'])">
+ 				<template #label>{{ i18n.ts._role._options.alwaysMarkNsfw }}</template>
+ 				<template #suffix>
+@@ -690,6 +785,64 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					</MkRange>
+ 				</div>
+ 			</MkFolder>
++
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.noteDraftLimit, 'noteDraftLimit'])">
++				<template #label>{{ i18n.ts._role._options.noteDraftLimit }}</template>
++				<template #suffix>
++					<span v-if="role.policies.noteDraftLimit.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ role.policies.noteDraftLimit.value }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.noteDraftLimit)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.noteDraftLimit.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkInput v-model="role.policies.noteDraftLimit.value" :disabled="role.policies.noteDraftLimit.useDefault" type="number" :readonly="readonly">
++					</MkInput>
++					<MkRange v-model="role.policies.noteDraftLimit.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.scheduledNoteLimit, 'scheduledNoteLimit'])">
++				<template #label>{{ i18n.ts._role._options.scheduledNoteLimit }}</template>
++				<template #suffix>
++					<span v-if="role.policies.scheduledNoteLimit.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ role.policies.scheduledNoteLimit.value }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.scheduledNoteLimit)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.scheduledNoteLimit.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkInput v-model="role.policies.scheduledNoteLimit.value" :disabled="role.policies.scheduledNoteLimit.useDefault" type="number" :readonly="readonly">
++					</MkInput>
++					<MkRange v-model="role.policies.scheduledNoteLimit.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
++
++			<MkFolder v-if="matchQuery([i18n.ts._role._options.watermarkAvailable, 'watermarkAvailable'])">
++				<template #label>{{ i18n.ts._role._options.watermarkAvailable }}</template>
++				<template #suffix>
++					<span v-if="role.policies.watermarkAvailable.useDefault" :class="$style.useDefaultLabel">{{ i18n.ts._role.useBaseValue }}</span>
++					<span v-else>{{ role.policies.watermarkAvailable.value ? i18n.ts.yes : i18n.ts.no }}</span>
++					<span :class="$style.priorityIndicator"><i :class="getPriorityIcon(role.policies.watermarkAvailable)"></i></span>
++				</template>
++				<div class="_gaps">
++					<MkSwitch v-model="role.policies.watermarkAvailable.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts._role.useBaseValue }}</template>
++					</MkSwitch>
++					<MkSwitch v-model="role.policies.watermarkAvailable.value" :disabled="role.policies.watermarkAvailable.useDefault" :readonly="readonly">
++						<template #label>{{ i18n.ts.enable }}</template>
++					</MkSwitch>
++					<MkRange v-model="role.policies.watermarkAvailable.priority" :min="0" :max="2" :step="1" easing :textConverter="(v) => v === 0 ? i18n.ts._role._priority.low : v === 1 ? i18n.ts._role._priority.middle : v === 2 ? i18n.ts._role._priority.high : ''">
++						<template #label>{{ i18n.ts._role.priority }}</template>
++					</MkRange>
++				</div>
++			</MkFolder>
+ 		</div>
+ 	</FormSlot>
+ </div>
+@@ -698,8 +851,9 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { watch, ref, computed } from 'vue';
+ import { throttle } from 'throttle-debounce';
+-import { ROLE_POLICIES } from '@@/js/const.js';
++import * as Misskey from 'misskey-js';
+ import RolesEditorFormula from './RolesEditorFormula.vue';
++import type { MkSelectItem, GetMkSelectValueTypesFromDef } from '@/components/MkSelect.vue';
+ import MkInput from '@/components/MkInput.vue';
+ import MkColorInput from '@/components/MkColorInput.vue';
+ import MkSelect from '@/components/MkSelect.vue';
+@@ -710,21 +864,27 @@ import MkRange from '@/components/MkRange.vue';
+ import FormSlot from '@/components/form/slot.vue';
+ import { i18n } from '@/i18n.js';
+ import { instance } from '@/instance.js';
+-import { deepClone } from '@/scripts/clone.js';
++import { deepClone } from '@/utility/clone.js';
++
++type RoleLike = Pick<Misskey.entities.Role, 'name' | 'description' | 'isAdministrator' | 'isModerator' | 'color' | 'iconUrl' | 'target' | 'isPublic' | 'isExplorable' | 'asBadge' | 'canEditMembersByModerator' | 'displayOrder' | 'preserveAssignmentOnMoveAccount'> & {
++	id?: Misskey.entities.Role['id'] | null;
++	condFormula: any;
++	policies: any;
++};
+ 
+ const emit = defineEmits<{
+-	(ev: 'update:modelValue', v: any): void;
++	(ev: 'update:modelValue', v: RoleLike): void;
+ }>();
+ 
+ const props = defineProps<{
+-	modelValue: any;
++	modelValue: RoleLike;
+ 	readonly?: boolean;
+ }>();
+ 
+ const role = ref(deepClone(props.modelValue));
+ 
+ // fill missing policy
+-for (const ROLE_POLICY of ROLE_POLICIES) {
++for (const ROLE_POLICY of Misskey.rolePolicies) {
+ 	if (role.value.policies[ROLE_POLICY] == null) {
+ 		role.value.policies[ROLE_POLICY] = {
+ 			useDefault: true,
+@@ -740,17 +900,23 @@ function updateAvatarDecorationLimit(value: string | number) {
+ 	role.value.policies.avatarDecorationLimit.value = limited;
+ }
+ 
+-const rolePermission = computed({
++const rolePermissionDef = [
++	{ label: i18n.ts.normalUser, value: 'normal' },
++	{ label: i18n.ts.moderator, value: 'moderator' },
++	{ label: i18n.ts.administrator, value: 'administrator' },
++] as const satisfies MkSelectItem[];
++
++const rolePermission = computed<GetMkSelectValueTypesFromDef<typeof rolePermissionDef>>({
+ 	get: () => role.value.isAdministrator ? 'administrator' : role.value.isModerator ? 'moderator' : 'normal',
+ 	set: (val) => {
+-		role.value.isAdministrator = val === 'administrator';
+-		role.value.isModerator = val === 'moderator';
++		role.value.isAdministrator = (val === 'administrator');
++		role.value.isModerator = (val === 'moderator');
+ 	},
+ });
+ 
+ const q = ref('');
+ 
+-function getPriorityIcon(option) {
++function getPriorityIcon(option: { priority: number }): string {
+ 	if (option.priority === 2) return 'ti ti-arrows-up';
+ 	if (option.priority === 1) return 'ti ti-arrow-narrow-up';
+ 	return 'ti ti-point';
+@@ -776,6 +942,7 @@ const save = throttle(100, () => {
+ 		isExplorable: role.value.isExplorable,
+ 		asBadge: role.value.asBadge,
+ 		canEditMembersByModerator: role.value.canEditMembersByModerator,
++		preserveAssignmentOnMoveAccount: role.value.preserveAssignmentOnMoveAccount,
+ 		policies: role.value.policies,
+ 	};
+ 
+diff --git a/packages/frontend/src/pages/admin/roles.role.vue b/packages/frontend/src/pages/admin/roles.role.vue
+index 1c237a69b4..7fc51979af 100644
+--- a/packages/frontend/src/pages/admin/roles.role.vue
++++ b/packages/frontend/src/pages/admin/roles.role.vue
+@@ -4,101 +4,96 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<div>
+-	<MkStickyContainer>
+-		<template #header><XHeader :actions="headerActions" :tabs="headerTabs"/></template>
+-		<MkSpacer :contentMax="700">
+-			<div class="_gaps">
+-				<div class="_buttons">
+-					<MkButton primary rounded @click="edit"><i class="ti ti-pencil"></i> {{ i18n.ts.edit }}</MkButton>
+-					<MkButton danger rounded @click="del"><i class="ti ti-trash"></i> {{ i18n.ts.delete }}</MkButton>
+-				</div>
+-				<MkFolder>
+-					<template #icon><i class="ti ti-info-circle"></i></template>
+-					<template #label>{{ i18n.ts.info }}</template>
+-					<XEditor :modelValue="role" readonly/>
+-				</MkFolder>
+-				<MkFolder v-if="role.target === 'manual'" defaultOpen>
+-					<template #icon><i class="ti ti-users"></i></template>
+-					<template #label>{{ i18n.ts.users }}</template>
+-					<template #suffix>{{ role.usersCount }}</template>
+-					<div class="_gaps">
+-						<MkButton primary rounded @click="assign"><i class="ti ti-plus"></i> {{ i18n.ts.assign }}</MkButton>
+-
+-						<MkPagination :pagination="usersPagination">
+-							<template #empty>
+-								<div class="_fullinfo">
+-									<img :src="infoImageUrl" class="_ghost"/>
+-									<div>{{ i18n.ts.noUsers }}</div>
+-								</div>
+-							</template>
+-
+-							<template #default="{ items }">
+-								<div class="_gaps_s">
+-									<div v-for="item in items" :key="item.user.id" :class="[$style.userItem, { [$style.userItemOpend]: expandedItems.includes(item.id) }]">
+-										<div :class="$style.userItemMain">
+-											<MkA :class="$style.userItemMainBody" :to="`/admin/user/${item.user.id}`">
+-												<MkUserCardMini :user="item.user"/>
+-											</MkA>
+-											<button class="_button" :class="$style.userToggle" @click="toggleItem(item)"><i :class="$style.chevron" class="ti ti-chevron-down"></i></button>
+-											<button class="_button" :class="$style.unassign" @click="unassign(item.user, $event)"><i class="ti ti-x"></i></button>
+-										</div>
+-										<div v-if="expandedItems.includes(item.id)" :class="$style.userItemSub">
+-											<div>Assigned: <MkTime :time="item.createdAt" mode="detail"/></div>
+-											<div v-if="item.expiresAt">Period: {{ new Date(item.expiresAt).toLocaleString() }}</div>
+-											<div v-else>Period: {{ i18n.ts.indefinitely }}</div>
+-										</div>
++<PageWithHeader :actions="headerActions" :tabs="headerTabs">
++	<div class="_spacer" style="--MI_SPACER-w: 700px;">
++		<div class="_gaps">
++			<div class="_buttons">
++				<MkButton primary rounded @click="edit"><i class="ti ti-pencil"></i> {{ i18n.ts.edit }}</MkButton>
++				<MkButton danger rounded @click="del"><i class="ti ti-trash"></i> {{ i18n.ts.delete }}</MkButton>
++			</div>
++			<MkFolder>
++				<template #icon><i class="ti ti-info-circle"></i></template>
++				<template #label>{{ i18n.ts.info }}</template>
++				<XEditor :modelValue="role" readonly/>
++			</MkFolder>
++			<MkFolder v-if="role.target === 'manual'" defaultOpen>
++				<template #icon><i class="ti ti-users"></i></template>
++				<template #label>{{ i18n.ts.users }}</template>
++				<template #suffix>{{ role.usersCount }}</template>
++				<div class="_gaps">
++					<MkButton primary rounded @click="assign"><i class="ti ti-plus"></i> {{ i18n.ts.assign }}</MkButton>
++
++					<MkPagination :paginator="usersPaginator">
++						<template #empty><MkResult type="empty" :text="i18n.ts.noUsers"/></template>
++
++						<template #default="{ items }">
++							<div class="_gaps_s">
++								<div v-for="item in items" :key="item.user.id" :class="[$style.userItem, { [$style.userItemOpened]: expandedItemIds.includes(item.id) }]">
++									<div :class="$style.userItemMain">
++										<MkA :class="$style.userItemMainBody" :to="`/admin/user/${item.user.id}`">
++											<MkUserCardMini :user="item.user"/>
++										</MkA>
++										<button class="_button" :class="$style.userToggle" @click="toggleItem(item.id)"><i :class="$style.chevron" class="ti ti-chevron-down"></i></button>
++										<button class="_button" :class="$style.unassign" @click="unassign(item.user.id, $event)"><i class="ti ti-x"></i></button>
++									</div>
++									<div v-if="expandedItemIds.includes(item.id)" :class="$style.userItemSub">
++										<div>Assigned: <MkTime :time="item.createdAt" mode="detail"/></div>
++										<div v-if="item.expiresAt">Period: {{ new Date(item.expiresAt).toLocaleString() }}</div>
++										<div v-else>Period: {{ i18n.ts.indefinitely }}</div>
+ 									</div>
+ 								</div>
+-							</template>
+-						</MkPagination>
+-					</div>
+-				</MkFolder>
+-				<MkInfo v-else>{{ i18n.ts._role.isConditionalRole }}</MkInfo>
+-			</div>
+-		</MkSpacer>
+-	</MkStickyContainer>
+-</div>
++							</div>
++						</template>
++					</MkPagination>
++				</div>
++			</MkFolder>
++			<MkInfo v-else>{{ i18n.ts._role.isConditionalRole }}</MkInfo>
++		</div>
++	</div>
++</PageWithHeader>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, reactive, ref } from 'vue';
+-import XHeader from './_header_.vue';
++import { computed, markRaw, reactive, ref } from 'vue';
++import * as Misskey from 'misskey-js';
+ import XEditor from './roles.editor.vue';
+ import MkFolder from '@/components/MkFolder.vue';
+ import * as os from '@/os.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ import { i18n } from '@/i18n.js';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
++import { definePage } from '@/page.js';
+ import MkButton from '@/components/MkButton.vue';
+ import MkUserCardMini from '@/components/MkUserCardMini.vue';
+ import MkInfo from '@/components/MkInfo.vue';
+ import MkPagination from '@/components/MkPagination.vue';
+-import { infoImageUrl } from '@/instance.js';
+-import { useRouter } from '@/router/supplier.js';
++import { useRouter } from '@/router.js';
++import { Paginator } from '@/utility/paginator.js';
+ 
+ const router = useRouter();
+ 
+ const props = defineProps<{
+-	id?: string;
++	id: string;
+ }>();
+ 
+-const usersPagination = {
+-	endpoint: 'admin/roles/users' as const,
++const usersPaginator = markRaw(new Paginator('admin/roles/users', {
+ 	limit: 20,
+-	params: computed(() => ({
++	computedParams: computed(() => props.id ? ({
+ 		roleId: props.id,
+-	})),
+-};
++	}) : undefined),
++}));
+ 
+-const expandedItems = ref([]);
++const expandedItemIds = ref<Misskey.entities.AdminRolesUsersResponse[number]['id'][]>([]);
+ 
+ const role = reactive(await misskeyApi('admin/roles/show', {
+ 	roleId: props.id,
+ }));
+ 
+ function edit() {
+-	router.push('/admin/roles/' + role.id + '/edit');
++	router.push('/admin/roles/:id/edit', {
++		params: {
++			id: role.id,
++		},
++	});
+ }
+ 
+ async function del() {
+@@ -121,15 +116,15 @@ async function assign() {
+ 	const { canceled: canceled2, result: period } = await os.select({
+ 		title: i18n.ts.period + ': ' + role.name,
+ 		items: [{
+-			value: 'indefinitely', text: i18n.ts.indefinitely,
++			value: 'indefinitely', label: i18n.ts.indefinitely,
+ 		}, {
+-			value: 'oneHour', text: i18n.ts.oneHour,
++			value: 'oneHour', label: i18n.ts.oneHour,
+ 		}, {
+-			value: 'oneDay', text: i18n.ts.oneDay,
++			value: 'oneDay', label: i18n.ts.oneDay,
+ 		}, {
+-			value: 'oneWeek', text: i18n.ts.oneWeek,
++			value: 'oneWeek', label: i18n.ts.oneWeek,
+ 		}, {
+-			value: 'oneMonth', text: i18n.ts.oneMonth,
++			value: 'oneMonth', label: i18n.ts.oneMonth,
+ 		}],
+ 		default: 'indefinitely',
+ 	});
+@@ -146,23 +141,23 @@ async function assign() {
+ 	//role.users.push(user);
+ }
+ 
+-async function unassign(user, ev) {
++async function unassign(userId: Misskey.entities.User['id'], ev: PointerEvent) {
+ 	os.popupMenu([{
+ 		text: i18n.ts.unassign,
+ 		icon: 'ti ti-x',
+ 		danger: true,
+ 		action: async () => {
+-			await os.apiWithDialog('admin/roles/unassign', { roleId: role.id, userId: user.id });
+-			//role.users = role.users.filter(u => u.id !== user.id);
++			await os.apiWithDialog('admin/roles/unassign', { roleId: role.id, userId: userId });
++			//role.users = role.users.filter(u => u.id !== userId);
+ 		},
+ 	}], ev.currentTarget ?? ev.target);
+ }
+ 
+-async function toggleItem(item) {
+-	if (expandedItems.value.includes(item.id)) {
+-		expandedItems.value = expandedItems.value.filter(x => x !== item.id);
++async function toggleItem(itemId: string) {
++	if (expandedItemIds.value.includes(itemId)) {
++		expandedItemIds.value = expandedItemIds.value.filter(x => x !== itemId);
+ 	} else {
+-		expandedItems.value.push(item.id);
++		expandedItemIds.value.push(itemId);
+ 	}
+ }
+ 
+@@ -170,7 +165,7 @@ const headerActions = computed(() => []);
+ 
+ const headerTabs = computed(() => []);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: `${i18n.ts.role}: ${role.name}`,
+ 	icon: 'ti ti-badge',
+ }));
+@@ -184,7 +179,7 @@ definePageMetadata(() => ({
+ .userItemSub {
+ 	padding: 6px 12px;
+ 	font-size: 85%;
+-	color: var(--MI_THEME-fgTransparentWeak);
++	color: color(from var(--MI_THEME-fg) srgb r g b / 0.75);
+ }
+ 
+ .userItemMainBody {
+@@ -209,7 +204,7 @@ definePageMetadata(() => ({
+ 	transition: transform 0.1s ease-out;
+ }
+ 
+-.userItem.userItemOpend {
++.userItem.userItemOpened {
+ 	.chevron {
+ 		transform: rotateX(180deg);
+ 	}
+diff --git a/packages/frontend/src/pages/admin/roles.vue b/packages/frontend/src/pages/admin/roles.vue
+index 782c1256de..e65a3c5ba8 100644
+--- a/packages/frontend/src/pages/admin/roles.vue
++++ b/packages/frontend/src/pages/admin/roles.vue
+@@ -4,308 +4,371 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<div>
+-	<MkStickyContainer>
+-		<template #header><XHeader :actions="headerActions" :tabs="headerTabs"/></template>
+-		<MkSpacer :contentMax="700">
+-			<div class="_gaps">
+-				<MkFolder>
+-					<template #label>{{ i18n.ts._role.baseRole }}</template>
+-					<template #footer>
+-						<MkButton primary rounded @click="updateBaseRole">{{ i18n.ts.save }}</MkButton>
+-					</template>
+-					<div class="_gaps_s">
+-						<MkInput v-model="baseRoleQ" type="search">
+-							<template #prefix><i class="ti ti-search"></i></template>
++<PageWithHeader :actions="headerActions" :tabs="headerTabs">
++	<div class="_spacer" style="--MI_SPACER-w: 700px;">
++		<div class="_gaps">
++			<MkFolder>
++				<template #label>{{ i18n.ts._role.baseRole }}</template>
++				<template #footer>
++					<MkButton primary rounded @click="updateBaseRole">{{ i18n.ts.save }}</MkButton>
++				</template>
++				<div class="_gaps_s">
++					<MkInput v-model="baseRoleQ" type="search">
++						<template #prefix><i class="ti ti-search"></i></template>
++					</MkInput>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.rateLimitFactor, 'rateLimitFactor'])">
++						<template #label>{{ i18n.ts._role._options.rateLimitFactor }}</template>
++						<template #suffix>{{ Math.floor(policies.rateLimitFactor * 100) }}%</template>
++						<MkRange :modelValue="policies.rateLimitFactor * 100" :min="30" :max="300" :step="10" :textConverter="(v) => `${v}%`" @update:modelValue="v => policies.rateLimitFactor = (v / 100)">
++							<template #caption>{{ i18n.ts._role._options.descriptionOfRateLimitFactor }}</template>
++						</MkRange>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.gtlAvailable, 'gtlAvailable'])">
++						<template #label>{{ i18n.ts._role._options.gtlAvailable }}</template>
++						<template #suffix>{{ policies.gtlAvailable ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.gtlAvailable">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.ltlAvailable, 'ltlAvailable'])">
++						<template #label>{{ i18n.ts._role._options.ltlAvailable }}</template>
++						<template #suffix>{{ policies.ltlAvailable ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.ltlAvailable">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canPublicNote, 'canPublicNote'])">
++						<template #label>{{ i18n.ts._role._options.canPublicNote }}</template>
++						<template #suffix>{{ policies.canPublicNote ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canPublicNote">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.chatAvailability, 'chatAvailability'])">
++						<template #label>{{ i18n.ts._role._options.chatAvailability }}</template>
++						<template #suffix>{{ policies.chatAvailability === 'available' ? i18n.ts.yes : policies.chatAvailability === 'readonly' ? i18n.ts.readonly : i18n.ts.no }}</template>
++						<MkSelect
++							v-model="policies.chatAvailability"
++							:items="[
++								{ label: i18n.ts.enabled, value: 'available' },
++								{ label: i18n.ts.readonly, value: 'readonly' },
++								{ label: i18n.ts.disabled, value: 'unavailable' },
++							]"
++						>
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSelect>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.mentionMax, 'mentionLimit'])">
++						<template #label>{{ i18n.ts._role._options.mentionMax }}</template>
++						<template #suffix>{{ policies.mentionLimit }}</template>
++						<MkInput v-model="policies.mentionLimit" type="number">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canInvite, 'canInvite'])">
++						<template #label>{{ i18n.ts._role._options.canInvite }}</template>
++						<template #suffix>{{ policies.canInvite ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canInvite">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.inviteLimit, 'inviteLimit'])">
++						<template #label>{{ i18n.ts._role._options.inviteLimit }}</template>
++						<template #suffix>{{ policies.inviteLimit }}</template>
++						<MkInput v-model="policies.inviteLimit" type="number">
+ 						</MkInput>
++					</MkFolder>
+ 
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.rateLimitFactor, 'rateLimitFactor'])">
+-							<template #label>{{ i18n.ts._role._options.rateLimitFactor }}</template>
+-							<template #suffix>{{ Math.floor(policies.rateLimitFactor * 100) }}%</template>
+-							<MkRange :modelValue="policies.rateLimitFactor * 100" :min="30" :max="300" :step="10" :textConverter="(v) => `${v}%`" @update:modelValue="v => policies.rateLimitFactor = (v / 100)">
+-								<template #caption>{{ i18n.ts._role._options.descriptionOfRateLimitFactor }}</template>
+-							</MkRange>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.gtlAvailable, 'gtlAvailable'])">
+-							<template #label>{{ i18n.ts._role._options.gtlAvailable }}</template>
+-							<template #suffix>{{ policies.gtlAvailable ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.gtlAvailable">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.ltlAvailable, 'ltlAvailable'])">
+-							<template #label>{{ i18n.ts._role._options.ltlAvailable }}</template>
+-							<template #suffix>{{ policies.ltlAvailable ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.ltlAvailable">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canPublicNote, 'canPublicNote'])">
+-							<template #label>{{ i18n.ts._role._options.canPublicNote }}</template>
+-							<template #suffix>{{ policies.canPublicNote ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canPublicNote">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.mentionMax, 'mentionLimit'])">
+-							<template #label>{{ i18n.ts._role._options.mentionMax }}</template>
+-							<template #suffix>{{ policies.mentionLimit }}</template>
+-							<MkInput v-model="policies.mentionLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canInvite, 'canInvite'])">
+-							<template #label>{{ i18n.ts._role._options.canInvite }}</template>
+-							<template #suffix>{{ policies.canInvite ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canInvite">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.inviteLimit, 'inviteLimit'])">
+-							<template #label>{{ i18n.ts._role._options.inviteLimit }}</template>
+-							<template #suffix>{{ policies.inviteLimit }}</template>
+-							<MkInput v-model="policies.inviteLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.inviteLimitCycle, 'inviteLimitCycle'])">
+-							<template #label>{{ i18n.ts._role._options.inviteLimitCycle }}</template>
+-							<template #suffix>{{ policies.inviteLimitCycle + i18n.ts._time.minute }}</template>
+-							<MkInput v-model="policies.inviteLimitCycle" type="number">
+-								<template #suffix>{{ i18n.ts._time.minute }}</template>
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.inviteExpirationTime, 'inviteExpirationTime'])">
+-							<template #label>{{ i18n.ts._role._options.inviteExpirationTime }}</template>
+-							<template #suffix>{{ policies.inviteExpirationTime + i18n.ts._time.minute }}</template>
+-							<MkInput v-model="policies.inviteExpirationTime" type="number">
+-								<template #suffix>{{ i18n.ts._time.minute }}</template>
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canManageAvatarDecorations, 'canManageAvatarDecorations'])">
+-							<template #label>{{ i18n.ts._role._options.canManageAvatarDecorations }}</template>
+-							<template #suffix>{{ policies.canManageAvatarDecorations ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canManageAvatarDecorations">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canManageCustomEmojis, 'canManageCustomEmojis'])">
+-							<template #label>{{ i18n.ts._role._options.canManageCustomEmojis }}</template>
+-							<template #suffix>{{ policies.canManageCustomEmojis ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canManageCustomEmojis">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canSearchNotes, 'canSearchNotes'])">
+-							<template #label>{{ i18n.ts._role._options.canSearchNotes }}</template>
+-							<template #suffix>{{ policies.canSearchNotes ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canSearchNotes">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canUseTranslator, 'canSearchNotes'])">
+-							<template #label>{{ i18n.ts._role._options.canUseTranslator }}</template>
+-							<template #suffix>{{ policies.canUseTranslator ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canUseTranslator">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.driveCapacity, 'driveCapacityMb'])">
+-							<template #label>{{ i18n.ts._role._options.driveCapacity }}</template>
+-							<template #suffix>{{ policies.driveCapacityMb }}MB</template>
+-							<MkInput v-model="policies.driveCapacityMb" type="number">
+-								<template #suffix>MB</template>
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.alwaysMarkNsfw, 'alwaysMarkNsfw'])">
+-							<template #label>{{ i18n.ts._role._options.alwaysMarkNsfw }}</template>
+-							<template #suffix>{{ policies.alwaysMarkNsfw ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.alwaysMarkNsfw">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canUpdateBioMedia, 'canUpdateBioMedia'])">
+-							<template #label>{{ i18n.ts._role._options.canUpdateBioMedia }}</template>
+-							<template #suffix>{{ policies.canUpdateBioMedia ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canUpdateBioMedia">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.pinMax, 'pinLimit'])">
+-							<template #label>{{ i18n.ts._role._options.pinMax }}</template>
+-							<template #suffix>{{ policies.pinLimit }}</template>
+-							<MkInput v-model="policies.pinLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.antennaMax, 'antennaLimit'])">
+-							<template #label>{{ i18n.ts._role._options.antennaMax }}</template>
+-							<template #suffix>{{ policies.antennaLimit }}</template>
+-							<MkInput v-model="policies.antennaLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.wordMuteMax, 'wordMuteLimit'])">
+-							<template #label>{{ i18n.ts._role._options.wordMuteMax }}</template>
+-							<template #suffix>{{ policies.wordMuteLimit }}</template>
+-							<MkInput v-model="policies.wordMuteLimit" type="number">
+-								<template #suffix>chars</template>
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.webhookMax, 'webhookLimit'])">
+-							<template #label>{{ i18n.ts._role._options.webhookMax }}</template>
+-							<template #suffix>{{ policies.webhookLimit }}</template>
+-							<MkInput v-model="policies.webhookLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.clipMax, 'clipLimit'])">
+-							<template #label>{{ i18n.ts._role._options.clipMax }}</template>
+-							<template #suffix>{{ policies.clipLimit }}</template>
+-							<MkInput v-model="policies.clipLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.noteEachClipsMax, 'noteEachClipsLimit'])">
+-							<template #label>{{ i18n.ts._role._options.noteEachClipsMax }}</template>
+-							<template #suffix>{{ policies.noteEachClipsLimit }}</template>
+-							<MkInput v-model="policies.noteEachClipsLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.userListMax, 'userListLimit'])">
+-							<template #label>{{ i18n.ts._role._options.userListMax }}</template>
+-							<template #suffix>{{ policies.userListLimit }}</template>
+-							<MkInput v-model="policies.userListLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.userEachUserListsMax, 'userEachUserListsLimit'])">
+-							<template #label>{{ i18n.ts._role._options.userEachUserListsMax }}</template>
+-							<template #suffix>{{ policies.userEachUserListsLimit }}</template>
+-							<MkInput v-model="policies.userEachUserListsLimit" type="number">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canHideAds, 'canHideAds'])">
+-							<template #label>{{ i18n.ts._role._options.canHideAds }}</template>
+-							<template #suffix>{{ policies.canHideAds ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canHideAds">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.avatarDecorationLimit, 'avatarDecorationLimit'])">
+-							<template #label>{{ i18n.ts._role._options.avatarDecorationLimit }}</template>
+-							<template #suffix>{{ policies.avatarDecorationLimit }}</template>
+-							<MkInput v-model="avatarDecorationLimit" type="number" :min="0" :max="16" @update:modelValue="updateAvatarDecorationLimit">
+-							</MkInput>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportAntennas, 'canImportAntennas'])">
+-							<template #label>{{ i18n.ts._role._options.canImportAntennas }}</template>
+-							<template #suffix>{{ policies.canImportAntennas ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canImportAntennas">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportBlocking, 'canImportBlocking'])">
+-							<template #label>{{ i18n.ts._role._options.canImportBlocking }}</template>
+-							<template #suffix>{{ policies.canImportBlocking ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canImportBlocking">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportFollowing, 'canImportFollowing'])">
+-							<template #label>{{ i18n.ts._role._options.canImportFollowing }}</template>
+-							<template #suffix>{{ policies.canImportFollowing ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canImportFollowing">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportMuting, 'canImportMuting'])">
+-							<template #label>{{ i18n.ts._role._options.canImportMuting }}</template>
+-							<template #suffix>{{ policies.canImportMuting ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canImportMuting">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-
+-						<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportUserLists, 'canImportUserList'])">
+-							<template #label>{{ i18n.ts._role._options.canImportUserLists }}</template>
+-							<template #suffix>{{ policies.canImportUserLists ? i18n.ts.yes : i18n.ts.no }}</template>
+-							<MkSwitch v-model="policies.canImportUserLists">
+-								<template #label>{{ i18n.ts.enable }}</template>
+-							</MkSwitch>
+-						</MkFolder>
+-					</div>
+-				</MkFolder>
+-				<MkButton primary rounded @click="create"><i class="ti ti-plus"></i> {{ i18n.ts._role.new }}</MkButton>
+-				<div class="_gaps_s">
+-					<MkFoldableSection>
+-						<template #header>{{ i18n.ts._role.manualRoles }}</template>
+-						<div class="_gaps_s">
+-							<MkRolePreview v-for="role in roles.filter(x => x.target === 'manual')" :key="role.id" :role="role" :forModeration="true"/>
+-						</div>
+-					</MkFoldableSection>
+-					<MkFoldableSection>
+-						<template #header>{{ i18n.ts._role.conditionalRoles }}</template>
+-						<div class="_gaps_s">
+-							<MkRolePreview v-for="role in roles.filter(x => x.target === 'conditional')" :key="role.id" :role="role" :forModeration="true"/>
+-						</div>
+-					</MkFoldableSection>
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.inviteLimitCycle, 'inviteLimitCycle'])">
++						<template #label>{{ i18n.ts._role._options.inviteLimitCycle }}</template>
++						<template #suffix>{{ policies.inviteLimitCycle + i18n.ts._time.minute }}</template>
++						<MkInput v-model="policies.inviteLimitCycle" type="number">
++							<template #suffix>{{ i18n.ts._time.minute }}</template>
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.inviteExpirationTime, 'inviteExpirationTime'])">
++						<template #label>{{ i18n.ts._role._options.inviteExpirationTime }}</template>
++						<template #suffix>{{ policies.inviteExpirationTime + i18n.ts._time.minute }}</template>
++						<MkInput v-model="policies.inviteExpirationTime" type="number">
++							<template #suffix>{{ i18n.ts._time.minute }}</template>
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canManageAvatarDecorations, 'canManageAvatarDecorations'])">
++						<template #label>{{ i18n.ts._role._options.canManageAvatarDecorations }}</template>
++						<template #suffix>{{ policies.canManageAvatarDecorations ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canManageAvatarDecorations">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canManageCustomEmojis, 'canManageCustomEmojis'])">
++						<template #label>{{ i18n.ts._role._options.canManageCustomEmojis }}</template>
++						<template #suffix>{{ policies.canManageCustomEmojis ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canManageCustomEmojis">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canSearchNotes, 'canSearchNotes'])">
++						<template #label>{{ i18n.ts._role._options.canSearchNotes }}</template>
++						<template #suffix>{{ policies.canSearchNotes ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canSearchNotes">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canSearchUsers, 'canSearchUsers'])">
++						<template #label>{{ i18n.ts._role._options.canSearchUsers }}</template>
++						<template #suffix>{{ policies.canSearchUsers ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canSearchUsers">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canUseTranslator, 'canUseTranslator'])">
++						<template #label>{{ i18n.ts._role._options.canUseTranslator }}</template>
++						<template #suffix>{{ policies.canUseTranslator ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canUseTranslator">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.driveCapacity, 'driveCapacityMb'])">
++						<template #label>{{ i18n.ts._role._options.driveCapacity }}</template>
++						<template #suffix>{{ policies.driveCapacityMb }}MB</template>
++						<MkInput v-model="policies.driveCapacityMb" type="number">
++							<template #suffix>MB</template>
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.maxFileSize, 'maxFileSizeMb'])">
++						<template #label>{{ i18n.ts._role._options.maxFileSize }}</template>
++						<template #suffix>{{ policies.maxFileSizeMb }}MB</template>
++						<MkInput v-model="policies.maxFileSizeMb" type="number">
++							<template #suffix>MB</template>
++							<template #caption>
++								<div><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.ts._role._options.maxFileSize_caption }}</div>
++							</template>
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.uploadableFileTypes, 'uploadableFileTypes'])">
++						<template #label>{{ i18n.ts._role._options.uploadableFileTypes }}</template>
++						<template #suffix>...</template>
++						<MkTextarea :modelValue="policies.uploadableFileTypes.join('\n')" @update:modelValue="v => policies.uploadableFileTypes = v.split('\n')">
++							<template #caption>
++								<div>{{ i18n.ts._role._options.uploadableFileTypes_caption }}</div>
++								<div><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.tsx._role._options.uploadableFileTypes_caption2({ x: 'application/octet-stream' }) }}</div>
++							</template>
++						</MkTextarea>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.alwaysMarkNsfw, 'alwaysMarkNsfw'])">
++						<template #label>{{ i18n.ts._role._options.alwaysMarkNsfw }}</template>
++						<template #suffix>{{ policies.alwaysMarkNsfw ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.alwaysMarkNsfw">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canUpdateBioMedia, 'canUpdateBioMedia'])">
++						<template #label>{{ i18n.ts._role._options.canUpdateBioMedia }}</template>
++						<template #suffix>{{ policies.canUpdateBioMedia ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canUpdateBioMedia">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.pinMax, 'pinLimit'])">
++						<template #label>{{ i18n.ts._role._options.pinMax }}</template>
++						<template #suffix>{{ policies.pinLimit }}</template>
++						<MkInput v-model="policies.pinLimit" type="number">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.antennaMax, 'antennaLimit'])">
++						<template #label>{{ i18n.ts._role._options.antennaMax }}</template>
++						<template #suffix>{{ policies.antennaLimit }}</template>
++						<MkInput v-model="policies.antennaLimit" type="number">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.wordMuteMax, 'wordMuteLimit'])">
++						<template #label>{{ i18n.ts._role._options.wordMuteMax }}</template>
++						<template #suffix>{{ policies.wordMuteLimit }}</template>
++						<MkInput v-model="policies.wordMuteLimit" type="number">
++							<template #suffix>chars</template>
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.webhookMax, 'webhookLimit'])">
++						<template #label>{{ i18n.ts._role._options.webhookMax }}</template>
++						<template #suffix>{{ policies.webhookLimit }}</template>
++						<MkInput v-model="policies.webhookLimit" type="number">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.clipMax, 'clipLimit'])">
++						<template #label>{{ i18n.ts._role._options.clipMax }}</template>
++						<template #suffix>{{ policies.clipLimit }}</template>
++						<MkInput v-model="policies.clipLimit" type="number">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.noteEachClipsMax, 'noteEachClipsLimit'])">
++						<template #label>{{ i18n.ts._role._options.noteEachClipsMax }}</template>
++						<template #suffix>{{ policies.noteEachClipsLimit }}</template>
++						<MkInput v-model="policies.noteEachClipsLimit" type="number">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.userListMax, 'userListLimit'])">
++						<template #label>{{ i18n.ts._role._options.userListMax }}</template>
++						<template #suffix>{{ policies.userListLimit }}</template>
++						<MkInput v-model="policies.userListLimit" type="number">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.userEachUserListsMax, 'userEachUserListsLimit'])">
++						<template #label>{{ i18n.ts._role._options.userEachUserListsMax }}</template>
++						<template #suffix>{{ policies.userEachUserListsLimit }}</template>
++						<MkInput v-model="policies.userEachUserListsLimit" type="number">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canHideAds, 'canHideAds'])">
++						<template #label>{{ i18n.ts._role._options.canHideAds }}</template>
++						<template #suffix>{{ policies.canHideAds ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canHideAds">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.avatarDecorationLimit, 'avatarDecorationLimit'])">
++						<template #label>{{ i18n.ts._role._options.avatarDecorationLimit }}</template>
++						<template #suffix>{{ policies.avatarDecorationLimit }}</template>
++						<MkInput v-model="avatarDecorationLimit" type="number" :min="0" :max="16" @update:modelValue="updateAvatarDecorationLimit">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportAntennas, 'canImportAntennas'])">
++						<template #label>{{ i18n.ts._role._options.canImportAntennas }}</template>
++						<template #suffix>{{ policies.canImportAntennas ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canImportAntennas">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportBlocking, 'canImportBlocking'])">
++						<template #label>{{ i18n.ts._role._options.canImportBlocking }}</template>
++						<template #suffix>{{ policies.canImportBlocking ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canImportBlocking">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportFollowing, 'canImportFollowing'])">
++						<template #label>{{ i18n.ts._role._options.canImportFollowing }}</template>
++						<template #suffix>{{ policies.canImportFollowing ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canImportFollowing">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportMuting, 'canImportMuting'])">
++						<template #label>{{ i18n.ts._role._options.canImportMuting }}</template>
++						<template #suffix>{{ policies.canImportMuting ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canImportMuting">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.canImportUserLists, 'canImportUserList'])">
++						<template #label>{{ i18n.ts._role._options.canImportUserLists }}</template>
++						<template #suffix>{{ policies.canImportUserLists ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.canImportUserLists">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.noteDraftLimit, 'noteDraftLimit'])">
++						<template #label>{{ i18n.ts._role._options.noteDraftLimit }}</template>
++						<template #suffix>{{ policies.noteDraftLimit }}</template>
++						<MkInput v-model="policies.noteDraftLimit" type="number" :min="0">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.scheduledNoteLimit, 'scheduledNoteLimit'])">
++						<template #label>{{ i18n.ts._role._options.scheduledNoteLimit }}</template>
++						<template #suffix>{{ policies.scheduledNoteLimit }}</template>
++						<MkInput v-model="policies.scheduledNoteLimit" type="number" :min="0">
++						</MkInput>
++					</MkFolder>
++
++					<MkFolder v-if="matchQuery([i18n.ts._role._options.watermarkAvailable, 'watermarkAvailable'])">
++						<template #label>{{ i18n.ts._role._options.watermarkAvailable }}</template>
++						<template #suffix>{{ policies.watermarkAvailable ? i18n.ts.yes : i18n.ts.no }}</template>
++						<MkSwitch v-model="policies.watermarkAvailable">
++							<template #label>{{ i18n.ts.enable }}</template>
++						</MkSwitch>
++					</MkFolder>
+ 				</div>
++			</MkFolder>
++			<MkButton primary rounded @click="create"><i class="ti ti-plus"></i> {{ i18n.ts._role.new }}</MkButton>
++			<div class="_gaps_s">
++				<MkFoldableSection>
++					<template #header>{{ i18n.ts._role.manualRoles }}</template>
++					<div class="_gaps_s">
++						<MkRolePreview v-for="role in roles.filter(x => x.target === 'manual')" :key="role.id" :role="role" :forModeration="true"/>
++					</div>
++				</MkFoldableSection>
++				<MkFoldableSection>
++					<template #header>{{ i18n.ts._role.conditionalRoles }}</template>
++					<div class="_gaps_s">
++						<MkRolePreview v-for="role in roles.filter(x => x.target === 'conditional')" :key="role.id" :role="role" :forModeration="true"/>
++					</div>
++				</MkFoldableSection>
+ 			</div>
+-		</MkSpacer>
+-	</MkStickyContainer>
+-</div>
++		</div>
++	</div>
++</PageWithHeader>
+ </template>
+ 
+ <script lang="ts" setup>
+ import { computed, reactive, ref } from 'vue';
+-import { ROLE_POLICIES } from '@@/js/const.js';
+-import XHeader from './_header_.vue';
++import * as Misskey from 'misskey-js';
+ import MkInput from '@/components/MkInput.vue';
+ import MkFolder from '@/components/MkFolder.vue';
+ import MkSwitch from '@/components/MkSwitch.vue';
+ import MkButton from '@/components/MkButton.vue';
++import MkSelect from '@/components/MkSelect.vue';
+ import MkRange from '@/components/MkRange.vue';
+ import MkRolePreview from '@/components/MkRolePreview.vue';
+ import * as os from '@/os.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ import { i18n } from '@/i18n.js';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
++import { definePage } from '@/page.js';
+ import { instance, fetchInstance } from '@/instance.js';
+ import MkFoldableSection from '@/components/MkFoldableSection.vue';
+-import { useRouter } from '@/router/supplier.js';
++import { useRouter } from '@/router.js';
++import { deepClone } from '@/utility/clone.js';
++import MkTextarea from '@/components/MkTextarea.vue';
+ 
+ const router = useRouter();
+ const baseRoleQ = ref('');
+ 
+ const roles = await misskeyApi('admin/roles/list');
+ 
+-const policies = reactive<Record<typeof ROLE_POLICIES[number], any>>({});
+-for (const ROLE_POLICY of ROLE_POLICIES) {
+-	policies[ROLE_POLICY] = instance.policies[ROLE_POLICY];
+-}
++const policies = reactive(deepClone(instance.policies));
+ 
+ const avatarDecorationLimit = computed({
+ 	get: () => Math.min(16, Math.max(0, policies.avatarDecorationLimit)),
+@@ -325,6 +388,7 @@ function matchQuery(keywords: string[]): boolean {
+ 
+ async function updateBaseRole() {
+ 	await os.apiWithDialog('admin/roles/update-default-policies', {
++		//@ts-expect-error misskey-js側の型定義が不十分
+ 		policies,
+ 	});
+ 	fetchInstance(true);
+@@ -338,7 +402,7 @@ const headerActions = computed(() => []);
+ 
+ const headerTabs = computed(() => []);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: i18n.ts.roles,
+ 	icon: 'ti ti-badges',
+ }));
+diff --git a/packages/frontend/src/pages/role.vue b/packages/frontend/src/pages/role.vue
+index 46e510b49b..619c80edd1 100644
+--- a/packages/frontend/src/pages/role.vue
++++ b/packages/frontend/src/pages/role.vue
+@@ -4,47 +4,33 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<MkStickyContainer>
+-	<template #header><MkPageHeader v-model:tab="tab" :tabs="headerTabs"/></template>
+-	<MkSpacer v-if="error != null" :contentMax="1200">
+-		<div :class="$style.root">
+-			<img :class="$style.img" :src="serverErrorImageUrl" class="_ghost"/>
+-			<p :class="$style.text">
+-				<i class="ti ti-alert-triangle"></i>
+-				{{ error }}
+-			</p>
+-		</div>
+-	</MkSpacer>
+-	<MkSpacer v-else-if="tab === 'users'" :contentMax="1200">
++<PageWithHeader v-model:tab="tab" :tabs="headerTabs">
++	<div v-if="error != null" class="_spacer" style="--MI_SPACER-w: 1200px;">
++		<MkResult type="error" :text="error"/>
++	</div>
++	<div v-else-if="tab === 'users'" class="_spacer" style="--MI_SPACER-w: 1200px;">
+ 		<div class="_gaps_s">
+ 			<div v-if="role">{{ role.description }}</div>
+-			<MkUserList v-if="visible" :pagination="users" :extractor="(item) => item.user"/>
+-			<div v-else-if="!visible" class="_fullinfo">
+-				<img :src="infoImageUrl" class="_ghost"/>
+-				<div>{{ i18n.ts.nothing }}</div>
+-			</div>
+-		</div>
+-	</MkSpacer>
+-	<MkSpacer v-else-if="tab === 'timeline'" :contentMax="700">
+-		<MkTimeline v-if="visible" ref="timeline" src="role" :role="props.roleId"/>
+-		<div v-else-if="!visible" class="_fullinfo">
+-			<img :src="infoImageUrl" class="_ghost"/>
+-			<div>{{ i18n.ts.nothing }}</div>
++			<MkUserList v-if="visible" :paginator="usersPaginator" :extractor="(item) => item.user"/>
++			<MkResult v-else-if="!visible" type="empty" :text="i18n.ts.nothing"/>
+ 		</div>
+-	</MkSpacer>
+-</MkStickyContainer>
++	</div>
++	<div v-else-if="tab === 'timeline'" class="_spacer" style="--MI_SPACER-w: 700px;">
++		<MkStreamingNotesTimeline v-if="visible" ref="timeline" src="role" :role="props.roleId"/>
++		<MkResult v-else-if="!visible" type="empty" :text="i18n.ts.nothing"/>
++	</div>
++</PageWithHeader>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, watch, ref } from 'vue';
++import { computed, watch, ref, markRaw } from 'vue';
+ import * as Misskey from 'misskey-js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ import MkUserList from '@/components/MkUserList.vue';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
++import { definePage } from '@/page.js';
+ import { i18n } from '@/i18n.js';
+-import MkTimeline from '@/components/MkTimeline.vue';
+-import { instanceName } from '@@/js/config.js';
+-import { serverErrorImageUrl, infoImageUrl } from '@/instance.js';
++import MkStreamingNotesTimeline from '@/components/MkStreamingNotesTimeline.vue';
++import { Paginator } from '@/utility/paginator.js';
+ 
+ const props = withDefaults(defineProps<{
+ 	roleId: string;
+@@ -75,12 +61,11 @@ watch(() => props.roleId, () => {
+ 	});
+ }, { immediate: true });
+ 
+-const users = computed(() => ({
+-	endpoint: 'roles/users' as const,
++const usersPaginator = markRaw(new Paginator('roles/users', {
+ 	limit: 30,
+-	params: {
++	computedParams: computed(() => ({
+ 		roleId: props.roleId,
+-	},
++	})),
+ }));
+ 
+ const headerTabs = computed(() => [{
+@@ -93,29 +78,8 @@ const headerTabs = computed(() => [{
+ 	title: i18n.ts.timeline,
+ }]);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: role.value ? role.value.name : (error.value ?? i18n.ts.role),
+ 	icon: 'ti ti-badge',
+ }));
+ </script>
+-
+-<style lang="scss" module>
+-.root {
+-	padding: 32px;
+-	text-align: center;
+-  align-items: center;
+-}
+-
+-.text {
+-	margin: 0 0 8px 0;
+-}
+-
+-.img {
+-	vertical-align: bottom;
+-  width: 128px;
+-	height: 128px;
+-	margin-bottom: 16px;
+-	border-radius: 16px;
+-}
+-</style>
+-
+diff --git a/packages/frontend/src/pages/settings/drive.vue b/packages/frontend/src/pages/settings/drive.vue
+index 0e66b93f1c..b170d17a5a 100644
+--- a/packages/frontend/src/pages/settings/drive.vue
++++ b/packages/frontend/src/pages/settings/drive.vue
+@@ -4,81 +4,230 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<div class="_gaps_m">
+-	<FormSection v-if="!fetching" first>
+-		<template #label>{{ i18n.ts.usageAmount }}</template>
+-
+-		<div class="_gaps_m">
+-			<div>
+-				<div :class="$style.meter"><div :class="$style.meterValue" :style="meterStyle"></div></div>
+-			</div>
+-			<FormSplit>
+-				<MkKeyValue>
+-					<template #key>{{ i18n.ts.capacity }}</template>
+-					<template #value>{{ bytes(capacity, 1) }}</template>
+-				</MkKeyValue>
+-				<MkKeyValue>
+-					<template #key>{{ i18n.ts.inUse }}</template>
+-					<template #value>{{ bytes(usage, 1) }}</template>
+-				</MkKeyValue>
+-			</FormSplit>
+-		</div>
+-	</FormSection>
+-
+-	<FormSection>
+-		<template #label>{{ i18n.ts.statistics }}</template>
+-		<MkChart src="per-user-drive" :args="{ user: $i }" span="day" :limit="7 * 5" :bar="true" :stacked="true" :detailed="false" :aspectRatio="6"/>
+-	</FormSection>
+-
+-	<FormSection>
+-		<div class="_gaps_m">
+-			<FormLink @click="chooseUploadFolder()">
+-				{{ i18n.ts.uploadFolder }}
+-				<template #suffix>{{ uploadFolder ? uploadFolder.name : '-' }}</template>
+-				<template #suffixIcon><i class="ti ti-folder"></i></template>
+-			</FormLink>
+-			<FormLink to="/settings/drive/cleaner">
+-				{{ i18n.ts.drivecleaner }}
+-			</FormLink>
+-			<MkSwitch v-model="keepOriginalUploading">
+-				<template #label>{{ i18n.ts.keepOriginalUploading }}</template>
+-				<template #caption>{{ i18n.ts.keepOriginalUploadingDescription }}</template>
+-			</MkSwitch>
+-			<MkSwitch v-model="keepOriginalFilename">
+-				<template #label>{{ i18n.ts.keepOriginalFilename }}</template>
+-				<template #caption>{{ i18n.ts.keepOriginalFilenameDescription }}</template>
+-			</MkSwitch>
+-			<MkSwitch v-model="alwaysMarkNsfw" @update:modelValue="saveProfile()">
+-				<template #label>{{ i18n.ts.alwaysMarkSensitive }}</template>
+-			</MkSwitch>
+-			<MkSwitch v-model="autoSensitive" @update:modelValue="saveProfile()">
+-				<template #label>{{ i18n.ts.enableAutoSensitive }}<span class="_beta">{{ i18n.ts.beta }}</span></template>
+-				<template #caption>{{ i18n.ts.enableAutoSensitiveDescription }}</template>
+-			</MkSwitch>
+-		</div>
+-	</FormSection>
+-</div>
++<SearchMarker path="/settings/drive" :label="i18n.ts.drive" :keywords="['drive']" icon="ti ti-cloud">
++	<div class="_gaps_m">
++		<MkFeatureBanner icon="/client-assets/cloud_3d.png" color="#0059ff">
++			<SearchText>{{ i18n.ts._settings.driveBanner }}</SearchText>
++		</MkFeatureBanner>
++
++		<SearchMarker :keywords="['capacity', 'usage']">
++			<FormSection first>
++				<template #label><SearchLabel>{{ i18n.ts.usageAmount }}</SearchLabel></template>
++
++				<div v-if="!fetching" class="_gaps_m">
++					<div>
++						<div :class="$style.meter"><div :class="$style.meterValue" :style="meterStyle"></div></div>
++					</div>
++					<FormSplit>
++						<MkKeyValue>
++							<template #key>{{ i18n.ts.capacity }}</template>
++							<template #value>{{ bytes(capacity, 1) }}</template>
++						</MkKeyValue>
++						<MkKeyValue>
++							<template #key>{{ i18n.ts.inUse }}</template>
++							<template #value>{{ bytes(usage, 1) }}</template>
++						</MkKeyValue>
++					</FormSplit>
++				</div>
++			</FormSection>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['statistics', 'usage']">
++			<FormSection>
++				<template #label><SearchLabel>{{ i18n.ts.statistics }}</SearchLabel></template>
++				<MkChart src="per-user-drive" :args="{ user: $i }" span="day" :limit="7 * 5" :bar="true" :stacked="true" :detailed="false" :aspectRatio="6"/>
++			</FormSection>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['general']">
++			<FormSection>
++				<template #label><SearchLabel>{{ i18n.ts.general }}</SearchLabel></template>
++
++				<div class="_gaps_m">
++					<SearchMarker :keywords="['default', 'upload', 'folder']">
++						<FormLink @click="chooseUploadFolder()">
++							<SearchLabel>{{ i18n.ts.uploadFolder }}</SearchLabel>
++							<template #suffix>{{ uploadFolder ? uploadFolder.name : '-' }}</template>
++							<template #icon><i class="ti ti-folder"></i></template>
++						</FormLink>
++					</SearchMarker>
++
++					<FormLink to="/settings/drive/cleaner">
++						{{ i18n.ts.drivecleaner }}
++					</FormLink>
++
++					<SearchMarker :keywords="['keep', 'original', 'filename']">
++						<MkPreferenceContainer k="keepOriginalFilename">
++							<MkSwitch v-model="keepOriginalFilename">
++								<template #label><SearchLabel>{{ i18n.ts.keepOriginalFilename }}</SearchLabel></template>
++								<template #caption><SearchText>{{ i18n.ts.keepOriginalFilenameDescription }}</SearchText></template>
++							</MkSwitch>
++						</MkPreferenceContainer>
++					</SearchMarker>
++
++					<SearchMarker :keywords="['always', 'default', 'mark', 'nsfw', 'sensitive', 'media', 'file']">
++						<MkSwitch v-model="alwaysMarkNsfw" @update:modelValue="saveProfile()">
++							<template #label><SearchLabel>{{ i18n.ts.alwaysMarkSensitive }}</SearchLabel></template>
++						</MkSwitch>
++					</SearchMarker>
++
++					<SearchMarker :keywords="['auto', 'nsfw', 'sensitive', 'media', 'file']">
++						<MkSwitch v-model="autoSensitive" @update:modelValue="saveProfile()">
++							<template #label><SearchLabel>{{ i18n.ts.enableAutoSensitive }}</SearchLabel><span class="_beta">{{ i18n.ts.beta }}</span></template>
++							<template #caption><SearchText>{{ i18n.ts.enableAutoSensitiveDescription }}</SearchText></template>
++						</MkSwitch>
++					</SearchMarker>
++				</div>
++			</FormSection>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['image']">
++			<FormSection>
++				<template #label><SearchLabel>{{ i18n.ts.image }}</SearchLabel></template>
++
++				<div class="_gaps_m">
++					<SearchMarker :keywords="['watermark', 'credit']">
++						<MkFolder v-if="$i.policies.watermarkAvailable">
++							<template #icon><i class="ti ti-copyright"></i></template>
++							<template #label><SearchLabel>{{ i18n.ts.watermark }}</SearchLabel></template>
++							<template #caption>{{ i18n.ts._watermarkEditor.tip }}</template>
++
++							<div class="_gaps">
++								<div class="_gaps_s">
++									<XWatermarkItem
++										v-for="(preset, i) in prefer.r.watermarkPresets.value"
++										:key="preset.id"
++										:preset="preset"
++										@updatePreset="onUpdateWatermarkPreset(preset.id, $event)"
++										@del="onDeleteWatermarkPreset(preset.id)"
++									/>
++
++									<MkButton iconOnly rounded style="margin: 0 auto;" @click="addWatermarkPreset"><i class="ti ti-plus"></i></MkButton>
++
++									<SearchMarker :keywords="['sync', 'watermark', 'preset', 'devices']">
++										<MkSwitch :modelValue="watermarkPresetsSyncEnabled" @update:modelValue="changeWatermarkPresetsSyncEnabled">
++											<template #label><i class="ti ti-cloud-cog"></i> <SearchLabel>{{ i18n.ts.syncBetweenDevices }}</SearchLabel></template>
++										</MkSwitch>
++									</SearchMarker>
++								</div>
++
++								<hr>
++
++								<SearchMarker :keywords="['default', 'watermark', 'preset']">
++									<MkPreferenceContainer k="defaultWatermarkPresetId">
++										<MkSelect v-model="defaultWatermarkPresetId" :items="[{ label: i18n.ts.none, value: null }, ...prefer.r.watermarkPresets.value.map(p => ({ label: p.name || i18n.ts.noName, value: p.id }))]">
++											<template #label><SearchLabel>{{ i18n.ts.defaultPreset }}</SearchLabel></template>
++										</MkSelect>
++									</MkPreferenceContainer>
++								</SearchMarker>
++							</div>
++						</MkFolder>
++					</SearchMarker>
++
++					<SearchMarker :keywords="['label', 'frame', 'credit', 'metadata']">
++						<MkFolder>
++							<template #icon><i class="ti ti-device-ipad-horizontal"></i></template>
++							<template #label><SearchLabel>{{ i18n.ts.frame }}</SearchLabel></template>
++							<template #caption>{{ i18n.ts._imageFrameEditor.tip }}</template>
++
++							<div class="_gaps">
++								<div class="_gaps_s">
++									<XImageFrameItem
++										v-for="(preset, i) in prefer.r.imageFramePresets.value"
++										:key="preset.id"
++										:preset="preset"
++										@updatePreset="onUpdateImageFramePreset(preset.id, $event)"
++										@del="onDeleteImageFramePreset(preset.id)"
++									/>
++
++									<MkButton iconOnly rounded style="margin: 0 auto;" @click="addImageFramePreset"><i class="ti ti-plus"></i></MkButton>
++
++									<SearchMarker :keywords="['sync', 'frame', 'label', 'preset', 'devices']">
++										<MkSwitch :modelValue="imageFramePresetsSyncEnabled" @update:modelValue="changeImageFramePresetsSyncEnabled">
++											<template #label><i class="ti ti-cloud-cog"></i> <SearchLabel>{{ i18n.ts.syncBetweenDevices }}</SearchLabel></template>
++										</MkSwitch>
++									</SearchMarker>
++								</div>
++							</div>
++						</MkFolder>
++					</SearchMarker>
++
++					<SearchMarker :keywords="['default', 'image', 'compression']">
++						<MkPreferenceContainer k="defaultImageCompressionLevel">
++							<MkSelect
++								v-model="defaultImageCompressionLevel" :items="[
++									{ label: i18n.ts.none, value: 0 },
++									{ label: `${i18n.ts.low} (${i18n.ts._compression._quality.high}; ${i18n.ts._compression._size.large})`, value: 1 },
++									{ label: `${i18n.ts.medium} (${i18n.ts._compression._quality.medium}; ${i18n.ts._compression._size.medium})`, value: 2 },
++									{ label: `${i18n.ts.high} (${i18n.ts._compression._quality.low}; ${i18n.ts._compression._size.small})`, value: 3 },
++								]"
++							>
++								<template #label><SearchLabel>{{ i18n.ts.defaultCompressionLevel }}</SearchLabel></template>
++								<template #caption><div v-html="i18n.ts.defaultCompressionLevel_description"></div></template>
++							</MkSelect>
++						</MkPreferenceContainer>
++					</SearchMarker>
++				</div>
++			</FormSection>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['video']">
++			<FormSection>
++				<template #label><SearchLabel>{{ i18n.ts.video }}</SearchLabel></template>
++
++				<div class="_gaps_m">
++					<SearchMarker :keywords="['default', 'video', 'compression']">
++						<MkPreferenceContainer k="defaultVideoCompressionLevel">
++							<MkSelect
++								v-model="defaultVideoCompressionLevel" :items="[
++									{ label: i18n.ts.none, value: 0 },
++									{ label: `${i18n.ts.low} (${i18n.ts._compression._quality.high}; ${i18n.ts._compression._size.large})`, value: 1 },
++									{ label: `${i18n.ts.medium} (${i18n.ts._compression._quality.medium}; ${i18n.ts._compression._size.medium})`, value: 2 },
++									{ label: `${i18n.ts.high} (${i18n.ts._compression._quality.low}; ${i18n.ts._compression._size.small})`, value: 3 },
++								]"
++							>
++								<template #label><SearchLabel>{{ i18n.ts.defaultCompressionLevel }}</SearchLabel></template>
++								<template #caption><div v-html="i18n.ts.defaultCompressionLevel_description"></div></template>
++							</MkSelect>
++						</MkPreferenceContainer>
++					</SearchMarker>
++				</div>
++			</FormSection>
++		</SearchMarker>
++	</div>
++</SearchMarker>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, ref } from 'vue';
++import { computed, defineAsyncComponent, ref } from 'vue';
+ import * as Misskey from 'misskey-js';
+ import tinycolor from 'tinycolor2';
++import XWatermarkItem from './drive.WatermarkItem.vue';
++import XImageFrameItem from './drive.ImageFrameItem.vue';
++import type { WatermarkPreset } from '@/utility/watermark/WatermarkRenderer.js';
++import type { ImageFramePreset } from '@/utility/image-frame-renderer/ImageFrameRenderer.js';
+ import FormLink from '@/components/form/link.vue';
+ import MkSwitch from '@/components/MkSwitch.vue';
++import MkSelect from '@/components/MkSelect.vue';
+ import FormSection from '@/components/form/section.vue';
+ import MkKeyValue from '@/components/MkKeyValue.vue';
+ import FormSplit from '@/components/form/split.vue';
+ import * as os from '@/os.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ import bytes from '@/filters/bytes.js';
+-import { defaultStore } from '@/store.js';
+ import MkChart from '@/components/MkChart.vue';
+ import { i18n } from '@/i18n.js';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
+-import { signinRequired } from '@/account.js';
++import { definePage } from '@/page.js';
++import { ensureSignin } from '@/i.js';
++import { prefer } from '@/preferences.js';
++import MkPreferenceContainer from '@/components/MkPreferenceContainer.vue';
++import MkFeatureBanner from '@/components/MkFeatureBanner.vue';
++import { selectDriveFolder } from '@/utility/drive.js';
++import MkFolder from '@/components/MkFolder.vue';
++import MkButton from '@/components/MkButton.vue';
++import { genId } from '@/utility/id.js';
+ 
+-const $i = signinRequired();
++const $i = ensureSignin();
+ 
+ const fetching = ref(true);
+ const usage = ref<number | null>(null);
+@@ -99,8 +248,38 @@ const meterStyle = computed(() => {
+ 	};
+ });
+ 
+-const keepOriginalUploading = computed(defaultStore.makeGetterSetter('keepOriginalUploading'));
+-const keepOriginalFilename = computed(defaultStore.makeGetterSetter('keepOriginalFilename'));
++const keepOriginalFilename = prefer.model('keepOriginalFilename');
++const defaultWatermarkPresetId = prefer.model('defaultWatermarkPresetId');
++const defaultImageCompressionLevel = prefer.model('defaultImageCompressionLevel');
++const defaultVideoCompressionLevel = prefer.model('defaultVideoCompressionLevel');
++
++const watermarkPresetsSyncEnabled = ref(prefer.isSyncEnabled('watermarkPresets'));
++
++function changeWatermarkPresetsSyncEnabled(value: boolean) {
++	if (value) {
++		prefer.enableSync('watermarkPresets').then((res) => {
++			if (res == null) return;
++			if (res.enabled) watermarkPresetsSyncEnabled.value = true;
++		});
++	} else {
++		prefer.disableSync('watermarkPresets');
++		watermarkPresetsSyncEnabled.value = false;
++	}
++}
++
++const imageFramePresetsSyncEnabled = ref(prefer.isSyncEnabled('imageFramePresets'));
++
++function changeImageFramePresetsSyncEnabled(value: boolean) {
++	if (value) {
++		prefer.enableSync('imageFramePresets').then((res) => {
++			if (res == null) return;
++			if (res.enabled) imageFramePresetsSyncEnabled.value = true;
++		});
++	} else {
++		prefer.disableSync('imageFramePresets');
++		imageFramePresetsSyncEnabled.value = false;
++	}
++}
+ 
+ misskeyApi('drive').then(info => {
+ 	capacity.value = info.capacity;
+@@ -108,21 +287,22 @@ misskeyApi('drive').then(info => {
+ 	fetching.value = false;
+ });
+ 
+-if (defaultStore.state.uploadFolder) {
++if (prefer.s.uploadFolder) {
+ 	misskeyApi('drive/folders/show', {
+-		folderId: defaultStore.state.uploadFolder,
++		folderId: prefer.s.uploadFolder,
+ 	}).then(response => {
+ 		uploadFolder.value = response;
+ 	});
+ }
+ 
+ function chooseUploadFolder() {
+-	os.selectDriveFolder(false).then(async folder => {
+-		defaultStore.set('uploadFolder', folder[0] ? folder[0].id : null);
++	selectDriveFolder(null).then(async ({ canceled, folders }) => {
++		if (canceled) return;
++		prefer.commit('uploadFolder', folders[0] ? folders[0].id : null);
+ 		os.success();
+-		if (defaultStore.state.uploadFolder) {
++		if (prefer.s.uploadFolder) {
+ 			uploadFolder.value = await misskeyApi('drive/folders/show', {
+-				folderId: defaultStore.state.uploadFolder,
++				folderId: prefer.s.uploadFolder,
+ 			});
+ 		} else {
+ 			uploadFolder.value = null;
+@@ -130,6 +310,78 @@ function chooseUploadFolder() {
+ 	});
+ }
+ 
++async function addWatermarkPreset() {
++	const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkWatermarkEditorDialog.vue').then(x => x.default), {
++		presetEditMode: true,
++		preset: null,
++		layers: [],
++	}, {
++		presetOk: (preset) => {
++			prefer.commit('watermarkPresets', [...prefer.s.watermarkPresets, preset]);
++		},
++		closed: () => dispose(),
++	});
++}
++
++function onUpdateWatermarkPreset(id: string, preset: WatermarkPreset) {
++	const index = prefer.s.watermarkPresets.findIndex(p => p.id === id);
++	if (index !== -1) {
++		prefer.commit('watermarkPresets', [
++			...prefer.s.watermarkPresets.slice(0, index),
++			preset,
++			...prefer.s.watermarkPresets.slice(index + 1),
++		]);
++	}
++}
++
++function onDeleteWatermarkPreset(id: string) {
++	const index = prefer.s.watermarkPresets.findIndex(p => p.id === id);
++	if (index !== -1) {
++		prefer.commit('watermarkPresets', [
++			...prefer.s.watermarkPresets.slice(0, index),
++			...prefer.s.watermarkPresets.slice(index + 1),
++		]);
++
++		if (prefer.s.defaultWatermarkPresetId === id) {
++			prefer.commit('defaultWatermarkPresetId', null);
++		}
++	}
++}
++
++function onUpdateImageFramePreset(id: string, preset: ImageFramePreset) {
++	const index = prefer.s.imageFramePresets.findIndex(p => p.id === id);
++	if (index !== -1) {
++		prefer.commit('imageFramePresets', [
++			...prefer.s.imageFramePresets.slice(0, index),
++			preset,
++			...prefer.s.imageFramePresets.slice(index + 1),
++		]);
++	}
++}
++
++function onDeleteImageFramePreset(id: string) {
++	const index = prefer.s.imageFramePresets.findIndex(p => p.id === id);
++	if (index !== -1) {
++		prefer.commit('imageFramePresets', [
++			...prefer.s.imageFramePresets.slice(0, index),
++			...prefer.s.imageFramePresets.slice(index + 1),
++		]);
++	}
++}
++
++async function addImageFramePreset() {
++	const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkImageFrameEditorDialog.vue').then(x => x.default), {
++		presetEditMode: true,
++		preset: null,
++		params: null,
++	}, {
++		presetOk: (preset) => {
++			prefer.commit('imageFramePresets', [...prefer.s.imageFramePresets, preset]);
++		},
++		closed: () => dispose(),
++	});
++}
++
+ function saveProfile() {
+ 	misskeyApi('i/update', {
+ 		alwaysMarkNsfw: !!alwaysMarkNsfw.value,
+@@ -148,7 +400,7 @@ const headerActions = computed(() => []);
+ 
+ const headerTabs = computed(() => []);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: i18n.ts.drive,
+ 	icon: 'ti ti-cloud',
+ }));

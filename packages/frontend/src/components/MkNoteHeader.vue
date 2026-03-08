@@ -23,10 +23,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<MkA v-else v-user-preview="note.user.id" :class="$style.name" :to="userPage(note.user)">
 		<MkUserName :user="userOf(note)"/>
 	</MkA>
-	<div v-if="note.user.isBot" :class="$style.isBot">{{ note.user.username === 'instance.actor' && note.user.host === null ? 'system' : 'bot' }}</div>
+	<div v-if="note.user.isBot" :class="$style.isBot">{{ note.user.username.includes('.') && note.user.host === null ? 'system' : 'bot' }}</div>
 	<div v-if="!note.anonymouslySendToUser && !note.anonymousChannelUsername" :class="$style.username"><MkAcct :user="note.user"/></div>
 	<div v-if="note.user.badgeRoles" :class="$style.badgeRoles">
-		<img v-for="(role, i) in note.user.badgeRoles" :key="i" v-tooltip="role.name" :class="$style.badgeRole" :src="role.iconUrl!"/>
+		<img v-for="(role, i) in note.user.badgeRoles" :key="i" v-tooltip="role.name" :class="$style.badgeRole" :src="role.iconUrl!" :alt="role.name"/>
 	</div>
 	<div :class="$style.info">
 		<div v-if="mock">
@@ -53,7 +53,7 @@ import { hostname } from '@@/js/config.js';
 import { i18n } from '@/i18n.js';
 import { notePage } from '@/filters/note.js';
 import { userPage } from '@/filters/user.js';
-import { defaultStore } from '@/store.js';
+import { DI } from '@/di.js';
 
 defineProps<{
 	note: Misskey.entities.Note;
@@ -63,7 +63,7 @@ function userOf(note: Misskey.entities.Note): Misskey.entities.User {
 	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
 }
 
-const mock = inject<boolean>('mock', false);
+const mock = inject(DI.mock, false);
 </script>
 
 <style lang="scss" module>

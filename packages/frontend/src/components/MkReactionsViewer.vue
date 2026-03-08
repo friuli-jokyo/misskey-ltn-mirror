@@ -4,35 +4,56 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<TransitionGroup
-	:enterActiveClass="defaultStore.state.animation ? $style.transition_x_enterActive : ''"
-	:leaveActiveClass="defaultStore.state.animation ? $style.transition_x_leaveActive : ''"
-	:enterFromClass="defaultStore.state.animation ? $style.transition_x_enterFrom : ''"
-	:leaveToClass="defaultStore.state.animation ? $style.transition_x_leaveTo : ''"
-	:moveClass="defaultStore.state.animation ? $style.transition_x_move : ''"
+<component
+	:is="prefer.s.animation ? TransitionGroup : 'div'"
+	:enterActiveClass="$style.transition_x_enterActive"
+	:leaveActiveClass="$style.transition_x_leaveActive"
+	:enterFromClass="$style.transition_x_enterFrom"
+	:leaveToClass="$style.transition_x_leaveTo"
+	:moveClass="$style.transition_x_move"
 	tag="div" :class="$style.root"
 >
-	<XReaction v-for="[reaction, count] in reactions" :key="reaction" :reaction="reaction" :count="count" :isInitial="initialReactions.has(reaction)" :note="note" :users="reactedUsers.get(reaction)" @reactionToggled="onMockToggleReaction"/>
-	<slot v-if="hasMoreReactions" name="more"/>
-</TransitionGroup>
+	<XReaction
+		v-for="[reaction, count] in _reactions"
+		:key="reaction"
+		:reaction="reaction"
+		:reactionEmojis="props.reactionEmojis"
+		:count="count"
+		:isInitial="initialReactions.has(reaction)"
+		:noteId="props.noteId"
+		:myReaction="props.myReaction"
+		:users="reactedUsers.get(reaction)"
+		:noteAnonymousChannelUsername="props.noteAnonymousChannelUsername"
+		@reactionToggled="onMockToggleReaction"
+	/>
+	<slot v-if="hasMoreReactions" name="more"></slot>
+</component>
 </template>
 
 <script lang="ts" setup>
 import * as Misskey from 'misskey-js';
 import { inject, nextTick, watch, ref } from 'vue';
+import { TransitionGroup } from 'vue';
+import { isSupportedEmoji } from '@@/js/emojilist.js';
 import XReaction from '@/components/MkReactionsViewer.reaction.vue';
+import { $i } from '@/i.js';
+import { prefer } from '@/preferences.js';
 import { customEmojisMap } from '@/custom-emojis.js';
-import { misskeyApiGet } from '@/scripts/misskey-api.js';
-import { defaultStore } from '@/store.js';
+import { misskeyApiGet } from '@/utility/misskey-api.js';
+import { DI } from '@/di.js';
 
 const props = withDefaults(defineProps<{
-	note: Misskey.entities.Note;
+	noteId: Misskey.entities.Note['id'];
+	reactions: Misskey.entities.Note['reactions'];
+	reactionEmojis: Misskey.entities.Note['reactionEmojis'];
+	myReaction: Misskey.entities.Note['myReaction'];
+	noteAnonymousChannelUsername?: string | null;
 	maxNumber?: number;
 }>(), {
 	maxNumber: Infinity,
 });
 
-const mock = inject<boolean>('mock', false);
+const mock = inject(DI.mock, false);
 
 const emit = defineEmits<{
 	(ev: 'mockUpdateMyReaction', emoji: string, delta: number): void;
@@ -42,30 +63,36 @@ const sleep = window.requestIdleCallback as unknown
 	? () => new Promise(resolve => requestIdleCallback(resolve))
 	: () => nextTick().then(() => new Promise(resolve => setTimeout(resolve, 0)));
 
-const initialReactions = new Set(Object.keys(props.note.reactions));
+const initialReactions = new Set(Object.keys(props.reactions));
 const encoder = new TextEncoder();
 
-const reactions = ref<[string, number][]>([]);
+const _reactions = ref<[string, number][]>([]);
 const hasMoreReactions = ref(false);
 const reactedUsers = ref<Map<string, Misskey.entities.UserLite[]>>(new Map());
 
 let abortController = new AbortController();
 
-if (props.note.myReaction && !Object.keys(reactions.value).includes(props.note.myReaction)) {
-	reactions.value[props.note.myReaction] = props.note.reactions[props.note.myReaction];
+if (props.myReaction != null && !(props.myReaction in props.reactions)) {
+	_reactions.value.push([props.myReaction, props.reactions[props.myReaction]]);
 }
 
 function onMockToggleReaction(emoji: string, count: number) {
 	if (!mock) return;
 
-	const i = reactions.value.findIndex((item) => item[0] === emoji);
+	const i = _reactions.value.findIndex((item) => item[0] === emoji);
 	if (i < 0) return;
 
-	emit('mockUpdateMyReaction', emoji, (count - reactions.value[i][1]));
+	emit('mockUpdateMyReaction', emoji, (count - _reactions.value[i][1]));
+}
+
+function canReact(reaction: string) {
+	if (!$i) return false;
+	// TODO: CheckPermissions
+	return !reaction.match(/@\w/) && (customEmojisMap.has(reaction) || isSupportedEmoji(reaction));
 }
 
 function getScale(name: string): number {
-	if (!defaultStore.state.adaptiveReactionsDisplaySize) {
+	if (!prefer.s.adaptiveReactionsDisplaySize) {
 		return 1;
 	}
 	const match = name.match(/(?<=^:)\w+(?=@\.:$)/);
@@ -76,15 +103,15 @@ function getScale(name: string): number {
 	return emoji?.conspicuousScale || 1;
 }
 
-watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumber]) => {
+watch([() => props.reactions, () => props.maxNumber], ([newSource, maxNumber]) => {
 	let newReactions: [string, number][] = [];
 	hasMoreReactions.value = Object.keys(newSource).length > maxNumber;
 
-	for (let i = 0; i < reactions.value.length; i++) {
-		const reaction = reactions.value[i][0];
+	for (let i = 0; i < _reactions.value.length; i++) {
+		const reaction = _reactions.value[i][0];
 		if (reaction in newSource && newSource[reaction] !== 0) {
-			reactions.value[i][1] = newSource[reaction];
-			newReactions.push(reactions.value[i]);
+			_reactions.value[i][1] = newSource[reaction];
+			newReactions.push(_reactions.value[i]);
 		}
 	}
 
@@ -92,30 +119,38 @@ watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumbe
 	newReactions = [
 		...newReactions,
 		...Object.entries(newSource)
-			.sort((a, b) => (getScale(b[0]) - getScale(a[0])) || (b[1] - a[1]))
+			.sort(([emojiA, countA], [emojiB, countB]) => {
+				if (prefer.s.showAvailableReactionsFirstInNote) {
+					if (!canReact(emojiA) && canReact(emojiB)) return 1;
+					if (canReact(emojiA) && !canReact(emojiB)) return -1;
+					return (getScale(emojiB) - getScale(emojiA)) || (countB - countA);
+				} else {
+					return (getScale(emojiB) - getScale(emojiA)) || (countB - countA);
+				}
+			})
 			.filter(([y], i) => i < maxNumber && !newReactionsNames.includes(y)),
 	];
 
 	newReactions = newReactions.slice(0, props.maxNumber);
 
-	if (props.note.myReaction && !newReactions.map(([x]) => x).includes(props.note.myReaction)) {
-		newReactions.push([props.note.myReaction, newSource[props.note.myReaction]]);
+	if (props.myReaction && !newReactions.map(([x]) => x).includes(props.myReaction)) {
+		newReactions.push([props.myReaction, newSource[props.myReaction]]);
 	}
 
-	reactions.value = newReactions;
+	_reactions.value = newReactions;
 
-	if (defaultStore.state.showReactedUserAvatars) {
+	if (prefer.s.showReactedUserAvatars) {
 		abortController.abort();
 		abortController = new AbortController();
 		sleep()
-			.then(() => crypto.subtle.digest('SHA-1', encoder.encode(JSON.stringify(reactions.value))))
+			.then(() => crypto.subtle.digest('SHA-1', encoder.encode(JSON.stringify(_reactions.value))))
 			.then(async digest => {
 				const _cacheKey_ = String.fromCharCode.apply(null, new Uint16Array(digest) as unknown as number[]);
 				const data: Misskey.entities.NoteReaction[] = [];
 				let untilId: string | undefined;
 				for (;;) {
 					const page = await misskeyApiGet('notes/reactions', {
-						noteId: props.note.id,
+						noteId: props.noteId,
 						limit: 100,
 						untilId,
 						_cacheKey_,
@@ -159,8 +194,10 @@ watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumbe
 }
 
 .root {
-	margin: 4px -2px 0 -2px;
-	contain: layout;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
 
 	&:empty {
 		display: none;

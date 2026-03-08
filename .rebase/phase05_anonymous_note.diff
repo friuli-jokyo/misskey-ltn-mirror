@@ -1,0 +1,2648 @@
+diff --git a/packages/backend/migration/1700526757415-anonymous-note.js b/packages/backend/migration/1700526757415-anonymous-note.js
+new file mode 100644
+index 0000000000..831d0325be
+--- /dev/null
++++ b/packages/backend/migration/1700526757415-anonymous-note.js
+@@ -0,0 +1,15 @@
++export class AnonymousNote1700526757415 {
++    name = 'AnonymousNote1700526757415'
++
++    async up(queryRunner) {
++        await queryRunner.query(`ALTER TABLE "note" ADD "anonymouslySendToUserId" character varying(32)`);
++        await queryRunner.query(`CREATE INDEX "IDX_1e9b0b6b3b5f5e2b2f7d7c6f0e" ON "note" ("anonymouslySendToUserId") `);
++        await queryRunner.query(`ALTER TABLE "note" ADD CONSTRAINT "FK_1e9b0b6b3b5f5e2b2f7d7c6f0e9" FOREIGN KEY ("anonymouslySendToUserId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
++    }
++
++    async down(queryRunner) {
++        await queryRunner.query(`ALTER TABLE "note" DROP CONSTRAINT "FK_1e9b0b6b3b5f5e2b2f7d7c6f0e9"`);
++        await queryRunner.query(`DROP INDEX "IDX_1e9b0b6b3b5f5e2b2f7d7c6f0e"`);
++        await queryRunner.query(`ALTER TABLE "note" DROP COLUMN "anonymouslySendToUserId"`);
++    }
++}
+diff --git a/packages/backend/src/core/InstanceActorService.ts b/packages/backend/src/core/InstanceActorService.ts
+index 22c47297a3..7ed1b5a981 100644
+--- a/packages/backend/src/core/InstanceActorService.ts
++++ b/packages/backend/src/core/InstanceActorService.ts
+@@ -12,7 +12,7 @@ import { DI } from '@/di-symbols.js';
+ import { CreateSystemUserService } from '@/core/CreateSystemUserService.js';
+ import { bindThis } from '@/decorators.js';
+ 
+-const ACTOR_USERNAME = 'instance.actor' as const;
++export const ACTOR_USERNAME = 'instance.actor' as const;
+ 
+ @Injectable()
+ export class InstanceActorService {
+diff --git a/packages/backend/src/core/NoteCreateService.ts b/packages/backend/src/core/NoteCreateService.ts
+index 8a79908e82..20ea17e591 100644
+--- a/packages/backend/src/core/NoteCreateService.ts
++++ b/packages/backend/src/core/NoteCreateService.ts
+@@ -132,6 +132,8 @@ type Option = {
+ 	files?: MiDriveFile[] | null;
+ 	poll?: IPoll | null;
+ 	localOnly?: boolean | null;
++	anonymouslySendToUser?: MinimumUser | null;
++	anonymousChannelUsername?: string | null;
+ 	reactionAcceptance?: MiNote['reactionAcceptance'];
+ 	cw?: string | null;
+ 	visibility?: string;
+@@ -231,6 +233,23 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 		isBot: MiUser['isBot'];
+ 		isCat: MiUser['isCat'];
+ 	}, data: Option, silent = false): Promise<MiNote> {
++		if (data.anonymouslySendToUser) {
++			data.files = null; // file オブジェクトを照会すると送信元を特定できるため
++			data.localOnly = true;
++			data.visibility = 'public';
++			data.visibleUsers = null;
++			data.channel = null;
++			if (data.anonymouslySendToUser.host != null) {
++				throw new Error('anonymouslySendToUser.host must be null');
++			}
++			if (user.host != null) {
++				throw new Error('user.host must be null');
++			}
++			if (!data.text || !data.text.startsWith(`@${data.anonymouslySendToUser.username} `)) {
++				throw new Error('text must start with `@username `');
++			}
++		}
++
+ 		// チャンネル外にリプライしたら対象のスコープに合わせる
+ 		// (クライアントサイドでやっても良い処理だと思うけどとりあえずサーバーサイドで)
+ 		if (data.reply && data.channel && data.reply.channelId !== data.channel.id) {
+@@ -263,6 +282,14 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 			}
+ 		}
+ 
++		if (data.channel?.requirePublicWriteAccess && !(await this.roleService.getUserPolicies(user.id)).canPublicNote) {
++			throw new Error('channel requires public write access');
++		}
++
++		if (data.anonymousChannelUsername) {
++			data.files = null; // file オブジェクトを照会すると送信元を特定できるため
++		}
++
+ 		const hasProhibitedWords = this.checkProhibitedWordsContain({
+ 			cw: data.cw,
+ 			text: data.text,
+@@ -297,7 +324,9 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 					}
+ 
+ 					// Renote対象がfollowersならfollowersにする
+-					data.visibility = 'followers';
++					if (data.visibility !== 'specified') {
++						data.visibility = 'followers';
++					}
+ 					break;
+ 				case 'specified':
+ 					// specified / direct noteはreject
+@@ -337,13 +366,17 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 				data.text = data.text.slice(0, DB_MAX_NOTE_TEXT_LENGTH);
+ 			}
+ 			data.text = data.text.trim();
+-			if (data.text === '') {
++			if (!data.text) {
+ 				data.text = null;
+ 			}
+ 		} else {
+ 			data.text = null;
+ 		}
+ 
++		if (data.text == null && data.files == null && data.poll == null && data.renote == null) {
++			throw new Error('text or files or poll or renote is required');
++		}
++
+ 		let tags = data.apHashtags;
+ 		let emojis = data.apEmojis;
+ 		let mentionedUsers = data.apMentions;
+@@ -392,6 +425,10 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 			throw new IdentifiableError('9f466dab-c856-48cd-9e65-ff90ff750580', 'Note contains too many mentions');
+ 		}
+ 
++		if (data.anonymouslySendToUser && data.visibility !== 'public') {
++			throw new Error('cannot send anonymously to non-public note');
++		}
++
+ 		const note = await this.insertNote(user, data, tags, emojis, mentionedUsers);
+ 
+ 		setImmediate('post created', { signal: this.#shutdownController.signal }).then(
+@@ -415,6 +452,8 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 					? data.reply.threadId
+ 					: data.reply.id
+ 				: null,
++			anonymouslySendToUserId: data.anonymouslySendToUser ? data.anonymouslySendToUser.id : null,
++			anonymousChannelUsername: data.anonymousChannelUsername ?? null,
+ 			name: data.name,
+ 			text: data.text,
+ 			hasPoll: data.poll != null,
+@@ -508,7 +547,7 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 		isBot: MiUser['isBot'];
+ 	}, data: Option, silent: boolean, tags: string[], mentionedUsers: MinimumUser[]) {
+ 		this.notesChart.update(note, true);
+-		if (note.visibility !== 'specified' && (this.meta.enableChartsForRemoteUser || (user.host == null))) {
++		if (note.visibility !== 'specified' && (this.meta.enableChartsForRemoteUser || (user.host == null)) && !note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
+ 			this.perUserNotesChart.update(user, note, true);
+ 		}
+ 
+@@ -530,7 +569,9 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 		}
+ 
+ 		// Increment notes count (user)
+-		this.incNotesCountOfUser(user);
++		if (!note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
++			this.incNotesCountOfUser(user);
++		}
+ 
+ 		this.pushToTl(note, user);
+ 
+@@ -540,7 +581,7 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 			this.saveReply(data.reply, note);
+ 		}
+ 
+-		if (data.reply == null) {
++		if (data.reply == null && note.anonymouslySendToUserId == null && note.anonymousChannelUsername == null) {
+ 			// TODO: キャッシュ
+ 			this.followingsRepository.findBy({
+ 				followeeId: user.id,
+@@ -565,7 +606,7 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 			});
+ 		}
+ 
+-		if (data.renote && data.renote.userId !== user.id && !user.isBot) {
++		if (data.renote && (data.anonymouslySendToUser || data.channel?.anonymousStrategy || data.renote.userId !== user.id && !user.isBot)) {
+ 			this.incRenoteCount(data.renote);
+ 		}
+ 
+@@ -580,7 +621,7 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 		}
+ 
+ 		if (!silent) {
+-			if (this.userEntityService.isLocalUser(user)) this.activeUsersChart.write(user);
++			if (!data.anonymouslySendToUser && !data.channel?.anonymousStrategy && this.userEntityService.isLocalUser(user)) this.activeUsersChart.write(user);
+ 
+ 			// 未読通知を作成
+ 			if (data.visibility === 'specified') {
+@@ -612,11 +653,21 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 
+ 			this.globalEventService.publishNotesStream(noteObj);
+ 
+-			this.roleService.addNoteToRoleTimeline(noteObj);
++			if (!note.anonymouslySendToUserId) {
++				this.roleService.addNoteToRoleTimeline(noteObj);
++				this.webhookService.getActiveWebhooks().then(webhooks => {
++					webhooks = webhooks.filter(x => x.userId === user.id && x.on.includes('note'));
++					for (const webhook of webhooks) {
++						this.queueService.webhookDeliver(webhook, 'note', {
++							note: noteObj,
++						});
++					}
++				});
++			}
+ 
+ 			this.webhookService.enqueueUserWebhook(user.id, 'note', { note: noteObj });
+ 
+-			const nm = new NotificationManager(this.mutingsRepository, this.notificationService, user, note);
++			const nm = new NotificationManager(this.mutingsRepository, this.notificationService, noteObj.user, note);
+ 
+ 			await this.createMentionedEvents(mentionedUsers, note, nm);
+ 
+@@ -752,7 +803,9 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 			} else {
+ 				if (renote.visibility === 'public' && renote.userHost == null && renote.replyId == null) {
+ 					this.featuredService.updateGlobalNotesRanking(renote.id, 5);
+-					this.featuredService.updatePerUserNotesRanking(renote.userId, renote.id, 5);
++					if (!renote.anonymouslySendToUserId) {
++						this.featuredService.updatePerUserNotesRanking(renote.userId, renote.id, 5);
++					}
+ 				}
+ 			}
+ 		}
+@@ -844,7 +897,10 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 		if (note.channelId) {
+ 			this.fanoutTimelineService.push(`channelTimeline:${note.channelId}`, note.id, this.config.perChannelMaxNoteCacheCount, r);
+ 
+-			this.fanoutTimelineService.push(`userTimelineWithChannel:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax : this.meta.perRemoteUserUserTimelineCacheMax, r);
++			if (!note.anonymousChannelUsername) {
++				// 匿名化戦略が有効なチャンネルのノートは、その外のタイムラインに流すと、どのチャンネル由来かが分かりづらいため、流さない
++				this.fanoutTimelineService.push(`userTimelineWithChannel:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax : this.meta.perRemoteUserUserTimelineCacheMax, r);
++			}
+ 
+ 			const channelFollowings = await this.channelFollowingsRepository.find({
+ 				where: {
+@@ -859,7 +915,7 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 					this.fanoutTimelineService.push(`homeTimelineWithFiles:${channelFollowing.followerId}`, note.id, this.meta.perUserHomeTimelineCacheMax / 2, r);
+ 				}
+ 			}
+-		} else {
++		} else if (!note.anonymouslySendToUserId) {
+ 			// TODO: キャッシュ？
+ 			// eslint-disable-next-line prefer-const
+ 			let [followings, userListMemberships] = await Promise.all([
+@@ -888,6 +944,7 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 			for (const following of followings) {
+ 				// 基本的にvisibleUserIdsには自身のidが含まれている前提であること
+ 				if (note.visibility === 'specified' && !note.visibleUserIds.some(v => v === following.followerId)) continue;
++				if (note.anonymousChannelUsername) continue;
+ 
+ 				// 「自分自身への返信 or そのフォロワーへの返信」のどちらでもない場合
+ 				if (isReply(note, following.followerId)) {
+@@ -907,6 +964,7 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 					note.userId !== userListMembership.userListUserId &&
+ 					!note.visibleUserIds.some(v => v === userListMembership.userListUserId)
+ 				) continue;
++				if (note.anonymousChannelUsername) continue;
+ 
+ 				// 「自分自身への返信 or そのリストの作成者への返信」のどちらでもない場合
+ 				if (isReply(note, userListMembership.userListUserId)) {
+@@ -940,9 +998,11 @@ export class NoteCreateService implements OnApplicationShutdown {
+ 					}
+ 				}
+ 			} else {
+-				this.fanoutTimelineService.push(`userTimeline:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax : this.meta.perRemoteUserUserTimelineCacheMax, r);
+-				if (note.fileIds.length > 0) {
+-					this.fanoutTimelineService.push(`userTimelineWithFiles:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax / 2 : this.meta.perRemoteUserUserTimelineCacheMax / 2, r);
++				if (!note.anonymousChannelUsername) {
++					this.fanoutTimelineService.push(`userTimeline:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax : this.meta.perRemoteUserUserTimelineCacheMax, r);
++					if (note.fileIds.length > 0) {
++						this.fanoutTimelineService.push(`userTimelineWithFiles:${user.id}`, note.id, note.userHost == null ? this.meta.perLocalUserUserTimelineCacheMax / 2 : this.meta.perRemoteUserUserTimelineCacheMax / 2, r);
++					}
+ 				}
+ 
+ 				if (note.visibility === 'public' && note.userHost == null) {
+diff --git a/packages/backend/src/core/NoteDeleteService.ts b/packages/backend/src/core/NoteDeleteService.ts
+index 4ecd2592b2..e0826bb999 100644
+--- a/packages/backend/src/core/NoteDeleteService.ts
++++ b/packages/backend/src/core/NoteDeleteService.ts
+@@ -102,7 +102,7 @@ export class NoteDeleteService {
+ 			//#endregion
+ 
+ 			this.notesChart.update(note, false);
+-			if (this.meta.enableChartsForRemoteUser || (user.host == null)) {
++			if (this.meta.enableChartsForRemoteUser || (user.host == null) && !note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
+ 				this.perUserNotesChart.update(user, note, false);
+ 			}
+ 
+@@ -128,7 +128,7 @@ export class NoteDeleteService {
+ 			userId: user.id,
+ 		});
+ 
+-		if (deleter && (note.userId !== deleter.id)) {
++		if (deleter && ((note.userId !== deleter.id) || note.anonymouslySendToUserId || note.anonymousChannelUsername)) {
+ 			const user = await this.usersRepository.findOneByOrFail({ id: note.userId });
+ 			this.moderationLogService.log(deleter, 'deleteNote', {
+ 				noteId: note.id,
+diff --git a/packages/backend/src/core/NotePiningService.ts b/packages/backend/src/core/NotePiningService.ts
+index d38b48b65d..7357319487 100644
+--- a/packages/backend/src/core/NotePiningService.ts
++++ b/packages/backend/src/core/NotePiningService.ts
+@@ -4,6 +4,7 @@
+  */
+ 
+ import { Inject, Injectable } from '@nestjs/common';
++import { IsNull } from 'typeorm';
+ import { DI } from '@/di-symbols.js';
+ import type { NotesRepository, UserNotePiningsRepository, UsersRepository } from '@/models/_.js';
+ import { IdentifiableError } from '@/misc/identifiable-error.js';
+@@ -54,6 +55,8 @@ export class NotePiningService {
+ 		const note = await this.notesRepository.findOneBy({
+ 			id: noteId,
+ 			userId: user.id,
++			anonymouslySendToUserId: IsNull(),
++			anonymousChannelUsername: IsNull(),
+ 		});
+ 
+ 		if (note == null) {
+@@ -93,6 +96,8 @@ export class NotePiningService {
+ 		const note = await this.notesRepository.findOneBy({
+ 			id: noteId,
+ 			userId: user.id,
++			anonymouslySendToUserId: IsNull(),
++			anonymousChannelUsername: IsNull(),
+ 		});
+ 
+ 		if (note == null) {
+diff --git a/packages/backend/src/core/NoteReadService.ts b/packages/backend/src/core/NoteReadService.ts
+index 181c9f7649..eba5641884 100644
+--- a/packages/backend/src/core/NoteReadService.ts
++++ b/packages/backend/src/core/NoteReadService.ts
+@@ -15,6 +15,7 @@ import { GlobalEventService } from '@/core/GlobalEventService.js';
+ import type { NoteUnreadsRepository, MutingsRepository, NoteThreadMutingsRepository } from '@/models/_.js';
+ import { bindThis } from '@/decorators.js';
+ import { trackPromise } from '@/misc/promise-tracker.js';
++import { InstanceActorService } from './InstanceActorService.js';
+ 
+ @Injectable()
+ export class NoteReadService implements OnApplicationShutdown {
+@@ -32,6 +33,7 @@ export class NoteReadService implements OnApplicationShutdown {
+ 
+ 		private idService: IdService,
+ 		private globalEventService: GlobalEventService,
++		private instanceActorService: InstanceActorService,
+ 	) {
+ 	}
+ 
+@@ -63,7 +65,7 @@ export class NoteReadService implements OnApplicationShutdown {
+ 			userId: userId,
+ 			isSpecified: params.isSpecified,
+ 			isMentioned: params.isMentioned,
+-			noteUserId: note.userId,
++			noteUserId: note.anonymouslySendToUserId || note.anonymousChannelUsername ? (await this.instanceActorService.getInstanceActor()).id : note.userId,
+ 		};
+ 
+ 		await this.noteUnreadsRepository.insert(unread);
+diff --git a/packages/backend/src/core/ReactionService.ts b/packages/backend/src/core/ReactionService.ts
+index 6f9fe53937..d6fdc98305 100644
+--- a/packages/backend/src/core/ReactionService.ts
++++ b/packages/backend/src/core/ReactionService.ts
+@@ -105,7 +105,7 @@ export class ReactionService {
+ 	@bindThis
+ 	public async create(user: { id: MiUser['id']; host: MiUser['host']; isBot: MiUser['isBot'] }, note: MiNote, _reaction?: string | null) {
+ 		// Check blocking
+-		if (note.userId !== user.id) {
++		if (note.userId !== user.id && !note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
+ 			const blocked = await this.userBlockingService.checkBlocked(note.userId, user.id);
+ 			if (blocked) {
+ 				throw new IdentifiableError('e70412a4-7197-4726-8e74-f3e0deb92aa7');
+@@ -222,7 +222,9 @@ export class ReactionService {
+ 			} else {
+ 				if (note.visibility === 'public' && note.userHost == null && note.replyId == null) {
+ 					this.featuredService.updateGlobalNotesRanking(note.id, 1);
+-					this.featuredService.updatePerUserNotesRanking(note.userId, note.id, 1);
++					if (!note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
++						this.featuredService.updatePerUserNotesRanking(note.userId, note.id, 1);
++					}
+ 				}
+ 			}
+ 		}
+diff --git a/packages/backend/src/core/entities/NoteEntityService.ts b/packages/backend/src/core/entities/NoteEntityService.ts
+index 97f1c3d739..e44bc2cfb5 100644
+--- a/packages/backend/src/core/entities/NoteEntityService.ts
++++ b/packages/backend/src/core/entities/NoteEntityService.ts
+@@ -21,6 +21,7 @@ import type { CustomEmojiService } from '../CustomEmojiService.js';
+ import type { ReactionService } from '../ReactionService.js';
+ import type { UserEntityService } from './UserEntityService.js';
+ import type { DriveFileEntityService } from './DriveFileEntityService.js';
++import type { InstanceActorService } from '../InstanceActorService.js';
+ 
+ // is-renote.tsとよしなにリンク
+ function isPureRenote(note: MiNote): note is MiNote & { renoteId: MiNote['id']; renote: MiNote } {
+@@ -54,6 +55,7 @@ export class NoteEntityService implements OnModuleInit {
+ 	private reactionService: ReactionService;
+ 	private reactionsBufferingService: ReactionsBufferingService;
+ 	private idService: IdService;
++	private instanceActorService: InstanceActorService;
+ 	private noteLoader = new DebounceLoader(this.findNoteOrFail);
+ 
+ 	constructor(
+@@ -99,6 +101,7 @@ export class NoteEntityService implements OnModuleInit {
+ 		this.reactionService = this.moduleRef.get('ReactionService');
+ 		this.reactionsBufferingService = this.moduleRef.get('ReactionsBufferingService');
+ 		this.idService = this.moduleRef.get('IdService');
++		this.instanceActorService = this.moduleRef.get('InstanceActorService');
+ 	}
+ 
+ 	@bindThis
+@@ -399,8 +402,8 @@ export class NoteEntityService implements OnModuleInit {
+ 		const packed: Packed<'Note'> = await awaitAll({
+ 			id: note.id,
+ 			createdAt: this.idService.parse(note.id).date.toISOString(),
+-			userId: note.userId,
+-			user: packedUsers?.get(note.userId) ?? this.userEntityService.pack(note.user ?? note.userId, me),
++			userId: note.anonymouslySendToUserId || note.anonymousChannelUsername ? this.instanceActorService.getInstanceActor().then(user => user.id) : note.userId,
++			user: note.anonymouslySendToUserId || note.anonymousChannelUsername ? this.instanceActorService.getInstanceActor().then(user => this.userEntityService.pack(user, me)) : packedUsers?.get(note.userId) ?? this.userEntityService.pack(note.user ?? note.userId, me),
+ 			text: text,
+ 			cw: note.cw,
+ 			visibility: note.visibility,
+@@ -419,6 +422,10 @@ export class NoteEntityService implements OnModuleInit {
+ 			files: packedFiles != null ? this.packAttachedFiles(note.fileIds, packedFiles) : this.driveFileEntityService.packManyByIds(note.fileIds),
+ 			replyId: note.replyId,
+ 			renoteId: note.renoteId,
++			anonymouslySendToUserId: note.anonymouslySendToUserId,
++			anonymouslySendToUser: note.anonymouslySendToUserId ? this.userEntityService.pack(note.anonymouslySendToUser ?? note.anonymouslySendToUserId, me, {
++				detail: false,
++			}) : undefined,
+ 			channelId: note.channelId ?? undefined,
+ 			channel: channel ? {
+ 				id: channel.id,
+@@ -428,6 +435,7 @@ export class NoteEntityService implements OnModuleInit {
+ 				allowRenoteToExternal: channel.allowRenoteToExternal,
+ 				userId: channel.userId,
+ 			} : undefined,
++			anonymousChannelUsername: note.anonymousChannelUsername ?? undefined,
+ 			mentions: note.mentions.length > 0 ? note.mentions : undefined,
+ 			uri: note.uri ?? undefined,
+ 			url: note.url ?? undefined,
+diff --git a/packages/backend/src/misc/is-user-related.ts b/packages/backend/src/misc/is-user-related.ts
+index 862d6e6a38..d4a330a8c4 100644
+--- a/packages/backend/src/misc/is-user-related.ts
++++ b/packages/backend/src/misc/is-user-related.ts
+@@ -3,22 +3,16 @@
+  * SPDX-License-Identifier: AGPL-3.0-only
+  */
+ 
+-export function isUserRelated(note: any, userIds: Set<string>, ignoreAuthor = false): boolean {
+-	if (!note) {
+-		return false;
+-	}
+-
+-	if (userIds.has(note.userId) && !ignoreAuthor) {
+-		return true;
+-	}
+-
+-	if (note.reply != null && note.reply.userId !== note.userId && userIds.has(note.reply.userId)) {
+-		return true;
+-	}
++import { Note } from 'misskey-js/entities.js';
+ 
+-	if (note.renote != null && note.renote.userId !== note.userId && userIds.has(note.renote.userId)) {
+-		return true;
+-	}
++function isNoteAuthorRelated(note: Partial<Note>, userIds: Set<string>): boolean {
++	return !note.anonymousChannelUsername && !note.anonymouslySendToUserId && note.userId != null && userIds.has(note.userId);
++}
+ 
+-	return false;
++export function isUserRelated(note: any, userIds: Set<string>, ignoreAuthor = false): boolean {
++	return !!note && (
++		!ignoreAuthor && isNoteAuthorRelated(note, userIds)
++		|| note.reply != null && isNoteAuthorRelated(note.reply, userIds)
++		|| note.renote != null && isNoteAuthorRelated(note.renote, userIds)
++	);
+ }
+diff --git a/packages/backend/src/models/Note.ts b/packages/backend/src/models/Note.ts
+index 9a95c6faab..ed04998996 100644
+--- a/packages/backend/src/models/Note.ts
++++ b/packages/backend/src/models/Note.ts
+@@ -182,6 +182,25 @@ export class MiNote {
+ 	})
+ 	public hasPoll: boolean;
+ 
++	@Index()
++	@Column({
++		...id(),
++		nullable: true,
++	})
++	public anonymouslySendToUserId: MiUser['id'] | null;
++
++	@ManyToOne(type => MiUser, {
++		onDelete: 'CASCADE',
++	})
++	@JoinColumn()
++	public anonymouslySendToUser: MiUser | null;
++
++	@Column('varchar', {
++		length: 128,
++		nullable: true,
++	})
++	public anonymousChannelUsername: string | null;
++
+ 	@Index()
+ 	@Column({
+ 		...id(),
+diff --git a/packages/backend/src/models/json-schema/note.ts b/packages/backend/src/models/json-schema/note.ts
+index 432c096e48..af0528e72d 100644
+--- a/packages/backend/src/models/json-schema/note.ts
++++ b/packages/backend/src/models/json-schema/note.ts
+@@ -62,6 +62,21 @@ export const packedNoteSchema = {
+ 			optional: true, nullable: true,
+ 			ref: 'Note',
+ 		},
++		anonymouslySendToUserId: {
++			type: 'string',
++			optional: true, nullable: true,
++			format: 'id',
++			example: 'xxxxxxxxxx',
++		},
++		anonymouslySendToUser: {
++			type: 'object',
++			optional: true, nullable: true,
++			ref: 'UserLite',
++		},
++		anonymousChannelUsername: {
++			type: 'string',
++			optional: true, nullable: false,
++		},
+ 		isHidden: {
+ 			type: 'boolean',
+ 			optional: true, nullable: false,
+diff --git a/packages/backend/src/server/api/endpoints/notes/create.ts b/packages/backend/src/server/api/endpoints/notes/create.ts
+index 253a360815..cce2eefca5 100644
+--- a/packages/backend/src/server/api/endpoints/notes/create.ts
++++ b/packages/backend/src/server/api/endpoints/notes/create.ts
+@@ -3,11 +3,12 @@
+  * SPDX-License-Identifier: AGPL-3.0-only
+  */
+ 
++import crypto from 'node:crypto';
+ import ms from 'ms';
+-import { In } from 'typeorm';
++import { In, IsNull, LessThanOrEqual, Not, Or } from 'typeorm';
+ import { Inject, Injectable } from '@nestjs/common';
+ import type { MiUser } from '@/models/User.js';
+-import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository } from '@/models/_.js';
++import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository, ChannelAnonymousSaltsRepository } from '@/models/_.js';
+ import type { MiDriveFile } from '@/models/DriveFile.js';
+ import type { MiNote } from '@/models/Note.js';
+ import type { MiChannel } from '@/models/Channel.js';
+@@ -18,6 +19,7 @@ import { NoteCreateService } from '@/core/NoteCreateService.js';
+ import { DI } from '@/di-symbols.js';
+ import { isQuote, isRenote } from '@/misc/is-renote.js';
+ import { IdentifiableError } from '@/misc/identifiable-error.js';
++import { IdService } from '@/core/IdService.js';
+ import { ApiError } from '../../error.js';
+ 
+ export const meta = {
+@@ -149,6 +151,7 @@ export const paramDef = {
+ 		replyId: { type: 'string', format: 'misskey:id', nullable: true },
+ 		renoteId: { type: 'string', format: 'misskey:id', nullable: true },
+ 		channelId: { type: 'string', format: 'misskey:id', nullable: true },
++		anonymouslySendToUserId: { type: 'string', format: 'misskey:id', nullable: true },
+ 
+ 		// anyOf内にバリデーションを書いても最初の一つしかチェックされない
+ 		// See https://github.com/misskey-dev/misskey/pull/10082
+@@ -238,6 +241,10 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 		@Inject(DI.channelsRepository)
+ 		private channelsRepository: ChannelsRepository,
+ 
++		@Inject(DI.channelAnonymousSaltsRepository)
++		private channelAnonymousSaltsRepository: ChannelAnonymousSaltsRepository,
++
++		private idService: IdService,
+ 		private noteEntityService: NoteEntityService,
+ 		private noteCreateService: NoteCreateService,
+ 	) {
+@@ -278,7 +285,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				}
+ 
+ 				// Check blocking
+-				if (renote.userId !== me.id) {
++				if (renote.userId !== me.id && !renote.anonymouslySendToUserId && !renote.anonymousChannelUsername) {
+ 					const blockExist = await this.blockingsRepository.exists({
+ 						where: {
+ 							blockerId: renote.userId,
+@@ -328,7 +335,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				}
+ 
+ 				// Check blocking
+-				if (reply.userId !== me.id) {
++				if (reply.userId !== me.id && !reply.anonymouslySendToUserId && !reply.anonymousChannelUsername) {
+ 					const blockExist = await this.blockingsRepository.exists({
+ 						where: {
+ 							blockerId: reply.userId,
+@@ -352,7 +359,15 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 			}
+ 
+ 			let channel: MiChannel | null = null;
+-			if (ps.channelId != null) {
++			if (reply != null) {
++				if (reply.channelId != null) {
++					channel = await this.channelsRepository.findOneBy({ id: reply.channelId, isArchived: false });
++
++					if (channel == null) {
++						throw new ApiError(meta.errors.noSuchChannel);
++					}
++				}
++			} else if (ps.channelId != null) {
+ 				channel = await this.channelsRepository.findOneBy({ id: ps.channelId, isArchived: false });
+ 
+ 				if (channel == null) {
+@@ -360,10 +375,95 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				}
+ 			}
+ 
++			let anonymouslySendToUser: MiUser | null = null;
++			if (ps.anonymouslySendToUserId != null) {
++				anonymouslySendToUser = await this.usersRepository.findOneBy({ id: ps.anonymouslySendToUserId });
++
++				if (anonymouslySendToUser == null) {
++					throw new ApiError(meta.errors.noSuchReplyTarget);
++				}
++				// Check blocking
++				if (anonymouslySendToUser.id !== me.id) {
++					const blockExist = await this.blockingsRepository.exist({
++						where: {
++							blockerId: anonymouslySendToUser.id,
++							blockeeId: me.id,
++						},
++					});
++					if (blockExist) {
++						throw new ApiError(meta.errors.youHaveBeenBlocked);
++					}
++				}
++			}
++
++			const createdAt = new Date();
++			let anonymousChannelUsername: string | null = null;
++			if (channel?.anonymousStrategy) {
++				let since: Date | null = new Date(Math.floor(createdAt.valueOf() / 864e5) * 864e5);
++				switch (channel.anonymousStrategy) {
++					case 'weekly':
++						since = new Date(since.valueOf() - since.getDay() * 864e5);
++						break;
++					case 'monthly':
++						since = new Date(since.valueOf() - (since.getDate() - 1) * 864e5);
++						break;
++					case 'yearly':
++						since = new Date(since.valueOf() - (since.getDate() - 1) * 864e5);
++						since.setMonth(0);
++						break;
++					case 'manual':
++						since = null;
++						break;
++				}
++				let until: Date | null = since && new Date(since.valueOf());
++				/* eslint-disable @typescript-eslint/no-non-null-assertion */
++				switch (channel.anonymousStrategy) {
++					case 'daily':
++						until = new Date(until!.valueOf() + 864e5);
++						break;
++					case 'weekly':
++						until = new Date(until!.valueOf() + 7 * 864e5);
++						break;
++					case 'monthly':
++						until!.setMonth(until!.getMonth() + 1);
++						break;
++					case 'yearly':
++						until!.setFullYear(until!.getFullYear() + 1);
++						break;
++				}
++				/* eslint-enable @typescript-eslint/no-non-null-assertion */
++				let saltModel = await this.channelAnonymousSaltsRepository.findOne({
++					where: {
++						channelId: channel.id,
++						since: LessThanOrEqual(this.idService.gen(createdAt.valueOf(), true)),
++						until: Or(Not(LessThanOrEqual(this.idService.gen(createdAt.valueOf(), true))), IsNull()),
++					},
++					order: {
++						since: 'DESC',
++						until: {
++							direction: 'ASC',
++							nulls: 'LAST',
++						},
++					},
++				});
++				if (!saltModel) {
++					saltModel = await this.channelAnonymousSaltsRepository.insert({
++						id: this.idService.gen(createdAt.valueOf()),
++						channelId: channel.id,
++						since: this.idService.gen(since ? since.valueOf() : 0, true),
++						until: until && this.idService.gen(until.valueOf(), true),
++						salt: crypto.getRandomValues(new BigInt64Array(1))[0].toString(),
++					}).then(x => this.channelAnonymousSaltsRepository.findOneByOrFail(x.identifiers[0]));
++				}
++				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
++				const salt = BigInt(saltModel!.salt);
++				anonymousChannelUsername = `${channel.anonymousStrategy === 'manual' ? 'x' : channel.anonymousStrategy[0]}.${crypto.createHash('shake256').update(me.id + salt.toString(16).padStart(16, '0'), 'utf-8').copy({ outputLength: 6 }).digest('base64url')}`;
++			}
++
+ 			// 投稿を作成
+ 			try {
+ 				const note = await this.noteCreateService.create(me, {
+-					createdAt: new Date(),
++					createdAt,
+ 					files: files,
+ 					poll: ps.poll ? {
+ 						choices: ps.poll.choices,
+@@ -379,6 +479,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 					visibility: ps.visibility,
+ 					visibleUsers,
+ 					channel,
++					anonymouslySendToUser,
++					anonymousChannelUsername,
+ 					apMentions: ps.noExtractMentions ? [] : undefined,
+ 					apHashtags: ps.noExtractHashtags ? [] : undefined,
+ 					apEmojis: ps.noExtractEmojis ? [] : undefined,
+diff --git a/packages/backend/src/server/api/endpoints/notes/delete.ts b/packages/backend/src/server/api/endpoints/notes/delete.ts
+index 9d7c9a9081..40c89c058f 100644
+--- a/packages/backend/src/server/api/endpoints/notes/delete.ts
++++ b/packages/backend/src/server/api/endpoints/notes/delete.ts
+@@ -11,6 +11,7 @@ import { NoteDeleteService } from '@/core/NoteDeleteService.js';
+ import { DI } from '@/di-symbols.js';
+ import { GetterService } from '@/server/api/GetterService.js';
+ import { RoleService } from '@/core/RoleService.js';
++import { UserBlockingService } from '@/core/UserBlockingService.js';
+ import { ApiError } from '../../error.js';
+ 
+ export const meta = {
+@@ -45,6 +46,7 @@ export const paramDef = {
+ 	type: 'object',
+ 	properties: {
+ 		noteId: { type: 'string', format: 'misskey:id' },
++		block: { type: 'boolean', default: false },
+ 	},
+ 	required: ['noteId'],
+ } as const;
+@@ -58,6 +60,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 		private getterService: GetterService,
+ 		private roleService: RoleService,
+ 		private noteDeleteService: NoteDeleteService,
++		private userBlockingService: UserBlockingService,
+ 	) {
+ 		super(meta, paramDef, async (ps, me) => {
+ 			const note = await this.getterService.getNote(ps.noteId).catch(err => {
+@@ -65,12 +68,18 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				throw err;
+ 			});
+ 
+-			if (!await this.roleService.isModerator(me) && (note.userId !== me.id)) {
++			if (!await this.roleService.isModerator(me) && (note.userId !== me.id) && (note.anonymouslySendToUserId !== me.id)) {
+ 				throw new ApiError(meta.errors.accessDenied);
+ 			}
+ 
++			const user = await this.usersRepository.findOneByOrFail({ id: note.userId });
++
++			if (ps.block && me.id !== user.id) {
++				await this.userBlockingService.block(me, user);
++			}
++
+ 			// この操作を行うのが投稿者とは限らない(例えばモデレーター)ため
+-			await this.noteDeleteService.delete(await this.usersRepository.findOneByOrFail({ id: note.userId }), note, false, me);
++			await this.noteDeleteService.delete(user, note, false, me);
+ 		});
+ 	}
+ }
+diff --git a/packages/backend/src/server/api/endpoints/notes/global-timeline.ts b/packages/backend/src/server/api/endpoints/notes/global-timeline.ts
+index 258a0bfb8f..92899a6a71 100644
+--- a/packages/backend/src/server/api/endpoints/notes/global-timeline.ts
++++ b/packages/backend/src/server/api/endpoints/notes/global-timeline.ts
+@@ -71,6 +71,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 			const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'),
+ 				ps.sinceId, ps.untilId, ps.sinceDate, ps.untilDate)
+ 				.andWhere('note.visibility = \'public\'')
++				.andWhere('note.anonymouslySendToUserId IS NULL')
+ 				.andWhere('note.channelId IS NULL')
+ 				.innerJoinAndSelect('note.user', 'user')
+ 				.leftJoinAndSelect('note.reply', 'reply')
+diff --git a/packages/backend/src/server/api/endpoints/notes/hybrid-timeline.ts b/packages/backend/src/server/api/endpoints/notes/hybrid-timeline.ts
+index aed9065bf9..4f23a76b13 100644
+--- a/packages/backend/src/server/api/endpoints/notes/hybrid-timeline.ts
++++ b/packages/backend/src/server/api/endpoints/notes/hybrid-timeline.ts
+@@ -213,6 +213,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 					qb.orWhere('(note.visibility = \'public\') AND (note.userHost IS NULL)');
+ 				}
+ 			}))
++			.andWhere('note.anonymouslySendToUserId IS NULL')
+ 			.innerJoinAndSelect('note.user', 'user')
+ 			.leftJoinAndSelect('note.reply', 'reply')
+ 			.leftJoinAndSelect('note.renote', 'renote')
+diff --git a/packages/backend/src/server/api/endpoints/notes/local-timeline.ts b/packages/backend/src/server/api/endpoints/notes/local-timeline.ts
+index 0b48f2c78b..20fa350d29 100644
+--- a/packages/backend/src/server/api/endpoints/notes/local-timeline.ts
++++ b/packages/backend/src/server/api/endpoints/notes/local-timeline.ts
+@@ -148,7 +148,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 	}, me: MiLocalUser | null) {
+ 		const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'),
+ 			ps.sinceId, ps.untilId)
+-			.andWhere('(note.visibility = \'public\') AND (note.userHost IS NULL) AND (note.channelId IS NULL)')
++			.andWhere('(note.visibility = \'public\') AND (note.userHost IS NULL) AND (note.channelId IS NULL) AND (note.anonymouslySendToUserId IS NULL)')
+ 			.innerJoinAndSelect('note.user', 'user')
+ 			.leftJoinAndSelect('note.reply', 'reply')
+ 			.leftJoinAndSelect('note.renote', 'renote')
+diff --git a/packages/backend/src/server/api/endpoints/notes/mentions.ts b/packages/backend/src/server/api/endpoints/notes/mentions.ts
+index 5558dd3a8b..dda4eaa2fa 100644
+--- a/packages/backend/src/server/api/endpoints/notes/mentions.ts
++++ b/packages/backend/src/server/api/endpoints/notes/mentions.ts
+@@ -84,6 +84,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 
+ 			if (ps.following) {
+ 				query.andWhere(`((note.userId IN (${ followingQuery.getQuery() })) OR (note.userId = :meId))`, { meId: me.id });
++				query.andWhere('note.anonymouslySendToUserId IS NULL');
+ 				query.setParameters(followingQuery.getParameters());
+ 			}
+ 
+diff --git a/packages/backend/src/server/api/endpoints/notes/timeline.ts b/packages/backend/src/server/api/endpoints/notes/timeline.ts
+index 7cb11cc1eb..f694a6dcad 100644
+--- a/packages/backend/src/server/api/endpoints/notes/timeline.ts
++++ b/packages/backend/src/server/api/endpoints/notes/timeline.ts
+@@ -188,6 +188,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				.andWhere('note.userId = :meId', { meId: me.id });
+ 		}
+ 
++		query.andWhere('note.anonymouslySendToUserId IS NULL');
+ 		query.andWhere(new Brackets(qb => {
+ 			qb
+ 				.where('note.replyId IS NULL') // 返信ではない
+diff --git a/packages/backend/src/server/api/endpoints/notes/user-list-timeline.ts b/packages/backend/src/server/api/endpoints/notes/user-list-timeline.ts
+index 87f9b322a6..cc7a7e3c2b 100644
+--- a/packages/backend/src/server/api/endpoints/notes/user-list-timeline.ts
++++ b/packages/backend/src/server/api/endpoints/notes/user-list-timeline.ts
+@@ -162,6 +162,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 			.leftJoinAndSelect('reply.user', 'replyUser')
+ 			.leftJoinAndSelect('renote.user', 'renoteUser')
+ 			.andWhere('userListMemberships.userListId = :userListId', { userListId: list.id })
++			.andWhere('note.anonymouslySendToUserId IS NULL')
+ 			.andWhere('note.channelId IS NULL') // チャンネルノートではない
+ 			.andWhere(new Brackets(qb => {
+ 				qb
+diff --git a/packages/backend/src/server/api/endpoints/users/get-frequently-replied-users.ts b/packages/backend/src/server/api/endpoints/users/get-frequently-replied-users.ts
+index 9248a2fa68..eb0f9db78c 100644
+--- a/packages/backend/src/server/api/endpoints/users/get-frequently-replied-users.ts
++++ b/packages/backend/src/server/api/endpoints/users/get-frequently-replied-users.ts
+@@ -79,6 +79,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				where: {
+ 					userId: user.id,
+ 					replyId: Not(IsNull()),
++					anonymouslySendToUserId: IsNull(),
+ 				},
+ 				order: {
+ 					id: -1,
+diff --git a/packages/backend/src/server/api/endpoints/users/notes.ts b/packages/backend/src/server/api/endpoints/users/notes.ts
+index e9c334057e..76244a816b 100644
+--- a/packages/backend/src/server/api/endpoints/users/notes.ts
++++ b/packages/backend/src/server/api/endpoints/users/notes.ts
+@@ -167,6 +167,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 
+ 		const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), ps.sinceId, ps.untilId)
+ 			.andWhere('note.userId = :userId', { userId: ps.userId })
++			.andWhere('note.anonymouslySendToUserId IS NULL')
++			.andWhere('note.anonymousChannelUsername IS NULL')
+ 			.innerJoinAndSelect('note.user', 'user')
+ 			.leftJoinAndSelect('note.reply', 'reply')
+ 			.leftJoinAndSelect('note.renote', 'renote')
+diff --git a/packages/backend/src/server/api/endpoints/users/report-abuse.ts b/packages/backend/src/server/api/endpoints/users/report-abuse.ts
+index 5ff6de37d2..c238a96e57 100644
+--- a/packages/backend/src/server/api/endpoints/users/report-abuse.ts
++++ b/packages/backend/src/server/api/endpoints/users/report-abuse.ts
+@@ -9,6 +9,7 @@ import { GetterService } from '@/server/api/GetterService.js';
+ import { RoleService } from '@/core/RoleService.js';
+ import { AbuseReportService } from '@/core/AbuseReportService.js';
+ import { ApiError } from '../../error.js';
++import { ACTOR_USERNAME } from '@/core/InstanceActorService.js';
+ 
+ export const meta = {
+ 	tags: ['users'],
+@@ -43,6 +44,7 @@ export const paramDef = {
+ 	type: 'object',
+ 	properties: {
+ 		userId: { type: 'string', format: 'misskey:id' },
++		noteId: { type: 'string', format: 'misskey:id' },
+ 		comment: { type: 'string', minLength: 1, maxLength: 2048 },
+ 	},
+ 	required: ['userId', 'comment'],
+@@ -61,18 +63,28 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				if (err.id === '15348ddd-432d-49c2-8a5a-8069753becff') throw new ApiError(meta.errors.noSuchUser);
+ 				throw err;
+ 			});
++			let targetUserId = targetUser.id;
++			let targetUserHost = targetUser.host;
+ 
+ 			if (targetUser.id === me.id) {
+ 				throw new ApiError(meta.errors.cannotReportYourself);
+ 			}
+ 
+-			if (await this.roleService.isAdministrator(targetUser)) {
++			if (targetUserHost && targetUser.username !== ACTOR_USERNAME && await this.roleService.isAdministrator(targetUser)) {
+ 				throw new ApiError(meta.errors.cannotReportAdmin);
+ 			}
+ 
++			if (ps.noteId && !targetUserHost && targetUser.username === ACTOR_USERNAME) { // パブリックレターに対する通報の可能性がある
++				const note = await this.getterService.getNote(ps.noteId).catch(() => {});
++				if (note) {
++					targetUserId = note.userId;
++					targetUserHost = null;
++				}
++			}
++
+ 			await this.abuseReportService.report([{
+-				targetUserId: targetUser.id,
+-				targetUserHost: targetUser.host,
++				targetUserId,
++				targetUserHost,
+ 				reporterId: me.id,
+ 				reporterHost: null,
+ 				comment: ps.comment,
+diff --git a/packages/backend/src/server/api/stream/channels/global-timeline.ts b/packages/backend/src/server/api/stream/channels/global-timeline.ts
+index ed56fe0d40..699c8e4b7f 100644
+--- a/packages/backend/src/server/api/stream/channels/global-timeline.ts
++++ b/packages/backend/src/server/api/stream/channels/global-timeline.ts
+@@ -46,6 +46,7 @@ class GlobalTimelineChannel extends Channel {
+ 
+ 	@bindThis
+ 	private async onNote(note: Packed<'Note'>) {
++		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
+ 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
+ 
+ 		if (note.visibility !== 'public') return;
+diff --git a/packages/backend/src/server/api/stream/channels/hashtag.ts b/packages/backend/src/server/api/stream/channels/hashtag.ts
+index 8105f15cb1..5d96c64422 100644
+--- a/packages/backend/src/server/api/stream/channels/hashtag.ts
++++ b/packages/backend/src/server/api/stream/channels/hashtag.ts
+@@ -40,6 +40,7 @@ class HashtagChannel extends Channel {
+ 
+ 	@bindThis
+ 	private async onNote(note: Packed<'Note'>) {
++		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
+ 		const noteTags = note.tags ? note.tags.map((t: string) => t.toLowerCase()) : [];
+ 		const matched = this.q.some(tags => tags.every(tag => noteTags.includes(normalizeForSearch(tag))));
+ 		if (!matched) return;
+diff --git a/packages/backend/src/server/api/stream/channels/home-timeline.ts b/packages/backend/src/server/api/stream/channels/home-timeline.ts
+index 66644ed58c..93bf9647f1 100644
+--- a/packages/backend/src/server/api/stream/channels/home-timeline.ts
++++ b/packages/backend/src/server/api/stream/channels/home-timeline.ts
+@@ -39,6 +39,7 @@ class HomeTimelineChannel extends Channel {
+ 
+ 	@bindThis
+ 	private async onNote(note: Packed<'Note'>) {
++		if (note.anonymouslySendToUserId) return;
+ 		const isMe = this.user!.id === note.userId;
+ 
+ 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
+diff --git a/packages/backend/src/server/api/stream/channels/hybrid-timeline.ts b/packages/backend/src/server/api/stream/channels/hybrid-timeline.ts
+index 5681311493..a8118f477e 100644
+--- a/packages/backend/src/server/api/stream/channels/hybrid-timeline.ts
++++ b/packages/backend/src/server/api/stream/channels/hybrid-timeline.ts
+@@ -49,6 +49,7 @@ class HybridTimelineChannel extends Channel {
+ 
+ 	@bindThis
+ 	private async onNote(note: Packed<'Note'>) {
++		if (note.anonymouslySendToUserId) return;
+ 		const isMe = this.user!.id === note.userId;
+ 
+ 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
+diff --git a/packages/backend/src/server/api/stream/channels/local-timeline.ts b/packages/backend/src/server/api/stream/channels/local-timeline.ts
+index 491029f5de..8a3c444965 100644
+--- a/packages/backend/src/server/api/stream/channels/local-timeline.ts
++++ b/packages/backend/src/server/api/stream/channels/local-timeline.ts
+@@ -48,6 +48,7 @@ class LocalTimelineChannel extends Channel {
+ 
+ 	@bindThis
+ 	private async onNote(note: Packed<'Note'>) {
++		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
+ 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
+ 
+ 		if (note.user.host !== null) return;
+diff --git a/packages/backend/src/server/api/stream/channels/user-list.ts b/packages/backend/src/server/api/stream/channels/user-list.ts
+index 4f38351e94..f24c39152c 100644
+--- a/packages/backend/src/server/api/stream/channels/user-list.ts
++++ b/packages/backend/src/server/api/stream/channels/user-list.ts
+@@ -81,6 +81,7 @@ class UserListChannel extends Channel {
+ 
+ 	@bindThis
+ 	private async onNote(note: Packed<'Note'>) {
++		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
+ 		const isMe = this.user!.id === note.userId;
+ 
+ 		// チャンネル投稿は無視する
+diff --git a/packages/frontend-embed/src/components/EmNote.vue b/packages/frontend-embed/src/components/EmNote.vue
+index f5b064c293..a3c09fdf51 100644
+--- a/packages/frontend-embed/src/components/EmNote.vue
++++ b/packages/frontend-embed/src/components/EmNote.vue
+@@ -16,6 +16,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<!--<div v-if="appearNote._featuredId_" class="tip"><i class="ti ti-bolt"></i> {{ i18n.ts.featured }}</div>-->
+ 	<div v-if="isRenote" :class="$style.renote">
+ 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
++		<div v-if="note.visibility === 'followers'" :class="$style.followersBar"></div>
++		<div v-if="note.visibility === 'specified'" :class="$style.specifiedBar"></div>
+ 		<EmAvatar :class="$style.renoteAvatar" :user="note.user" link/>
+ 		<i class="ti ti-repeat" style="margin-right: 4px;"></i>
+ 		<I18n :src="i18n.ts.renotedBy" tag="span" :class="$style.renoteText">
+@@ -41,6 +43,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	</div>
+ 	<article :class="$style.article">
+ 		<div v-if="appearNote.channel" :class="$style.colorBar" :style="{ background: appearNote.channel.color }"></div>
++		<div v-if="appearNote.visibility === 'followers'" :class="$style.followersBar"></div>
++		<div v-if="appearNote.visibility === 'specified'" :class="$style.specifiedBar"></div>
+ 		<EmAvatar :class="$style.avatar" :user="appearNote.user" link/>
+ 		<div :class="$style.main">
+ 			<EmNoteHeader :note="appearNote" :mini="true"/>
+@@ -343,6 +347,25 @@ const isDeleted = ref(false);
+ 	pointer-events: none;
+ }
+ 
++.followersBar {
++	position: absolute;
++	top: 8px;
++	right: 8px;
++	height: calc(100% - 16px);
++	pointer-events: none;
++	border-right: 5px dotted;
++}
++
++.specifiedBar {
++	position: absolute;
++	top: 8px;
++	right: 8px;
++	height: calc(100% - 16px);
++	pointer-events: none;
++	border-right: 5px solid;
++	border-radius: 2.5px;
++}
++
+ .avatar {
+ 	flex-shrink: 0;
+ 	display: block !important;
+diff --git a/packages/frontend-embed/src/components/EmNoteSub.vue b/packages/frontend-embed/src/components/EmNoteSub.vue
+index 59be8608e0..68c7142733 100644
+--- a/packages/frontend-embed/src/components/EmNoteSub.vue
++++ b/packages/frontend-embed/src/components/EmNoteSub.vue
+@@ -7,6 +7,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <div :class="[$style.root, { [$style.children]: depth > 1 }]">
+ 	<div :class="$style.main">
+ 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
++		<div v-if="note.visibility === 'followers'" :class="$style.followersBar"></div>
++		<div v-if="note.visibility === 'specified'" :class="$style.specifiedBar"></div>
+ 		<EmAvatar :class="$style.avatar" :user="note.user" link preview/>
+ 		<div :class="$style.body">
+ 			<EmNoteHeader :class="$style.header" :note="note" :mini="true"/>
+@@ -91,6 +93,25 @@ if (props.detail) {
+ 	pointer-events: none;
+ }
+ 
++.followersBar {
++	position: absolute;
++	top: 8px;
++	right: 8px;
++	height: calc(100% - 16px);
++	pointer-events: none;
++	border-right: 5px dotted;
++}
++
++.specifiedBar {
++	position: absolute;
++	top: 8px;
++	right: 8px;
++	height: calc(100% - 16px);
++	pointer-events: none;
++	border-right: 5px solid;
++	border-radius: 2.5px;
++}
++
+ .avatar {
+ 	flex-shrink: 0;
+ 	display: block;
+diff --git a/packages/frontend/src/components/MkAbuseReportWindow.vue b/packages/frontend/src/components/MkAbuseReportWindow.vue
+index a634a748e9..28a85acde7 100644
+--- a/packages/frontend/src/components/MkAbuseReportWindow.vue
++++ b/packages/frontend/src/components/MkAbuseReportWindow.vue
+@@ -40,6 +40,7 @@ import { i18n } from '@/i18n.js';
+ 
+ const props = defineProps<{
+ 	user: Misskey.entities.UserLite;
++	note?: Misskey.entities.Note;
+ 	initialComment?: string;
+ }>();
+ 
+@@ -53,6 +54,7 @@ const comment = ref(props.initialComment ?? '');
+ function send() {
+ 	os.apiWithDialog('users/report-abuse', {
+ 		userId: props.user.id,
++		noteId: props.note?.id,
+ 		comment: comment.value,
+ 	}, undefined).then(res => {
+ 		os.alert({
+diff --git a/packages/frontend/src/components/MkNote.vue b/packages/frontend/src/components/MkNote.vue
+index 193dfe5b7e..324d409279 100644
+--- a/packages/frontend/src/components/MkNote.vue
++++ b/packages/frontend/src/components/MkNote.vue
+@@ -18,14 +18,22 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<!--<div v-if="appearNote._featuredId_" class="tip"><i class="ti ti-bolt"></i> {{ i18n.ts.featured }}</div>-->
+ 	<div v-if="isRenote" :class="$style.renote">
+ 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
++		<div v-if="note.visibility === 'followers'" :class="$style.followersBar"></div>
++		<div v-if="note.visibility === 'specified'" :class="$style.specifiedBar"></div>
+ 		<MkAvatar :class="$style.renoteAvatar" :user="note.user" link preview/>
+ 		<i class="ti ti-repeat" style="margin-right: 4px;"></i>
+-		<I18n :src="i18n.ts.renotedBy" tag="span" :class="$style.renoteText">
++		<I18n :src="note.channel && note.channel.id !== inChannel ? i18n.ts.renotedByChannel : i18n.ts.renotedBy" tag="span" :class="$style.renoteText">
+ 			<template #user>
+-				<MkA v-user-preview="note.userId" :class="$style.renoteUserName" :to="userPage(note.user)">
+-					<MkUserName :user="note.user"/>
++				<span v-if="note.anonymouslySendToUser || note.anonymousChannelUsername" v-user-preview="note.userId" :class="$style.renoteUserName">
++					<MkUserName :user="userOf(note)"/>
++				</span>
++				<MkA v-else v-user-preview="note.userId" :class="$style.renoteUserName" :to="userPage(note.user)">
++					<MkUserName :user="userOf(note)"/>
+ 				</MkA>
+ 			</template>
++			<template v-if="note.channel" #channel>
++				<MkA :to="`/channels/${note.channel.id}`">{{ note.channel.name }}</MkA>
++			</template>
+ 		</I18n>
+ 		<div :class="$style.renoteInfo">
+ 			<button ref="renoteTime" :class="$style.renoteTime" class="_button" @mousedown.prevent="showRenoteMenu()">
+@@ -42,12 +50,15 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		</div>
+ 	</div>
+ 	<div v-if="renoteCollapsed" :class="$style.collapsedRenoteTarget">
+-		<MkAvatar :class="$style.collapsedRenoteTargetAvatar" :user="appearNote.user" link preview/>
++		<div v-if="appearNote.channel" :class="$style.colorBar" :style="{ background: appearNote.channel.color }"></div>
++		<MkAvatar :class="$style.collapsedRenoteTargetAvatar" :user="userOf(appearNote)" link preview/>
+ 		<Mfm :text="getNoteSummary(appearNote)" :plain="true" :nowrap="true" :author="appearNote.user" :nyaize="'respect'" :class="$style.collapsedRenoteTargetText" @click="renoteCollapsed = false"/>
+ 	</div>
+ 	<article v-else :class="$style.article" @contextmenu.stop="onContextmenu">
+ 		<div v-if="appearNote.channel" :class="$style.colorBar" :style="{ background: appearNote.channel.color }"></div>
+-		<MkAvatar :class="$style.avatar" :user="appearNote.user" :link="!mock" :preview="!mock"/>
++		<div v-if="appearNote.visibility === 'followers'" :class="$style.followersBar"></div>
++		<div v-if="appearNote.visibility === 'specified'" :class="$style.specifiedBar"></div>
++		<MkAvatar v-if="!appearNote.anonymouslySendToUser" :class="$style.avatar" :user="userOf(appearNote)" :link="!mock && !appearNote.anonymousChannelUsername" :preview="!mock"/>
+ 		<div :class="$style.main">
+ 			<MkNoteHeader :note="appearNote" :mini="true"/>
+ 			<MkInstanceTicker v-if="showTicker" :host="appearNote.user.host" :instance="appearNote.user.instance"/>
+@@ -92,7 +103,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<div v-if="isEnabledUrlPreview">
+ 						<MkUrlPreview v-for="url in urls" :key="url" :url="url" :compact="true" :detail="false" :class="$style.urlPreview"/>
+ 					</div>
+-					<div v-if="appearNote.renote" :class="$style.quote"><MkNoteSimple :note="appearNote.renote" :class="$style.quoteNote"/></div>
++					<div v-if="appearNote.renote" :class="$style.quote"><MkNoteSimple :note="appearNote.renote" :class="$style.quoteNote" quote/></div>
+ 					<button v-if="isLong && collapsed" :class="$style.collapsed" class="_button" @click="collapsed = false">
+ 						<span :class="$style.collapsedLabel">{{ i18n.ts.showMore }}</span>
+ 					</button>
+@@ -100,7 +111,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 						<span :class="$style.showLessLabel">{{ i18n.ts.showLess }}</span>
+ 					</button>
+ 				</div>
+-				<MkA v-if="appearNote.channel && !inChannel" :class="$style.channel" :to="`/channels/${appearNote.channel.id}`"><i class="ti ti-device-tv"></i> {{ appearNote.channel.name }}</MkA>
++				<MkA v-if="appearNote.channel && appearNote.channel.id !== inChannel" :class="$style.channel" :to="`/channels/${appearNote.channel.id}`"><i class="ti ti-device-tv"></i> {{ appearNote.channel.name }}</MkA>
+ 			</div>
+ 			<MkReactionsViewer v-if="appearNote.reactionAcceptance !== 'likeOnly'" :note="appearNote" :maxNumber="16" @mockUpdateMyReaction="emitUpdReaction">
+ 				<template #more>
+@@ -108,7 +119,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</template>
+ 			</MkReactionsViewer>
+ 			<footer :class="$style.footer">
+-				<button :class="$style.footerButton" class="_button" @click="reply()">
++				<button :class="$style.footerButton" class="_button" :disabled="appearNote.anonymouslySendToUser" @click="reply()">
+ 					<i class="ti ti-arrow-back-up"></i>
+ 					<p v-if="appearNote.repliesCount > 0" :class="$style.footerButtonCount">{{ number(appearNote.repliesCount) }}</p>
+ 				</button>
+@@ -135,6 +146,10 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<button v-if="defaultStore.state.showClipButtonInNoteFooter" ref="clipButton" :class="$style.footerButton" class="_button" @mousedown.prevent="clip()">
+ 					<i class="ti ti-paperclip"></i>
+ 				</button>
++				<button v-if="defaultStore.state.showTranslateButtonInNoteFooter && instance.translatorAvailable" :class="$style.footerButton" class="_button" @mousedown="showTranslation ? showTranslation = false : translate()">
++					<i v-if="showTranslation" class="ti ti-note-off"></i>
++					<i v-else class="ti ti-language-hiragana"></i>
++				</button>
+ 				<button ref="menuButton" :class="$style.footerButton" class="_button" @mousedown.prevent="showMenu()">
+ 					<i class="ti ti-dots"></i>
+ 				</button>
+@@ -152,7 +167,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	</I18n>
+ 	<I18n v-else-if="showSoftWordMutedWord !== true" :src="i18n.ts.userSaysSomething" tag="small">
+ 		<template #name>
+-			<MkA v-user-preview="appearNote.userId" :to="userPage(appearNote.user)">
++			<I18n v-if="appearNote.anonymouslySendToUser" :src="i18n.ts.anonymouslySendToUser" tag="span">
++				<template #user>
++					<MkA v-user-preview="appearNote.anonymouslySendToUser.id" :to="userPage(appearNote.anonymouslySendToUser)">
++						<MkUserName :user="appearNote.anonymouslySendToUser"/>
++					</MkA>
++				</template>
++			</I18n>
++			<MkA v-else v-user-preview="appearNote.userId" :to="userPage(appearNote.user)">
+ 				<MkUserName :user="appearNote.user"/>
+ 			</MkA>
+ 		</template>
+@@ -183,7 +205,7 @@ import * as mfm from 'mfm-js';
+ import * as Misskey from 'misskey-js';
+ import { isLink } from '@@/js/is-link.js';
+ import { shouldCollapsed } from '@@/js/collapsed.js';
+-import { host } from '@@/js/config.js';
++import { host, hostname } from '@@/js/config.js';
+ import type { MenuItem } from '@/types/menu.js';
+ import MkNoteSub from '@/components/MkNoteSub.vue';
+ import MkNoteHeader from '@/components/MkNoteHeader.vue';
+@@ -198,6 +220,7 @@ import MkUrlPreview from '@/components/MkUrlPreview.vue';
+ import MkInstanceTicker from '@/components/MkInstanceTicker.vue';
+ import { pleaseLogin } from '@/scripts/please-login.js';
+ import type { OpenOnRemoteOptions } from '@/scripts/please-login.js';
++import { loadUsers } from '@/scripts/avatars.js';
+ import { checkWordMute } from '@/scripts/check-word-mute.js';
+ import { notePage } from '@/filters/note.js';
+ import { userPage } from '@/filters/user.js';
+@@ -218,10 +241,11 @@ import { claimAchievement } from '@/scripts/achievements.js';
+ import { getNoteSummary } from '@/scripts/get-note-summary.js';
+ import MkRippleEffect from '@/components/MkRippleEffect.vue';
+ import { showMovedDialog } from '@/scripts/show-moved-dialog.js';
+-import { isEnabledUrlPreview } from '@/instance.js';
+ import type { Keymap } from '@/scripts/hotkey.js';
+ import { focusPrev, focusNext } from '@/scripts/focus.js';
+ import { getAppearNote } from '@/scripts/get-appear-note.js';
++import { miLocalStorage } from '@/local-storage.js';
++import { instance, isEnabledUrlPreview } from '@/instance.js';
+ 
+ const props = withDefaults(defineProps<{
+ 	note: Misskey.entities.Note;
+@@ -232,6 +256,10 @@ const props = withDefaults(defineProps<{
+ 	mock: false,
+ });
+ 
++function userOf(note: Misskey.entities.Note): Misskey.entities.User {
++	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
++}
++
+ provide('mock', props.mock);
+ 
+ const emit = defineEmits<{
+@@ -276,7 +304,7 @@ const clipButton = shallowRef<HTMLElement>();
+ const appearNote = computed(() => getAppearNote(note.value));
+ const galleryEl = shallowRef<InstanceType<typeof MkMediaList>>();
+ const isMyRenote = $i && ($i.id === note.value.userId);
+-const showContent = ref(false);
++const showContent = ref(appearNote.value.cw != null && defaultStore.state.autoOpenCws.some((word) => appearNote.value.cw!.includes(word)));
+ const parsed = computed(() => appearNote.value.text ? mfm.parse(appearNote.value.text) : null);
+ const urls = computed(() => parsed.value ? extractUrlFromMfm(parsed.value).filter((url) => appearNote.value.renote?.url !== url && appearNote.value.renote?.uri !== url) : null);
+ const isLong = shouldCollapsed(appearNote.value, urls.value ?? []);
+@@ -287,6 +315,7 @@ const hardMuted = ref(props.withHardMute && checkMute(appearNote.value, $i?.hard
+ const showSoftWordMutedWord = computed(() => defaultStore.state.showSoftWordMutedWord);
+ const translation = ref<Misskey.entities.NotesTranslateResponse | null>(null);
+ const translating = ref(false);
++const showTranslation = ref(false);
+ const showTicker = (defaultStore.state.instanceTicker === 'always') || (defaultStore.state.instanceTicker === 'remote' && appearNote.value.user.instance);
+ const canRenote = computed(() => ['public', 'home'].includes(appearNote.value.visibility) || (appearNote.value.visibility === 'followers' && appearNote.value.userId === $i?.id));
+ const renoteCollapsed = ref(
+@@ -376,9 +405,19 @@ const keymap = {
+ } as const satisfies Keymap;
+ 
+ provide('react', (reaction: string) => {
+-	misskeyApi('notes/reactions/create', {
+-		noteId: appearNote.value.id,
+-		reaction: reaction,
++	const confirm = appearNote.value.anonymousChannelUsername
++		? os.confirm({
++				type: 'warning',
++				title: i18n.ts.reactionsAreNotAnonymized,
++				text: i18n.ts.areYouSure,
++			})
++		: Promise.resolve({ canceled: false });
++	confirm.then(({ canceled }) => {
++		if (canceled) return;
++		misskeyApi('notes/reactions/create', {
++			noteId: appearNote.value.id,
++			reaction: reaction,
++		});
+ 	});
+ });
+ 
+@@ -387,6 +426,12 @@ if (props.mock) {
+ 		note.value = deepClone(to);
+ 	}, { deep: true });
+ } else {
++	watch(appearNote, value => {
++		const specifiers = value.mentions?.map(id => ({ id }));
++		if (specifiers) {
++			loadUsers(...specifiers);
++		}
++	}, { immediate: true });
+ 	useNoteCapture({
+ 		rootEl: rootEl,
+ 		note: appearNote,
+@@ -441,11 +486,21 @@ if (!props.mock) {
+ 	}
+ }
+ 
+-function renote(viaKeyboard = false) {
++function renoteRipple() {
++	const el = renoteButton.value as HTMLElement | null | undefined;
++	if (el) {
++		const rect = el.getBoundingClientRect();
++		const x = rect.left + (el.offsetWidth / 2);
++		const y = rect.top + (el.offsetHeight / 2);
++		os.popup(MkRippleEffect, { x, y }, {}, 'end');
++	}
++}
++
++async function renote(viaKeyboard = false) {
+ 	pleaseLogin({ openOnRemote: pleaseLoginContext.value });
+ 	showMovedDialog();
+ 
+-	const { menu } = getRenoteMenu({ note: note.value, renoteButton, mock: props.mock });
++	const { menu } = await getRenoteMenu({ note: note.value, renoteButton, mock: props.mock });
+ 	os.popupMenu(menu, renoteButton.value, {
+ 		viaKeyboard,
+ 	});
+@@ -464,9 +519,19 @@ function reply(): void {
+ 	});
+ }
+ 
+-function react(): void {
++async function react(viaKeyboard = false): void {
+ 	pleaseLogin({ openOnRemote: pleaseLoginContext.value });
+ 	showMovedDialog();
++	if (appearNote.value.anonymousChannelUsername) {
++		const { canceled } = await os.confirm({
++			type: 'warning',
++			title: i18n.ts.reactionsAreNotAnonymized,
++			text: i18n.ts.areYouSure,
++		});
++		if (canceled) {
++			return;
++		}
++	}
+ 	if (appearNote.value.reactionAcceptance === 'likeOnly') {
+ 		sound.playMisskeySfx('reaction');
+ 
+@@ -541,6 +606,18 @@ function toggleReact() {
+ 	}
+ }
+ 
++async function translate(): Promise<void> {
++	showTranslation.value = true;
++	if (translation.value != null) return;
++	translating.value = true;
++	const res = await misskeyApi('notes/translate', {
++		noteId: appearNote.value.id,
++		targetLang: miLocalStorage.getItem('lang') ?? navigator.language,
++	});
++	translating.value = false;
++	translation.value = res;
++}
++
+ function onContextmenu(ev: MouseEvent): void {
+ 	if (props.mock) {
+ 		return;
+@@ -615,7 +692,7 @@ function showRenoteMenu(): void {
+ 			getCopyNoteLinkMenu(note.value, i18n.ts.copyLinkRenote),
+ 			{ type: 'divider' },
+ 			getAbuseNoteMenu(note.value, i18n.ts.reportAbuseRenote),
+-			($i?.isModerator || $i?.isAdmin) ? getUnrenote() : undefined,
++			(note.value.anonymouslySendToUser || note.value.anonymousChannelUsername || $i?.isModerator || $i?.isAdmin) ? getUnrenote() : undefined,
+ 		], renoteTime.value);
+ 	}
+ }
+@@ -796,6 +873,7 @@ function emitUpdReaction(emoji: string, delta: number) {
+ }
+ 
+ .collapsedRenoteTarget {
++	position: relative;
+ 	display: flex;
+ 	align-items: center;
+ 	line-height: 28px;
+@@ -841,6 +919,25 @@ function emitUpdReaction(emoji: string, delta: number) {
+ 	pointer-events: none;
+ }
+ 
++.followersBar {
++	position: absolute;
++	top: 8px;
++	right: 8px;
++	height: calc(100% - 16px);
++	pointer-events: none;
++	border-right: 5px dotted;
++}
++
++.specifiedBar {
++	position: absolute;
++	top: 8px;
++	right: 8px;
++	height: calc(100% - 16px);
++	pointer-events: none;
++	border-right: 5px solid;
++	border-radius: 2.5px;
++}
++
+ .avatar {
+ 	flex-shrink: 0;
+ 	display: block !important;
+diff --git a/packages/frontend/src/components/MkNoteDetailed.vue b/packages/frontend/src/components/MkNoteDetailed.vue
+index 835a663868..36d265188f 100644
+--- a/packages/frontend/src/components/MkNoteDetailed.vue
++++ b/packages/frontend/src/components/MkNoteDetailed.vue
+@@ -20,15 +20,18 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	</div>
+ 	<MkNoteSub v-if="appearNote.reply" :note="appearNote.reply" :class="$style.replyTo"/>
+ 	<div v-if="isRenote" :class="$style.renote">
+-		<MkAvatar :class="$style.renoteAvatar" :user="note.user" link preview/>
++		<MkAvatar :class="$style.renoteAvatar" :user="userOf(note)" link preview/>
+ 		<i class="ti ti-repeat" style="margin-right: 4px;"></i>
+ 		<span :class="$style.renoteText">
+-			<I18n :src="i18n.ts.renotedBy" tag="span">
++			<I18n :src="note.channel ? i18n.ts.renotedByChannel : i18n.ts.renotedBy" tag="span">
+ 				<template #user>
+ 					<MkA v-user-preview="note.userId" :class="$style.renoteName" :to="userPage(note.user)">
+-						<MkUserName :user="note.user"/>
++						<MkUserName :user="userOf(note)"/>
+ 					</MkA>
+ 				</template>
++				<template v-if="note.channel" #channel>
++					<MkA :to="`/channels/${note.channel.id}`">{{ note.channel.name }}</MkA>
++				</template>
+ 			</I18n>
+ 		</span>
+ 		<div :class="$style.renoteInfo">
+@@ -45,14 +48,28 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		</div>
+ 	</div>
+ 	<article :class="$style.note" @contextmenu.stop="onContextmenu">
+-		<header :class="$style.noteHeader">
+-			<MkAvatar :class="$style.noteHeaderAvatar" :user="appearNote.user" indicator link preview/>
++		<header v-if="appearNote.anonymouslySendToUser" :class="$style.noteHeader">
++			<span :class="$style.noteHeaderName">
++				<I18n :src="i18n.ts.anonymouslySendToUser" tag="span">
++					<template #user>
++						<MkA v-user-preview="appearNote.anonymouslySendToUser.id" :to="userPage(appearNote.anonymouslySendToUser)">
++							<MkUserName :user="appearNote.anonymouslySendToUser"/>
++						</MkA>
++					</template>
++				</I18n>
++			</span>
++		</header>
++		<header v-else :class="$style.noteHeader">
++			<MkAvatar :class="$style.noteHeaderAvatar" :user="userOf(appearNote)" indicator :link="!appearNote.anonymousChannelUsername" preview/>
+ 			<div :class="$style.noteHeaderBody">
+ 				<div>
+-					<MkA v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote.user)">
+-						<MkUserName :nowrap="false" :user="appearNote.user"/>
++					<div v-if="appearNote.anonymouslySendToUser || appearNote.anonymousChannelUsername" v-user-preview="appearNote.user.id" :class="$style.noteHeaderName">
++						<MkUserName :nowrap="false" :user="userOf(appearNote)"/>
++					</div>
++					<MkA v-else v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote.user)">
++						<MkUserName :nowrap="false" :user="userOf(appearNote)"/>
+ 					</MkA>
+-					<span v-if="appearNote.user.isBot" :class="$style.isBot">bot</span>
++					<span v-if="appearNote.user.isBot" :class="$style.isBot">{{ note.user.username === 'instance.actor' && note.user.host === null ? 'system' : 'bot' }}</span>
+ 					<div :class="$style.noteHeaderInfo">
+ 						<span v-if="appearNote.visibility !== 'public'" style="margin-left: 0.5em;" :title="i18n.ts._visibility[appearNote.visibility]">
+ 							<i v-if="appearNote.visibility === 'home'" class="ti ti-home"></i>
+@@ -62,7 +79,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 						<span v-if="appearNote.localOnly" style="margin-left: 0.5em;" :title="i18n.ts._visibility['disableFederation']"><i class="ti ti-rocket-off"></i></span>
+ 					</div>
+ 				</div>
+-				<div :class="$style.noteHeaderUsernameAndBadgeRoles">
++				<div v-if="!appearNote.anonymousChannelUsername" :class="$style.noteHeaderUsernameAndBadgeRoles">
+ 					<div :class="$style.noteHeaderUsername">
+ 						<MkAcct :user="appearNote.user"/>
+ 					</div>
+@@ -115,7 +132,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</div>
+ 				<div v-if="appearNote.renote" :class="$style.quote"><MkNoteSimple :note="appearNote.renote" :class="$style.quoteNote"/></div>
+ 			</div>
+-			<MkA v-if="appearNote.channel && !inChannel" :class="$style.channel" :to="`/channels/${appearNote.channel.id}`"><i class="ti ti-device-tv"></i> {{ appearNote.channel.name }}</MkA>
++			<MkA v-if="appearNote.channel && appearNote.channel !== inChannel" :class="$style.channel" :to="`/channels/${appearNote.channel.id}`"><i class="ti ti-device-tv"></i> {{ appearNote.channel.name }}</MkA>
+ 		</div>
+ 		<footer>
+ 			<div :class="$style.noteFooterInfo">
+@@ -124,7 +141,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</MkA>
+ 			</div>
+ 			<MkReactionsViewer v-if="appearNote.reactionAcceptance !== 'likeOnly'" ref="reactionsViewer" :note="appearNote"/>
+-			<button class="_button" :class="$style.noteFooterButton" @click="reply()">
++			<button class="_button" :class="$style.noteFooterButton" :disabled="appearNote.anonymouslySendToUser" @click="reply()">
+ 				<i class="ti ti-arrow-back-up"></i>
+ 				<p v-if="appearNote.repliesCount > 0" :class="$style.noteFooterButtonCount">{{ number(appearNote.repliesCount) }}</p>
+ 			</button>
+@@ -151,6 +168,10 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<button v-if="defaultStore.state.showClipButtonInNoteFooter" ref="clipButton" class="_button" :class="$style.noteFooterButton" @mousedown.prevent="clip()">
+ 				<i class="ti ti-paperclip"></i>
+ 			</button>
++			<button v-if="defaultStore.state.showTranslateButtonInNoteFooter && instance.translatorAvailable" class="_button" :class="$style.noteFooterButton" @mousedown="showTranslation ? showTranslation = false : translate()">
++				<i v-if="translation" class="ti ti-note-off"></i>
++				<i v-else class="ti ti-language-hiragana"></i>
++			</button>
+ 			<button ref="menuButton" class="_button" :class="$style.noteFooterButton" @mousedown.prevent="showMenu()">
+ 				<i class="ti ti-dots"></i>
+ 			</button>
+@@ -173,7 +194,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<template #default="{ items }">
+ 					<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); grid-gap: 12px;">
+ 						<MkA v-for="item in items" :key="item.id" :to="userPage(item.user)">
+-							<MkUserCardMini :user="item.user" :withChart="false"/>
++							<MkUserCardMini :user="userOf(item)" :withChart="false"/>
+ 						</MkA>
+ 					</div>
+ 				</template>
+@@ -210,11 +231,11 @@ SPDX-License-Identifier: AGPL-3.0-only
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, inject, onMounted, provide, ref, shallowRef } from 'vue';
++import { computed, inject, onMounted, provide, ref, shallowRef, watch } from 'vue';
+ import * as mfm from 'mfm-js';
+ import * as Misskey from 'misskey-js';
+ import { isLink } from '@@/js/is-link.js';
+-import { host } from '@@/js/config.js';
++import { host, hostname } from '@@/js/config.js';
+ import MkNoteSub from '@/components/MkNoteSub.vue';
+ import MkNoteSimple from '@/components/MkNoteSimple.vue';
+ import MkReactionsViewer from '@/components/MkReactionsViewer.vue';
+@@ -225,6 +246,7 @@ import MkPoll from '@/components/MkPoll.vue';
+ import MkUsersTooltip from '@/components/MkUsersTooltip.vue';
+ import MkUrlPreview from '@/components/MkUrlPreview.vue';
+ import MkInstanceTicker from '@/components/MkInstanceTicker.vue';
++import { loadUsers } from '@/scripts/avatars.js';
+ import { pleaseLogin } from '@/scripts/please-login.js';
+ import type { OpenOnRemoteOptions } from '@/scripts/please-login.js';
+ import { checkWordMute } from '@/scripts/check-word-mute.js';
+@@ -246,6 +268,8 @@ import { useTooltip } from '@/scripts/use-tooltip.js';
+ import { claimAchievement } from '@/scripts/achievements.js';
+ import MkRippleEffect from '@/components/MkRippleEffect.vue';
+ import { showMovedDialog } from '@/scripts/show-moved-dialog.js';
++import { miLocalStorage } from '@/local-storage.js';
++import { instance } from '@/instance.js';
+ import MkUserCardMini from '@/components/MkUserCardMini.vue';
+ import MkPagination from '@/components/MkPagination.vue';
+ import type { Paging } from '@/components/MkPagination.vue';
+@@ -266,6 +290,10 @@ const inChannel = inject('inChannel', null);
+ 
+ const note = ref(deepClone(props.note));
+ 
++function userOf(note: Misskey.entities.Note): Misskey.entities.User {
++	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
++}
++
+ // plugin
+ if (noteViewInterruptors.length > 0) {
+ 	onMounted(async () => {
+@@ -296,11 +324,12 @@ const clipButton = shallowRef<HTMLElement>();
+ const appearNote = computed(() => getAppearNote(note.value));
+ const galleryEl = shallowRef<InstanceType<typeof MkMediaList>>();
+ const isMyRenote = $i && ($i.id === note.value.userId);
+-const showContent = ref(false);
++const showContent = ref(appearNote.value.cw != null && defaultStore.state.autoOpenCws.some((word) => appearNote.value.cw!.includes(word)));
+ const isDeleted = ref(false);
+ const muted = ref($i ? checkWordMute(appearNote.value, $i, $i.mutedWords) : false);
+ const translation = ref<Misskey.entities.NotesTranslateResponse | null>(null);
+ const translating = ref(false);
++const showTranslation = ref(false);
+ const parsed = appearNote.value.text ? mfm.parse(appearNote.value.text) : null;
+ const urls = parsed ? extractUrlFromMfm(parsed).filter((url) => appearNote.value.renote?.url !== url && appearNote.value.renote?.uri !== url) : null;
+ const showTicker = (defaultStore.state.instanceTicker === 'always') || (defaultStore.state.instanceTicker === 'remote' && appearNote.value.user.instance);
+@@ -335,9 +364,19 @@ const keymap = {
+ } as const satisfies Keymap;
+ 
+ provide('react', (reaction: string) => {
+-	misskeyApi('notes/reactions/create', {
+-		noteId: appearNote.value.id,
+-		reaction: reaction,
++	const confirm = appearNote.value.anonymousChannelUsername
++		? os.confirm({
++				type: 'warning',
++				title: i18n.ts.reactionsAreNotAnonymized,
++				text: i18n.ts.areYouSure,
++			})
++		: Promise.resolve({ canceled: false });
++	confirm.then(({ canceled }) => {
++		if (canceled) return;
++		misskeyApi('notes/reactions/create', {
++			noteId: appearNote.value.id,
++			reaction: reaction,
++		});
+ 	});
+ });
+ 
+@@ -361,6 +400,13 @@ const reactionsPagination = computed<Paging>(() => ({
+ 	},
+ }));
+ 
++watch(appearNote, value => {
++	const specifiers = value.mentions?.map(id => ({ id }));
++	if (specifiers) {
++		loadUsers(...specifiers);
++	}
++}, { immediate: true });
++
+ useNoteCapture({
+ 	rootEl: rootEl,
+ 	note: appearNote,
+@@ -412,12 +458,35 @@ if (appearNote.value.reactionAcceptance === 'likeOnly') {
+ 	});
+ }
+ 
+-function renote() {
++type Visibility = 'public' | 'home' | 'followers' | 'specified';
++
++// defaultStore.state.visibilityがstringなためstringも受け付けている
++function smallerVisibility(a: Visibility | string, b: Visibility | string): Visibility {
++	if (a === 'specified' || b === 'specified') return 'specified';
++	if (a === 'followers' || b === 'followers') return 'followers';
++	if (a === 'home' || b === 'home') return 'home';
++	// if (a === 'public' || b === 'public')
++	return 'public';
++}
++
++function renoteRipple() {
++	const el = renoteButton.value as HTMLElement | null | undefined;
++	if (el) {
++		const rect = el.getBoundingClientRect();
++		const x = rect.left + (el.offsetWidth / 2);
++		const y = rect.top + (el.offsetHeight / 2);
++		os.popup(MkRippleEffect, { x, y }, {}, 'end');
++	}
++}
++
++async function renote(viaKeyboard = false) {
+ 	pleaseLogin({ openOnRemote: pleaseLoginContext.value });
+ 	showMovedDialog();
+ 
+-	const { menu } = getRenoteMenu({ note: note.value, renoteButton });
+-	os.popupMenu(menu, renoteButton.value);
++	const { menu } = await getRenoteMenu({ note: note.value, renoteButton });
++	os.popupMenu(menu, renoteButton.value, {
++		viaKeyboard,
++	});
+ }
+ 
+ function reply(): void {
+@@ -431,9 +500,19 @@ function reply(): void {
+ 	});
+ }
+ 
+-function react(): void {
++async function react(viaKeyboard = false): Promise<void> {
+ 	pleaseLogin({ openOnRemote: pleaseLoginContext.value });
+ 	showMovedDialog();
++	if (appearNote.value.anonymousChannelUsername) {
++		const { canceled } = await os.confirm({
++			type: 'warning',
++			title: i18n.ts.reactionsAreNotAnonymized,
++			text: i18n.ts.areYouSure,
++		});
++		if (canceled) {
++			return;
++		}
++	}
+ 	if (appearNote.value.reactionAcceptance === 'likeOnly') {
+ 		sound.playMisskeySfx('reaction');
+ 
+@@ -493,6 +572,18 @@ function toggleReact() {
+ 	}
+ }
+ 
++async function translate(): Promise<void> {
++	showTranslation.value = true;
++	if (translation.value != null) return;
++	translating.value = true;
++	const res = await misskeyApi('notes/translate', {
++		noteId: appearNote.id,
++		targetLang: miLocalStorage.getItem('lang') ?? navigator.language,
++	});
++	translating.value = false;
++	translation.value = res;
++}
++
+ function onContextmenu(ev: MouseEvent): void {
+ 	if (ev.target && isLink(ev.target as HTMLElement)) return;
+ 	if (window.getSelection()?.toString() !== '') return;
+diff --git a/packages/frontend/src/components/MkNoteHeader.vue b/packages/frontend/src/components/MkNoteHeader.vue
+index 750e32a9ff..9d00409ab5 100644
+--- a/packages/frontend/src/components/MkNoteHeader.vue
++++ b/packages/frontend/src/components/MkNoteHeader.vue
+@@ -8,11 +8,23 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<div v-if="mock" :class="$style.name">
+ 		<MkUserName :user="note.user"/>
+ 	</div>
++	<div v-else-if="note.anonymouslySendToUser" v-user-preview="note.user.id" :class="$style.name">
++		<I18n :src="i18n.ts.anonymouslySendToUser" tag="span">
++			<template #user>
++				<MkA v-user-preview="note.anonymouslySendToUser.id" :to="userPage(note.anonymouslySendToUser)">
++					<MkUserName :user="note.anonymouslySendToUser"/>
++				</MkA>
++			</template>
++		</I18n>
++	</div>
++	<div v-else-if="note.anonymousChannelUsername" v-user-preview="note.user.id" :class="$style.name">
++		<MkUserName :user="userOf(note)"/>
++	</div>
+ 	<MkA v-else v-user-preview="note.user.id" :class="$style.name" :to="userPage(note.user)">
+-		<MkUserName :user="note.user"/>
++		<MkUserName :user="userOf(note)"/>
+ 	</MkA>
+-	<div v-if="note.user.isBot" :class="$style.isBot">bot</div>
+-	<div :class="$style.username"><MkAcct :user="note.user"/></div>
++	<div v-if="note.user.isBot" :class="$style.isBot">{{ note.user.username === 'instance.actor' && note.user.host === null ? 'system' : 'bot' }}</div>
++	<div v-if="!note.anonymouslySendToUser && !note.anonymousChannelUsername" :class="$style.username"><MkAcct :user="note.user"/></div>
+ 	<div v-if="note.user.badgeRoles" :class="$style.badgeRoles">
+ 		<img v-for="(role, i) in note.user.badgeRoles" :key="i" v-tooltip="role.name" :class="$style.badgeRole" :src="role.iconUrl!"/>
+ 	</div>
+@@ -37,6 +49,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { inject } from 'vue';
+ import * as Misskey from 'misskey-js';
++import { hostname } from '@@/js/config.js';
+ import { i18n } from '@/i18n.js';
+ import { notePage } from '@/filters/note.js';
+ import { userPage } from '@/filters/user.js';
+@@ -46,6 +59,10 @@ defineProps<{
+ 	note: Misskey.entities.Note;
+ }>();
+ 
++function userOf(note: Misskey.entities.Note): Misskey.entities.User {
++	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
++}
++
+ const mock = inject<boolean>('mock', false);
+ </script>
+ 
+diff --git a/packages/frontend/src/components/MkNoteSimple.vue b/packages/frontend/src/components/MkNoteSimple.vue
+index e684cf2a30..0f3b855739 100644
+--- a/packages/frontend/src/components/MkNoteSimple.vue
++++ b/packages/frontend/src/components/MkNoteSimple.vue
+@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ <template>
+ <div :class="$style.root">
+-	<MkAvatar :class="$style.avatar" :user="note.user" link preview/>
++	<MkAvatar v-if="!note.anonymouslySendToUser" :class="$style.avatar" :user="userOf(note)" :link="!note.anonymousChannelUsername" preview small/>
+ 	<div :class="$style.main">
+ 		<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
+ 		<div>
+@@ -17,6 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<MkSubNoteContent :class="$style.text" :note="note"/>
+ 			</div>
+ 		</div>
++		<MkA v-if="note.channel && note.channel.id !== inChannel" :class="$style.channel" :to="`/channels/${note.channel.id}`"><i class="ti ti-device-tv"></i> {{ notechannel.name }}</MkA>
+ 	</div>
+ </div>
+ </template>
+@@ -24,13 +25,21 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { ref } from 'vue';
+ import * as Misskey from 'misskey-js';
++import { hostname } from '@@/js/config.js';
+ import MkNoteHeader from '@/components/MkNoteHeader.vue';
+ import MkSubNoteContent from '@/components/MkSubNoteContent.vue';
+ import MkCwButton from '@/components/MkCwButton.vue';
+ 
+-const props = defineProps<{
++const props = withDefaults(defineProps<{
+ 	note: Misskey.entities.Note;
+-}>();
++	quote?: boolean;
++}>(), {
++	quote: false,
++});
++
++function userOf(note: Misskey.entities.Note): Misskey.entities.User {
++	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
++}
+ 
+ const showContent = ref(false);
+ </script>
+@@ -78,6 +87,11 @@ const showContent = ref(false);
+ 	padding: 0;
+ }
+ 
++.channel {
++	opacity: 0.7;
++	font-size: 80%;
++}
++
+ @container (min-width: 250px) {
+ 	.avatar {
+ 		margin: 0 10px 0 0;
+diff --git a/packages/frontend/src/components/MkNoteSub.vue b/packages/frontend/src/components/MkNoteSub.vue
+index e4bade309b..f86ffe3e82 100644
+--- a/packages/frontend/src/components/MkNoteSub.vue
++++ b/packages/frontend/src/components/MkNoteSub.vue
+@@ -7,7 +7,9 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <div v-if="!muted" :class="[$style.root, { [$style.children]: depth > 1 }]">
+ 	<div :class="$style.main">
+ 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
+-		<MkAvatar :class="$style.avatar" :user="note.user" link preview/>
++		<div v-if="note.visibility === 'followers'" :class="$style.followersBar"></div>
++		<div v-if="note.visibility === 'specified'" :class="$style.specifiedBar"></div>
++		<MkAvatar :class="$style.avatar" :user="userOf(note)" :link="!note.anonymouslySendToUser && !note.anonymousChannelUsername" small/>
+ 		<div :class="$style.body">
+ 			<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
+ 			<div>
+@@ -31,7 +33,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <div v-else :class="$style.muted" @click="muted = false">
+ 	<I18n :src="i18n.ts.userSaysSomething" tag="small">
+ 		<template #name>
+-			<MkA v-user-preview="note.userId" :to="userPage(note.user)">
++			<I18n v-if="note.anonymouslySendToUser" :src="i18n.ts.anonymouslySendToUser" tag="span">
++				<template #user>
++					<MkA v-user-preview="note.anonymouslySendToUser.id" :to="userPage(note.anonymouslySendToUser)">
++						<MkUserName :user="note.anonymouslySendToUser"/>
++					</MkA>
++				</template>
++			</I18n>
++			<MkA v-else v-user-preview="note.userId" :to="userPage(note.user)">
+ 				<MkUserName :user="note.user"/>
+ 			</MkA>
+ 		</template>
+@@ -42,6 +51,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { ref } from 'vue';
+ import * as Misskey from 'misskey-js';
++import { hostname } from '@@/js/config.js';
+ import MkNoteHeader from '@/components/MkNoteHeader.vue';
+ import MkSubNoteContent from '@/components/MkSubNoteContent.vue';
+ import MkCwButton from '@/components/MkCwButton.vue';
+@@ -62,6 +72,10 @@ const props = withDefaults(defineProps<{
+ 	depth: 1,
+ });
+ 
++function userOf(note: Misskey.entities.Note): Misskey.entities.User {
++	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
++}
++
+ const muted = ref($i ? checkWordMute(props.note, $i, $i.mutedWords) : false);
+ 
+ const showContent = ref(false);
+@@ -91,18 +105,38 @@ if (props.detail) {
+ 
+ .main {
+ 	display: flex;
++	position: relative;
+ }
+ 
+ .colorBar {
+ 	position: absolute;
+-	top: 8px;
+-	left: 8px;
++	top: -8px;
++	bottom: 0;
++	left: -24px;
+ 	width: 5px;
+-	height: calc(100% - 8px);
+ 	border-radius: 999px;
+ 	pointer-events: none;
+ }
+ 
++.followersBar {
++	position: absolute;
++	top: -8px;
++	right: -24px;
++	bottom: 0;
++	pointer-events: none;
++	border-right: 5px dotted;
++}
++
++.specifiedBar {
++	position: absolute;
++	top: -8px;
++	right: -24px;
++	bottom: 0;
++	pointer-events: none;
++	border-right: 5px solid;
++	border-radius: 2.5px;
++}
++
+ .avatar {
+ 	flex-shrink: 0;
+ 	display: block;
+@@ -150,6 +184,15 @@ if (props.detail) {
+ 		&.children {
+ 			padding: 10px 0 0 8px;
+ 		}
++
++		.colorBar {
++			left: -8px;
++		}
++
++		.followersBar,
++		.specifiedBar {
++			right: -8px;
++		}
+ 	}
+ }
+ 
+diff --git a/packages/frontend/src/components/MkPostForm.vue b/packages/frontend/src/components/MkPostForm.vue
+index ad0a332f99..f724c2d228 100644
+--- a/packages/frontend/src/components/MkPostForm.vue
++++ b/packages/frontend/src/components/MkPostForm.vue
+@@ -15,12 +15,23 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		<div :class="$style.headerLeft">
+ 			<button v-if="!fixed" :class="$style.cancel" class="_button" @click="cancel"><i class="ti ti-x"></i></button>
+ 			<button v-click-anime v-tooltip="i18n.ts.switchAccount" :class="$style.account" class="_button" @click="openAccountMenu">
+-				<MkAvatar :user="postAccount ?? $i" :class="$style.avatar"/>
++				<MkAvatar :user="postAccount ?? $i" :class="$style.avatar" small/>
+ 			</button>
+ 		</div>
+ 		<div :class="$style.headerRight">
+ 			<template v-if="!(channel != null && fixed)">
+-				<button v-if="channel == null" ref="visibilityButton" v-click-anime v-tooltip="i18n.ts.visibility" :class="['_button', $style.headerRightItem, $style.visibility]" @click="setVisibility">
++				<button v-if="anonymouslySendToUser" class="_button" :class="[$style.headerRightItem, $style.visibility]" disabled>
++					<span :class="$style.headerRightButtonText">
++						<I18n :src="i18n.ts.anonymouslySendToUser" tag="span">
++							<template #user>
++								<MkA v-user-preview="anonymouslySendToUser.id" :to="userPage(anonymouslySendToUser)">
++									<MkUserName :user="anonymouslySendToUser"/>
++								</MkA>
++							</template>
++						</I18n>
++					</span>
++				</button>
++				<button v-else-if="channel == null" ref="visibilityButton" v-click-anime v-tooltip="i18n.ts.visibility" :class="['_button', $style.headerRightItem, $style.visibility]" @click="setVisibility">
+ 					<span v-if="visibility === 'public'"><i class="ti ti-world"></i></span>
+ 					<span v-if="visibility === 'home'"><i class="ti ti-home"></i></span>
+ 					<span v-if="visibility === 'followers'"><i class="ti ti-lock"></i></span>
+@@ -32,7 +43,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<span :class="$style.headerRightButtonText">{{ channel.name }}</span>
+ 				</button>
+ 			</template>
+-			<button v-click-anime v-tooltip="i18n.ts._visibility.disableFederation" class="_button" :class="[$style.headerRightItem, { [$style.danger]: localOnly }]" :disabled="channel != null || visibility === 'specified'" @click="toggleLocalOnly">
++			<button v-click-anime v-tooltip="i18n.ts._visibility.disableFederation" class="_button" :class="[$style.headerRightItem, { [$style.danger]: localOnly }]" :disabled="channel != null || visibility === 'specified' || anonymouslySendToUser" @click="toggleLocalOnly">
+ 				<span v-if="!localOnly"><i class="ti ti-rocket"></i></span>
+ 				<span v-else><i class="ti ti-rocket-off"></i></span>
+ 			</button>
+@@ -67,10 +78,12 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<MkInfo v-if="hasNotSpecifiedMentions" warn :class="$style.hasNotSpecifiedMentions">{{ i18n.ts.notSpecifiedMentionWarning }} - <button class="_textButton" @click="addMissingMention()">{{ i18n.ts.add }}</button></MkInfo>
+ 	<div v-show="useCw" :class="$style.cwOuter">
+ 		<input ref="cwInputEl" v-model="cw" :class="$style.cw" :placeholder="i18n.ts.annotation" @keydown="onKeydown" @keyup="onKeyup" @compositionend="onCompositionEnd">
+-		<div v-if="maxCwTextLength - cwTextLength < 20" :class="['_acrylic', $style.cwTextCount, { [$style.cwTextOver]: cwTextLength > maxCwTextLength }]">{{ maxCwTextLength - cwTextLength }}</div>		
++		<div v-if="maxCwTextLength - cwTextLength < 20" :class="['_acrylic', $style.cwTextCount, { [$style.cwTextOver]: cwTextLength > maxCwTextLength }]">{{ maxCwTextLength - cwTextLength }}</div>
+ 	</div>
+ 	<div :class="[$style.textOuter, { [$style.withCw]: useCw }]">
+ 		<div v-if="channel" :class="$style.colorBar" :style="{ background: channel.color }"></div>
++		<div v-if="visibility === 'followers'" :class="$style.followersBar"></div>
++		<div v-if="visibility === 'specified'" :class="$style.specifiedBar"></div>
+ 		<textarea ref="textareaEl" v-model="text" :class="[$style.text]" :disabled="posting || posted" :readonly="textAreaReadOnly" :placeholder="placeholder" data-cy-post-form-text @keydown="onKeydown" @keyup="onKeyup" @paste="onPaste" @compositionupdate="onCompositionUpdate" @compositionend="onCompositionEnd"/>
+ 		<div v-if="maxTextLength - textLength < 100" :class="['_acrylic', $style.textCount, { [$style.textOver]: textLength > maxTextLength }]">{{ maxTextLength - textLength }}</div>
+ 	</div>
+@@ -82,7 +95,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	</div>
+ 	<footer :class="$style.footer">
+ 		<div :class="$style.footerLeft">
+-			<button v-tooltip="i18n.ts.attachFile" class="_button" :class="$style.footerButton" @click="chooseFileFrom"><i class="ti ti-photo-plus"></i></button>
++			<button v-tooltip="i18n.ts.attachFile" class="_button" :class="$style.footerButton" :disabled="anonymouslySendToUser" @click="chooseFileFrom"><i class="ti ti-photo-plus"></i></button>
+ 			<button v-tooltip="i18n.ts.poll" class="_button" :class="[$style.footerButton, { [$style.footerButtonActive]: poll }]" @click="togglePoll"><i class="ti ti-chart-arrows"></i></button>
+ 			<button v-tooltip="i18n.ts.useCw" class="_button" :class="[$style.footerButton, { [$style.footerButtonActive]: useCw }]" @click="useCw = !useCw"><i class="ti ti-eye-off"></i></button>
+ 			<button v-tooltip="i18n.ts.mention" class="_button" :class="$style.footerButton" @click="insertMention"><i class="ti ti-at"></i></button>
+@@ -90,6 +103,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<button v-if="postFormActions.length > 0" v-tooltip="i18n.ts.plugins" class="_button" :class="$style.footerButton" @click="showActions"><i class="ti ti-plug"></i></button>
+ 			<button v-tooltip="i18n.ts.emoji" :class="['_button', $style.footerButton]" @click="insertEmoji"><i class="ti ti-mood-happy"></i></button>
+ 			<button v-if="showAddMfmFunction" v-tooltip="i18n.ts.addMfmFunction" :class="['_button', $style.footerButton]" @click="insertMfmFunction"><i class="ti ti-palette"></i></button>
++			<button v-tooltip="i18n.ts.publicLetter" class="_button" :class="$style.footerButton" :disabled="channel" @click="setASUT"><i class="ti" :class="anonymouslySendToUser ? 'ti-eyeglass-off' : 'ti-eyeglass'"></i></button>
+ 		</div>
+ 		<div :class="$style.footerRight">
+ 			<button v-tooltip="i18n.ts.previewNoteText" class="_button" :class="[$style.footerButton, { [$style.previewButtonActive]: showPreview }]" @click="showPreview = !showPreview"><i class="ti ti-eye"></i></button>
+@@ -116,6 +130,7 @@ import MkNotePreview from '@/components/MkNotePreview.vue';
+ import XPostFormAttaches from '@/components/MkPostFormAttaches.vue';
+ import MkPollEditor from '@/components/MkPollEditor.vue';
+ import type { PollEditorModelValue } from '@/components/MkPollEditor.vue';
++import { userPage } from '@/filters/user.js';
+ import { erase, unique } from '@/scripts/array.js';
+ import { extractMentions } from '@/scripts/extract-mentions.js';
+ import { formatTimeString } from '@/scripts/format-time-string.js';
+@@ -185,6 +200,7 @@ const visibleUsers = ref<Misskey.entities.UserDetailed[]>([]);
+ if (props.initialVisibleUsers) {
+ 	props.initialVisibleUsers.forEach(u => pushVisibleUser(u));
+ }
++const anonymouslySendToUser = ref(props.initialAnonymouslySendToUser ?? null);
+ const reactionAcceptance = ref(defaultStore.state.reactionAcceptance);
+ const autocomplete = ref(null);
+ const draghover = ref(false);
+@@ -219,15 +235,7 @@ const placeholder = computed((): string => {
+ 	} else if (props.channel) {
+ 		return i18n.ts._postForm.channelPlaceholder;
+ 	} else {
+-		const xs = [
+-			i18n.ts._postForm._placeholders.a,
+-			i18n.ts._postForm._placeholders.b,
+-			i18n.ts._postForm._placeholders.c,
+-			i18n.ts._postForm._placeholders.d,
+-			i18n.ts._postForm._placeholders.e,
+-			i18n.ts._postForm._placeholders.f,
+-		];
+-		return xs[Math.floor(Math.random() * xs.length)];
++		return i18n.tsx._postForm.placeholder({ x: i18n.ts._visibility[visibility.value] });
+ 	}
+ });
+ 
+@@ -265,6 +273,7 @@ const canPost = computed((): boolean => {
+ 		(textLength.value <= maxTextLength.value) &&
+ 		(cwTextLength.value <= maxCwTextLength) &&
+ 		(files.value.length <= 16) &&
++		(!anonymouslySendToUser.value || !anonymouslySendToUser.value.host && !$i.isSilenced && visibility.value === 'public' && !files.value.length && text.value.startsWith(`@${anonymouslySendToUser.value.username} `)) &&
+ 		(!poll.value || poll.value.choices.length >= 2);
+ });
+ 
+@@ -285,12 +294,18 @@ watch(visibleUsers, () => {
+ 	deep: true,
+ });
+ 
++watch([defaultStore.reactiveState.rememberNoteVisibility, defaultStore.reactiveState.visibility], ([rememberNoteVisibilityValue, visibilityValue]) => {
++	if (rememberNoteVisibilityValue) {
++		visibility.value = visibilityValue;
++	}
++});
++
+ if (props.mention) {
+ 	text.value = props.mention.host ? `@${props.mention.username}@${toASCII(props.mention.host)}` : `@${props.mention.username}`;
+ 	text.value += ' ';
+ }
+ 
+-if (props.reply && (props.reply.user.username !== $i.username || (props.reply.user.host != null && props.reply.user.host !== host))) {
++if (props.reply && (props.reply.user.username !== $i.username && props.reply.user.username !== 'instance.actor' || (props.reply.user.host != null && props.reply.user.host !== host))) {
+ 	text.value = `@${props.reply.user.username}${props.reply.user.host != null ? '@' + toASCII(props.reply.user.host) : ''} `;
+ }
+ 
+@@ -372,6 +387,8 @@ function watchForDraft() {
+ 	watch(localOnly, () => saveDraft());
+ 	watch(quoteId, () => saveDraft());
+ 	watch(reactionAcceptance, () => saveDraft());
++	watch(visibleUsers, () => saveDraft(), { deep: true });
++	watch(anonymouslySendToUser, () => saveDraft(), { deep: true });
+ }
+ 
+ function checkMissingMention() {
+@@ -568,9 +585,15 @@ function removeVisibleUser(user) {
+ 
+ function clear() {
+ 	text.value = '';
++	imeText.value = '';
+ 	files.value = [];
+ 	poll.value = null;
+ 	quoteId.value = null;
++	if (anonymouslySendToUser.value) {
++		localOnly.value = props.initialLocalOnly ?? defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
++		visibility.value = props.initialVisibility ?? defaultStore.state.rememberNoteVisibility ? defaultStore.state.visibility : defaultStore.state.defaultNoteVisibility;
++		anonymouslySendToUser.value = null;
++	}
+ }
+ 
+ function onKeydown(ev: KeyboardEvent) {
+@@ -707,6 +730,7 @@ function saveDraft() {
+ 	draftData[draftKey.value] = {
+ 		updatedAt: new Date(),
+ 		data: {
++			id: props.initialNote?.id,
+ 			text: text.value,
+ 			useCw: useCw.value,
+ 			cw: cw.value,
+@@ -717,6 +741,7 @@ function saveDraft() {
+ 			visibleUserIds: visibility.value === 'specified' ? visibleUsers.value.map(x => x.id) : undefined,
+ 			quoteId: quoteId.value,
+ 			reactionAcceptance: reactionAcceptance.value,
++			anonymouslySendToUserId: anonymouslySendToUser.value?.id,
+ 		},
+ 	};
+ 
+@@ -740,6 +765,10 @@ function isAnnoying(text: string): boolean {
+ }
+ 
+ async function post(ev?: MouseEvent) {
++	textareaEl.value?.blur();
++	cwInputEl.value?.blur();
++	hashtagsInputEl.value?.blur();
++
+ 	if (useCw.value && (cw.value == null || cw.value.trim() === '')) {
+ 		os.alert({
+ 			type: 'error',
+@@ -802,10 +831,11 @@ async function post(ev?: MouseEvent) {
+ 		visibility: visibility.value,
+ 		visibleUserIds: visibility.value === 'specified' ? visibleUsers.value.map(u => u.id) : undefined,
+ 		reactionAcceptance: reactionAcceptance.value,
++		anonymouslySendToUserId: anonymouslySendToUser.value?.id,
+ 	};
+ 
+ 	if (withHashtags.value && hashtags.value && hashtags.value.trim() !== '') {
+-		const hashtags_ = hashtags.value.trim().split(' ').map(x => x.startsWith('#') ? x : '#' + x).join(' ');
++		const hashtags_ = hashtags.value.split(/\s+/).filter(x => x).map(x => x.startsWith('#') ? x : '#' + x).join(' ');
+ 		if (!postData.text) {
+ 			postData.text = hashtags_;
+ 		} else {
+@@ -838,7 +868,7 @@ async function post(ev?: MouseEvent) {
+ 	}
+ 
+ 	posting.value = true;
+-	misskeyApi('notes/create', postData, token).then(() => {
++	misskeyApi('notes/create', postData, token).then(res => {
+ 		if (props.freezeAfterPosted) {
+ 			posted.value = true;
+ 		} else {
+@@ -896,6 +926,9 @@ async function post(ev?: MouseEvent) {
+ 			if (m === 0 && s === 0) {
+ 				claimAchievement('postedAt0min0sec');
+ 			}
++			if (postData.anonymouslySendToUserId) {
++				os.pageWindow(`/notes/${res.createdNote.id}`);
++			}
+ 		});
+ 	}).catch(err => {
+ 		posting.value = false;
+@@ -916,6 +949,25 @@ function insertMention() {
+ 	});
+ }
+ 
++function setASUT() {
++	if (anonymouslySendToUser.value) {
++		localOnly.value = props.initialLocalOnly ?? defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
++		visibility.value = props.initialVisibility ?? defaultStore.state.rememberNoteVisibility ? defaultStore.state.visibility : defaultStore.state.defaultNoteVisibility;
++		anonymouslySendToUser.value = null;
++	} else {
++		os.selectUser().then(user => {
++			const prefix = `@${Misskey.acct.toString(user)} `;
++			if (!text.value.startsWith(prefix)) {
++				text.value = prefix + text.value;
++			}
++			files.value = [];
++			visibility.value = 'public';
++			localOnly.value = true;
++			anonymouslySendToUser.value = user;
++		});
++	}
++}
++
+ async function insertEmoji(ev: MouseEvent) {
+ 	textAreaReadOnly.value = true;
+ 	const target = ev.currentTarget ?? ev.target;
+@@ -1011,7 +1063,7 @@ onMounted(() => {
+ 				text.value = draft.data.text;
+ 				useCw.value = draft.data.useCw;
+ 				cw.value = draft.data.cw;
+-				visibility.value = draft.data.visibility;
++				visibility.value = draft.data.id || !defaultStore.state.rememberNoteVisibility ? draft.data.visibility : defaultStore.state.visibility;
+ 				localOnly.value = draft.data.localOnly;
+ 				files.value = (draft.data.files || []).filter(draftFile => draftFile);
+ 				if (draft.data.poll) {
+@@ -1024,6 +1076,11 @@ onMounted(() => {
+ 				}
+ 				quoteId.value = draft.data.quoteId;
+ 				reactionAcceptance.value = draft.data.reactionAcceptance;
++				if (draft.data.anonymouslySendToUserId) {
++					misskeyApi('users/show', { userId: draft.data.anonymouslySendToUserId }).then(res => {
++						anonymouslySendToUser.value = res;
++					});
++				}
+ 			}
+ 		}
+ 
+@@ -1158,11 +1215,30 @@ defineExpose({
+ 	top: 0px;
+ 	left: 12px;
+ 	width: 5px;
+-	height: 100% ;
++	height: 100%;
+ 	border-radius: 999px;
+ 	pointer-events: none;
+ }
+ 
++.followersBar {
++	position: absolute;
++	top: 0px;
++	right: 12px;
++	height: 100%;
++	pointer-events: none;
++	border-right: 5px dotted;
++}
++
++.specifiedBar {
++	position: absolute;
++	top: 0px;
++	right: 12px;
++	height: 100%;
++	pointer-events: none;
++	border-right: 5px solid;
++	border-radius: 2.5px;
++}
++
+ .submitInner {
+ 	padding: 0 12px;
+ 	line-height: 34px;
+diff --git a/packages/frontend/src/components/MkUserPopup.vue b/packages/frontend/src/components/MkUserPopup.vue
+index 740202f28b..3bfc4eaf6b 100644
+--- a/packages/frontend/src/components/MkUserPopup.vue
++++ b/packages/frontend/src/components/MkUserPopup.vue
+@@ -12,7 +12,10 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	appear @afterLeave="emit('closed')"
+ >
+ 	<div v-if="showing" :class="$style.root" class="_popup _shadow" :style="{ zIndex, top: top + 'px', left: left + 'px' }" @mouseover="() => { emit('mouseover'); }" @mouseleave="() => { emit('mouseleave'); }">
+-		<div v-if="user != null">
++		<div v-if="user?.username === 'instance.actor' && user.host == null">
++			<div :class="$style.description">{{ i18n.ts.isSystemAccount }}</div>
++		</div>
++		<div v-else-if="user != null">
+ 			<div :class="$style.banner" :style="user.bannerUrl ? `background-image: url(${defaultStore.state.disableShowingAnimatedImages ? getStaticImageUrl(user.bannerUrl) : user.bannerUrl})` : ''">
+ 				<span v-if="$i && $i.id != user.id && user.isFollowed" :class="$style.followed">{{ i18n.ts.followsYou }}</span>
+ 			</div>
+@@ -199,6 +202,10 @@ onMounted(() => {
+ 	text-align: center;
+ 	border-top: solid 1px var(--MI_THEME-divider);
+ 	border-bottom: solid 1px var(--MI_THEME-divider);
++
++	&:only-child {
++		border: 0;
++	}
+ }
+ 
+ .mfm {
+diff --git a/packages/frontend/src/scripts/get-appear-note.ts b/packages/frontend/src/scripts/get-appear-note.ts
+index 40ce80eac9..0ec6a1778e 100644
+--- a/packages/frontend/src/scripts/get-appear-note.ts
++++ b/packages/frontend/src/scripts/get-appear-note.ts
+@@ -6,5 +6,5 @@
+ import * as Misskey from 'misskey-js';
+ 
+ export function getAppearNote(note: Misskey.entities.Note) {
+-	return Misskey.note.isPureRenote(note) ? note.renote : note;
++	return Misskey.note.isPureRenote(note) ? note.renote! : note;
+ }
+diff --git a/packages/frontend/src/scripts/get-note-menu.ts b/packages/frontend/src/scripts/get-note-menu.ts
+index 23fe811525..86706c78f2 100644
+--- a/packages/frontend/src/scripts/get-note-menu.ts
++++ b/packages/frontend/src/scripts/get-note-menu.ts
+@@ -141,6 +141,7 @@ export function getAbuseNoteMenu(note: Misskey.entities.Note, text: string): Men
+ 			noteInfo += `Local Note: ${localUrl}\n`;
+ 			const { dispose } = os.popup(defineAsyncComponent(() => import('@/components/MkAbuseReportWindow.vue')), {
+ 				user: note.user,
++				note,
+ 				initialComment: `${noteInfo}-----\n`,
+ 			}, {
+ 				closed: () => dispose(),
+@@ -220,6 +221,20 @@ export function getNoteMenu(props: {
+ 		});
+ 	}
+ 
++	function block(): void {
++		os.confirm({
++			type: 'warning',
++			text: i18n.ts.blockConfirm,
++		}).then(({ canceled }) => {
++			if (canceled) return;
++
++			misskeyApi('notes/delete', {
++				noteId: appearNote.id,
++				block: true,
++			});
++		});
++	}
++
+ 	function toggleFavorite(favorite: boolean): void {
+ 		claimAchievement('noteFavorited1');
+ 		os.apiWithDialog(favorite ? 'notes/favorites/create' : 'notes/favorites/delete', {
+@@ -396,17 +411,19 @@ export function getNoteMenu(props: {
+ 			}
+ 		}
+ 
+-		menuItems.push({
+-			type: 'parent',
+-			icon: 'ti ti-user',
+-			text: i18n.ts.user,
+-			children: async () => {
+-				const user = appearNote.userId === $i?.id ? $i : await misskeyApi('users/show', { userId: appearNote.userId });
+-				const { menu, cleanup } = getUserMenu(user);
+-				cleanups.push(cleanup);
+-				return menu;
+-			},
+-		});
++		if (appearNote.user.username !== 'instance.actor' || appearNote.user.host !== null) {
++			menuItems.push({
++				type: 'parent',
++				icon: 'ti ti-user',
++				text: i18n.ts.user,
++				children: async () => {
++					const user = appearNote.userId === $i?.id ? $i : await misskeyApi('users/show', { userId: appearNote.userId });
++					const { menu, cleanup } = getUserMenu(user);
++					cleanups.push(cleanup);
++					return menu;
++				},
++			});
++		}
+ 
+ 		if (appearNote.userId !== $i.id) {
+ 			menuItems.push({ type: 'divider' });
+@@ -448,7 +465,7 @@ export function getNoteMenu(props: {
+ 			});
+ 		}
+ 
+-		if (appearNote.userId === $i.id || $i.isModerator || $i.isAdmin) {
++		if (appearNote.userId === $i.id || appearNote.user.username === 'instance.actor' && appearNote.user.host === null || $i.isModerator || $i.isAdmin) {
+ 			menuItems.push({ type: 'divider' });
+ 			if (appearNote.userId === $i.id) {
+ 				menuItems.push({
+@@ -457,6 +474,13 @@ export function getNoteMenu(props: {
+ 					action: delEdit,
+ 				});
+ 			}
++			if (appearNote.user.username === 'instance.actor' && appearNote.user.host === null) {
++				menuItems.push({
++					icon: 'ti ti-ban',
++					text: i18n.ts.block,
++					action: block,
++				});
++			}
+ 			menuItems.push({
+ 				icon: 'ti ti-trash',
+ 				text: i18n.ts.delete,
+@@ -541,144 +565,138 @@ function smallerVisibility(a: Visibility, b: Visibility): Visibility {
+ 	return 'public';
+ }
+ 
+-export function getRenoteMenu(props: {
++function renoteRipple(renoteButton: Ref<HTMLElement | undefined>) {
++	const el = renoteButton.value;
++	if (el) {
++		const rect = el.getBoundingClientRect();
++		const x = rect.left + (el.offsetWidth / 2);
++		const y = rect.top + (el.offsetHeight / 2);
++		os.popup(MkRippleEffect, { x, y }, {}, 'end');
++	}
++}
++
++export async function getRenoteMenu(props: {
+ 	note: Misskey.entities.Note;
+ 	renoteButton: ShallowRef<HTMLElement | undefined>;
+ 	mock?: boolean;
+ }) {
+ 	const appearNote = getAppearNote(props.note);
++	const favoritedChannels = await favoritedChannelsCache.fetch();
++	let items = [] as MenuItem[];
++	const configuredVisibility = defaultStore.state.rememberNoteVisibility ? defaultStore.state.visibility : defaultStore.state.defaultNoteVisibility;
++	const localOnly = defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
++
++	let visibility = appearNote.visibility;
++	visibility = smallerVisibility(visibility, configuredVisibility);
++	if (appearNote.channel?.isSensitive) {
++		visibility = smallerVisibility(visibility, 'home');
++	}
+ 
+-	const channelRenoteItems: MenuItem[] = [];
+-	const normalRenoteItems: MenuItem[] = [];
+-	const normalExternalChannelRenoteItems: MenuItem[] = [];
+-
+-	if (appearNote.channel) {
+-		channelRenoteItems.push(...[{
+-			text: i18n.ts.inChannelRenote,
++	if (!appearNote.channel || appearNote.channel.allowRenoteToExternal) {
++		items = items.concat([{
++			text: i18n.ts.renote,
+ 			icon: 'ti ti-repeat',
++			suffixIcon: defaultStore.state.rememberNoteVisibility ? (visibility === 'public' ? 'ti-world' : visibility === 'home' ? 'ti-home' : visibility === 'followers' ? 'ti-lock' : 'ti-mail') : undefined,
+ 			action: () => {
+-				const el = props.renoteButton.value;
+-				if (el) {
+-					const rect = el.getBoundingClientRect();
+-					const x = rect.left + (el.offsetWidth / 2);
+-					const y = rect.top + (el.offsetHeight / 2);
+-					const { dispose } = os.popup(MkRippleEffect, { x, y }, {
+-						end: () => dispose(),
+-					});
+-				}
++				renoteRipple(props.renoteButton);
+ 
+ 				if (!props.mock) {
+ 					misskeyApi('notes/create', {
++						localOnly,
++						visibility,
+ 						renoteId: appearNote.id,
+-						channelId: appearNote.channelId,
+ 					}).then(() => {
+ 						os.toast(i18n.ts.renoted);
+ 					});
+ 				}
+ 			},
+ 		}, {
+-			text: i18n.ts.inChannelQuote,
++			text: i18n.ts.quote,
+ 			icon: 'ti ti-quote',
+ 			action: () => {
+ 				if (!props.mock) {
+ 					os.post({
+ 						renote: appearNote,
+-						channel: appearNote.channel,
+ 					});
+ 				}
+ 			},
+ 		}]);
+ 	}
+ 
+-	if (!appearNote.channel || appearNote.channel.allowRenoteToExternal) {
+-		normalRenoteItems.push(...[{
+-			text: i18n.ts.renote,
++	if (favoritedChannels.length) {
++		items = items.concat([{ type: 'divider' }, {
++			type: 'parent',
++			text: i18n.ts.toChannelRenote,
+ 			icon: 'ti ti-repeat',
+-			action: () => {
+-				const el = props.renoteButton.value;
+-				if (el) {
+-					const rect = el.getBoundingClientRect();
+-					const x = rect.left + (el.offsetWidth / 2);
+-					const y = rect.top + (el.offsetHeight / 2);
+-					const { dispose } = os.popup(MkRippleEffect, { x, y }, {
+-						end: () => dispose(),
+-					});
+-				}
+-
+-				const configuredVisibility = defaultStore.state.rememberNoteVisibility ? defaultStore.state.visibility : defaultStore.state.defaultNoteVisibility;
+-				const localOnly = defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
++			children: async () => favoritedChannels.map((channel) => {
++				return {
++					text: channel.name,
++					icon: 'ti ti-device-tv',
++					action: () => {
++						renoteRipple(props.renoteButton);
++						if (!props.mock) {
++							misskeyApi('notes/create', {
++								renoteId: appearNote.id,
++								channelId: channel.id,
++							}).then(() => {
++								os.toast(i18n.ts.renoted);
++							});
++						}
++					},
++				};
++			}),
++		}, {
++			type: 'parent',
++			text: i18n.ts.toChannelQuote,
++			icon: 'ti ti-quote',
++			children: async () => favoritedChannels.map((channel) => {
++				return {
++					text: channel.name,
++					icon: 'ti ti-device-tv',
++					action: () => {
++						if (!props.mock) {
++							os.post({
++								renote: appearNote,
++								channel,
++							});
++						}
++					},
++				};
++			}),
++		}]);
++	}
+ 
+-				let visibility = appearNote.visibility;
+-				visibility = smallerVisibility(visibility, configuredVisibility);
+-				if (appearNote.channel?.isSensitive) {
+-					visibility = smallerVisibility(visibility, 'home');
+-				}
++	if (appearNote.channel) {
++		items = items.concat([{ type: 'divider' }, {
++			text: i18n.ts.inChannelRenote,
++			icon: 'ti ti-repeat',
++			action: () => {
++				renoteRipple(props.renoteButton);
+ 
+ 				if (!props.mock) {
+ 					misskeyApi('notes/create', {
+-						localOnly,
+-						visibility,
+ 						renoteId: appearNote.id,
++						channelId: appearNote.channelId,
+ 					}).then(() => {
+ 						os.toast(i18n.ts.renoted);
+ 					});
+ 				}
+ 			},
+-		}, (props.mock) ? undefined : {
+-			text: i18n.ts.quote,
++		}, {
++			text: i18n.ts.inChannelQuote,
+ 			icon: 'ti ti-quote',
+ 			action: () => {
+-				os.post({
+-					renote: appearNote,
+-				});
++				if (!props.mock) {
++					os.post({
++						renote: appearNote,
++						channel: appearNote.channel,
++					});
++				}
+ 			},
+ 		}]);
+-
+-		normalExternalChannelRenoteItems.push({
+-			type: 'parent',
+-			icon: 'ti ti-repeat',
+-			text: appearNote.channel ? i18n.ts.renoteToOtherChannel : i18n.ts.renoteToChannel,
+-			children: async () => {
+-				const channels = await favoritedChannelsCache.fetch();
+-				return channels.filter((channel) => {
+-					if (!appearNote.channelId) return true;
+-					return channel.id !== appearNote.channelId;
+-				}).map((channel) => ({
+-					text: channel.name,
+-					action: () => {
+-						const el = props.renoteButton.value;
+-						if (el) {
+-							const rect = el.getBoundingClientRect();
+-							const x = rect.left + (el.offsetWidth / 2);
+-							const y = rect.top + (el.offsetHeight / 2);
+-							const { dispose } = os.popup(MkRippleEffect, { x, y }, {
+-								end: () => dispose(),
+-							});
+-						}
+-
+-						if (!props.mock) {
+-							misskeyApi('notes/create', {
+-								renoteId: appearNote.id,
+-								channelId: channel.id,
+-							}).then(() => {
+-								os.toast(i18n.tsx.renotedToX({ name: channel.name }));
+-							});
+-						}
+-					},
+-				}));
+-			},
+-		});
+ 	}
+ 
+-	const renoteItems = [
+-		...normalRenoteItems,
+-		...(channelRenoteItems.length > 0 && normalRenoteItems.length > 0) ? [{ type: 'divider' }] as MenuItem[] : [],
+-		...channelRenoteItems,
+-		...(normalExternalChannelRenoteItems.length > 0 && (normalRenoteItems.length > 0 || channelRenoteItems.length > 0)) ? [{ type: 'divider' }] as MenuItem[] : [],
+-		...normalExternalChannelRenoteItems,
+-	];
+-
+ 	return {
+-		menu: renoteItems,
++		menu: items,
+ 	};
+ }
+diff --git a/packages/frontend/src/scripts/get-user-menu.ts b/packages/frontend/src/scripts/get-user-menu.ts
+index 8f7c3ba3be..669afb65fa 100644
+--- a/packages/frontend/src/scripts/get-user-menu.ts
++++ b/packages/frontend/src/scripts/get-user-menu.ts
+@@ -293,49 +293,52 @@ export function getUserMenu(user: Misskey.entities.UserDetailed, router: IRouter
+ 		});
+ 	}
+ 
+-	if ($i && meId !== user.id) {
+-		if (iAmModerator) {
+-			menuItems.push({
+-				type: 'parent',
+-				icon: 'ti ti-badges',
+-				text: i18n.ts.roles,
+-				children: async () => {
+-					const roles = await rolesCache.fetch();
+-
+-					return roles.filter(r => r.target === 'manual').map(r => ({
+-						text: r.name,
+-						action: async () => {
+-							const { canceled, result: period } = await os.select({
+-								title: i18n.ts.period + ': ' + r.name,
+-								items: [{
+-									value: 'indefinitely', text: i18n.ts.indefinitely,
+-								}, {
+-									value: 'oneHour', text: i18n.ts.oneHour,
+-								}, {
+-									value: 'oneDay', text: i18n.ts.oneDay,
+-								}, {
+-									value: 'oneWeek', text: i18n.ts.oneWeek,
+-								}, {
+-									value: 'oneMonth', text: i18n.ts.oneMonth,
+-								}],
+-								default: 'indefinitely',
+-							});
+-							if (canceled) return;
+-
+-							const expiresAt = period === 'indefinitely' ? null
+-								: period === 'oneHour' ? Date.now() + (1000 * 60 * 60)
+-								: period === 'oneDay' ? Date.now() + (1000 * 60 * 60 * 24)
+-								: period === 'oneWeek' ? Date.now() + (1000 * 60 * 60 * 24 * 7)
+-								: period === 'oneMonth' ? Date.now() + (1000 * 60 * 60 * 24 * 30)
+-								: null;
++	if ($i && (iAmModerator || meId === user.id)) {
++		menuItems.push({
++			type: 'parent',
++			icon: 'ti ti-badges',
++			text: i18n.ts.roles,
++			children: async () => {
++				const roles = await rolesCache.fetch();
+ 
+-							os.apiWithDialog('admin/roles/assign', { roleId: r.id, userId: user.id, expiresAt });
+-						},
+-					}));
+-				},
+-			});
+-		}
++				return roles.filter(r => r.target === 'manual').map(r => ({
++					text: r.name,
++					action: async () => {
++						const { canceled, result: period = 'indefinitely' } = iAmModerator || $i!.policies.selfAssignability?.some(([t, u]) => u && r.tags?.includes(t)) ? await os.select({
++							title: i18n.ts.period + ': ' + r.name,
++							items: [{
++								value: 'indefinitely', text: i18n.ts.indefinitely,
++							}, {
++								value: 'oneHour', text: i18n.ts.oneHour,
++							}, {
++								value: 'oneDay', text: i18n.ts.oneDay,
++							}, {
++								value: 'oneWeek', text: i18n.ts.oneWeek,
++							}, {
++								value: 'oneMonth', text: i18n.ts.oneMonth,
++							}],
++							default: 'indefinitely',
++						}) : await os.confirm({
++							type: 'warning',
++							title: i18n.ts.areYouSure,
++						}) as { canceled: boolean, result?: string };
++						if (canceled) return;
++
++						const expiresAt = period === 'indefinitely' ? null
++							: period === 'oneHour' ? Date.now() + (1000 * 60 * 60)
++							: period === 'oneDay' ? Date.now() + (1000 * 60 * 60 * 24)
++							: period === 'oneWeek' ? Date.now() + (1000 * 60 * 60 * 24 * 7)
++							: period === 'oneMonth' ? Date.now() + (1000 * 60 * 60 * 24 * 30)
++							: null;
++
++						os.apiWithDialog('admin/roles/assign', { roleId: r.id, userId: user.id, expiresAt });
++					},
++				}));
++			},
++		});
++	}
+ 
++	if ($i && meId !== user.id) {
+ 		// フォローしたとしても user.isFollowing はリアルタイム更新されないので不便なため
+ 		//if (user.isFollowing) {
+ 		const withRepliesRef = ref(user.withReplies ?? false);
+diff --git a/packages/frontend/src/types/post-form.ts b/packages/frontend/src/types/post-form.ts
+index 5bb04a95a0..95076b55ed 100644
+--- a/packages/frontend/src/types/post-form.ts
++++ b/packages/frontend/src/types/post-form.ts
+@@ -17,6 +17,7 @@ export interface PostFormProps {
+ 	initialFiles?: Misskey.entities.DriveFile[];
+ 	initialLocalOnly?: boolean;
+ 	initialVisibleUsers?: Misskey.entities.UserDetailed[];
++	initialAnonymouslySendToUser?: Misskey.entities.UserDetailed;
+ 	initialNote?: Misskey.entities.Note;
+ 	instant?: boolean;
+ };

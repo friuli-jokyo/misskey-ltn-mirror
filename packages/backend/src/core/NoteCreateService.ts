@@ -4,8 +4,9 @@
  */
 
 import { setImmediate } from 'node:timers/promises';
+import crypto from 'node:crypto';
 import * as mfm from 'mfm-js';
-import { In, DataSource, IsNull, LessThan } from 'typeorm';
+import { In, DataSource, IsNull, LessThan, LessThanOrEqual, Not, Or } from 'typeorm';
 import * as Redis from 'ioredis';
 import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { extractMentions } from '@/misc/extract-mentions.js';
@@ -13,7 +14,7 @@ import { extractCustomEmojisFromMfm } from '@/misc/extract-custom-emojis-from-mf
 import { extractHashtags } from '@/misc/extract-hashtags.js';
 import type { IMentionedRemoteUsers } from '@/models/Note.js';
 import { MiNote } from '@/models/Note.js';
-import type { ChannelFollowingsRepository, ChannelsRepository, FollowingsRepository, InstancesRepository, MiFollowing, MiMeta, MutingsRepository, NotesRepository, NoteThreadMutingsRepository, UserListMembershipsRepository, UserProfilesRepository, UsersRepository } from '@/models/_.js';
+import type { BlockingsRepository, ChannelAnonymousSaltsRepository, ChannelFollowingsRepository, ChannelsRepository, DriveFilesRepository, FollowingsRepository, InstancesRepository, MiFollowing, MiMeta, MutingsRepository, NotesRepository, NoteThreadMutingsRepository, UserListMembershipsRepository, UserProfilesRepository, UsersRepository } from '@/models/_.js';
 import type { MiDriveFile } from '@/models/DriveFile.js';
 import type { MiApp } from '@/models/App.js';
 import { concat } from '@/misc/prelude/array.js';
@@ -42,7 +43,6 @@ import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
 import { ApDeliverManagerService } from '@/core/activitypub/ApDeliverManagerService.js';
-import { NoteReadService } from '@/core/NoteReadService.js';
 import { RemoteUserResolveService } from '@/core/RemoteUserResolveService.js';
 import { bindThis } from '@/decorators.js';
 import { DB_MAX_NOTE_TEXT_LENGTH } from '@/const.js';
@@ -57,6 +57,7 @@ import { trackPromise } from '@/misc/promise-tracker.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { CollapsedQueue } from '@/misc/collapsed-queue.js';
 import { CacheService } from '@/core/CacheService.js';
+import { isQuote, isRenote } from '@/misc/is-renote.js';
 
 type NotificationType = 'reply' | 'renote' | 'quote' | 'mention';
 
@@ -186,6 +187,9 @@ export class NoteCreateService implements OnApplicationShutdown {
 		@Inject(DI.channelsRepository)
 		private channelsRepository: ChannelsRepository,
 
+		@Inject(DI.channelAnonymousSaltsRepository)
+		private channelAnonymousSaltsRepository: ChannelAnonymousSaltsRepository,
+
 		@Inject(DI.noteThreadMutingsRepository)
 		private noteThreadMutingsRepository: NoteThreadMutingsRepository,
 
@@ -195,13 +199,18 @@ export class NoteCreateService implements OnApplicationShutdown {
 		@Inject(DI.channelFollowingsRepository)
 		private channelFollowingsRepository: ChannelFollowingsRepository,
 
+		@Inject(DI.blockingsRepository)
+		private blockingsRepository: BlockingsRepository,
+
+		@Inject(DI.driveFilesRepository)
+		private driveFilesRepository: DriveFilesRepository,
+
 		private userEntityService: UserEntityService,
 		private noteEntityService: NoteEntityService,
 		private idService: IdService,
 		private globalEventService: GlobalEventService,
 		private queueService: QueueService,
 		private fanoutTimelineService: FanoutTimelineService,
-		private noteReadService: NoteReadService,
 		private notificationService: NotificationService,
 		private relayService: RelayService,
 		private federatedInstanceService: FederatedInstanceService,
@@ -223,6 +232,190 @@ export class NoteCreateService implements OnApplicationShutdown {
 		private cacheService: CacheService,
 	) {
 		this.updateNotesCountQueue = new CollapsedQueue(process.env.NODE_ENV !== 'test' ? 60 * 1000 * 5 : 0, this.collapseNotesCount, this.performUpdateNotesCount);
+	}
+
+	@bindThis
+	public async fetchAndCreate(user: {
+		id: MiUser['id'];
+		username: MiUser['username'];
+		host: MiUser['host'];
+		isBot: MiUser['isBot'];
+		isCat: MiUser['isCat'];
+	}, data: {
+		createdAt: Date;
+		replyId: MiNote['id'] | null;
+		renoteId: MiNote['id'] | null;
+		anonymouslySendToUserId: MiUser['id'] | null;
+		fileIds: MiDriveFile['id'][];
+		text: string | null;
+		cw: string | null;
+		visibility: string;
+		visibleUserIds: MiUser['id'][];
+		channelId: MiChannel['id'] | null;
+		localOnly: boolean;
+		reactionAcceptance: MiNote['reactionAcceptance'];
+		poll: IPoll | null;
+		apMentions?: MinimumUser[] | null;
+		apHashtags?: string[] | null;
+		apEmojis?: string[] | null;
+	}): Promise<MiNote> {
+		const visibleUsers = data.visibleUserIds.length > 0 ? await this.usersRepository.findBy({
+			id: In(data.visibleUserIds),
+		}) : [];
+
+		let files: MiDriveFile[] = [];
+		if (data.fileIds.length > 0) {
+			files = await this.driveFilesRepository.createQueryBuilder('file')
+				.where('file.userId = :userId AND file.id IN (:...fileIds)', {
+					userId: user.id,
+					fileIds: data.fileIds,
+				})
+				.orderBy('array_position(ARRAY[:...fileIds], "id"::text)')
+				.setParameters({ fileIds: data.fileIds })
+				.getMany();
+
+			if (files.length !== data.fileIds.length) {
+				throw new IdentifiableError('801c046c-5bf5-4234-ad2b-e78fc20a2ac7', 'No such file');
+			}
+		}
+
+		let renote: MiNote | null = null;
+		if (data.renoteId != null) {
+			// Fetch renote to note
+			renote = await this.notesRepository.findOne({
+				where: { id: data.renoteId },
+				relations: ['user', 'renote', 'reply'],
+			});
+
+			if (renote == null) {
+				throw new IdentifiableError('53983c56-e163-45a6-942f-4ddc485d4290', 'No such renote target');
+			} else if (isRenote(renote) && !isQuote(renote)) {
+				throw new IdentifiableError('bde24c37-121f-4e7d-980d-cec52f599f02', 'Cannot renote pure renote');
+			}
+
+			// Check blocking
+			if (renote.userId !== user.id && !renote.anonymouslySendToUserId && !renote.anonymousChannelUsername) {
+				const blockExist = await this.blockingsRepository.exists({
+					where: {
+						blockerId: renote.userId,
+						blockeeId: user.id,
+					},
+				});
+				if (blockExist) {
+					throw new IdentifiableError('2b4fe776-4414-4a2d-ae39-f3418b8fd4d3', 'You have been blocked by the user');
+				}
+			}
+
+			if (renote.visibility === 'followers' && renote.userId !== user.id) {
+				// 他人のfollowers noteはreject
+				throw new IdentifiableError('90b9d6f0-893a-4fef-b0f1-e9a33989f71a', 'Renote target visibility');
+			} else if (renote.visibility === 'specified') {
+				// specified / direct noteはreject
+				throw new IdentifiableError('48d7a997-da5c-4716-b3c3-92db3f37bf7d', 'Renote target visibility');
+			}
+
+			if (renote.channelId && renote.channelId !== data.channelId) {
+				// チャンネルのノートに対しリノート要求がきたとき、チャンネル外へのリノート可否をチェック
+				// リノートのユースケースのうち、チャンネル内→チャンネル外は少数だと考えられるため、JOINはせず必要な時に都度取得する
+				const renoteChannel = await this.channelsRepository.findOneBy({ id: renote.channelId });
+				if (renoteChannel == null) {
+					// リノートしたいノートが書き込まれているチャンネルが無い
+					throw new IdentifiableError('b060f9a6-8909-4080-9e0b-94d9fa6f6a77', 'No such channel');
+				} else if (!renoteChannel.allowRenoteToExternal) {
+					// リノート作成のリクエストだが、対象チャンネルがリノート禁止だった場合
+					throw new IdentifiableError('7e435f4a-780d-4cfc-a15a-42519bd6fb67', 'Channel does not allow renote to external');
+				}
+			}
+		}
+
+		let reply: MiNote | null = null;
+		if (data.replyId != null) {
+			// Fetch reply
+			reply = await this.notesRepository.findOne({
+				where: { id: data.replyId },
+				relations: ['user'],
+			});
+
+			if (reply == null) {
+				throw new IdentifiableError('60142edb-1519-408e-926d-4f108d27bee0', 'No such reply target');
+			} else if (isRenote(reply) && !isQuote(reply)) {
+				throw new IdentifiableError('f089e4e2-c0e7-4f60-8a23-e5a6bf786b36', 'Cannot reply to pure renote');
+			} else if (!await this.noteEntityService.isVisibleForMe(reply, user.id)) {
+				throw new IdentifiableError('11cd37b3-a411-4f77-8633-c580ce6a8dce', 'No such reply target');
+			} else if (reply.visibility === 'specified' && data.visibility !== 'specified') {
+				throw new IdentifiableError('ced780a1-2012-4caf-bc7e-a95a291294cb', 'Cannot reply to specified note with different visibility');
+			}
+
+			// Check blocking
+			if (reply.userId !== user.id && !reply.anonymouslySendToUserId && !reply.anonymousChannelUsername) {
+				const blockExist = await this.blockingsRepository.exists({
+					where: {
+						blockerId: reply.userId,
+						blockeeId: user.id,
+					},
+				});
+				if (blockExist) {
+					throw new IdentifiableError('b0df6025-f2e8-44b4-a26a-17ad99104612', 'You have been blocked by the user');
+				}
+			}
+		}
+
+		let anonymouslySendToUser: MiUser | null = null;
+		if (data.anonymouslySendToUserId != null) {
+			anonymouslySendToUser = await this.usersRepository.findOneBy({ id: data.anonymouslySendToUserId });
+
+			if (anonymouslySendToUser == null) {
+				throw new IdentifiableError('60142edb-1519-408e-926d-4f108d27bee0', 'No such reply target');
+			}
+
+			if (anonymouslySendToUser.id !== user.id) {
+				const blockExist = await this.blockingsRepository.exists({
+					where: {
+						blockerId: anonymouslySendToUser.id,
+						blockeeId: user.id,
+					},
+				});
+				if (blockExist) {
+					throw new IdentifiableError('b0df6025-f2e8-44b4-a26a-17ad99104612', 'You have been blocked by the user');
+				}
+			}
+		}
+
+		if (data.poll) {
+			if (data.poll.expiresAt != null) {
+				if (data.poll.expiresAt.getTime() < Date.now()) {
+					throw new IdentifiableError('0c11c11e-0c8d-48e7-822c-76ccef660068', 'Poll expiration must be future time');
+				}
+			}
+		}
+
+		let channel: MiChannel | null = null;
+		if (data.channelId != null) {
+			channel = await this.channelsRepository.findOneBy({ id: data.channelId, isArchived: false });
+
+			if (channel == null) {
+				throw new IdentifiableError('bfa3905b-25f5-4894-b430-da331a490e4b', 'No such channel');
+			}
+		}
+
+		return this.create(user, {
+			createdAt: data.createdAt,
+			files: files,
+			poll: data.poll,
+			text: data.text,
+			reply,
+			renote,
+			cw: data.cw,
+			localOnly: data.localOnly,
+			reactionAcceptance: data.reactionAcceptance,
+			visibility: data.visibility,
+			visibleUsers,
+			channel,
+			anonymouslySendToUser,
+			apMentions: data.apMentions,
+			apHashtags: data.apHashtags,
+			apEmojis: data.apEmojis,
+		});
 	}
 
 	@bindThis
@@ -272,6 +465,10 @@ export class NoteCreateService implements OnApplicationShutdown {
 		if (data.channel != null) data.visibility = 'public';
 		if (data.channel != null) data.visibleUsers = [];
 		if (data.channel != null) data.localOnly = true;
+
+		if (data.channel?.anonymousStrategy && data.anonymousChannelUsername == null) {
+			data.anonymousChannelUsername = await this.genAnonymousChannelUsername(data.channel, user.id, data.createdAt);
+		}
 
 		if (data.visibility === 'public' && data.channel == null) {
 			const sensitiveWords = this.meta.sensitiveWords;
@@ -462,7 +659,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 			emojis,
 			userId: user.id,
 			localOnly: data.localOnly!,
-			reactionAcceptance: data.reactionAcceptance,
+			reactionAcceptance: data.reactionAcceptance ?? null,
 			visibility: data.visibility as any,
 			visibleUserIds: data.visibility === 'specified'
 				? data.visibleUsers
@@ -477,6 +674,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 			replyUserHost: data.reply ? data.reply.userHost : null,
 			renoteUserId: data.renote ? data.renote.userId : null,
 			renoteUserHost: data.renote ? data.renote.userHost : null,
+			renoteChannelId: data.renote ? data.renote.channelId : null,
 			userHost: user.host,
 		});
 
@@ -524,7 +722,11 @@ export class NoteCreateService implements OnApplicationShutdown {
 				await this.notesRepository.insert(insert);
 			}
 
-			return insert;
+			return {
+				...insert,
+				reply: data.reply ?? null,
+				renote: data.renote ?? null,
+			};
 		} catch (e) {
 			// duplicate key error
 			if (isDuplicateKeyValueError(e)) {
@@ -575,7 +777,10 @@ export class NoteCreateService implements OnApplicationShutdown {
 
 		this.pushToTl(note, user);
 
-		this.antennaService.addNoteToAntennas(note, user);
+		this.antennaService.addNoteToAntennas({
+			...note,
+			channel: data.channel ?? null,
+		}, user);
 
 		if (data.reply) {
 			this.saveReply(data.reply, note);
@@ -616,37 +821,19 @@ export class NoteCreateService implements OnApplicationShutdown {
 				noteId: note.id,
 			}, {
 				delay,
-				removeOnComplete: true,
+				removeOnComplete: {
+					age: 3600 * 24 * 7, // keep up to 7 days
+					count: 30,
+				},
+				removeOnFail: {
+					age: 3600 * 24 * 7, // keep up to 7 days
+					count: 100,
+				},
 			});
 		}
 
 		if (!silent) {
-			if (!data.anonymouslySendToUser && !data.channel?.anonymousStrategy && this.userEntityService.isLocalUser(user)) this.activeUsersChart.write(user);
-
-			// 未読通知を作成
-			if (data.visibility === 'specified') {
-				if (data.visibleUsers == null) throw new Error('invalid param');
-
-				for (const u of data.visibleUsers) {
-					// ローカルユーザーのみ
-					if (!this.userEntityService.isLocalUser(u)) continue;
-
-					this.noteReadService.insertNoteUnread(u.id, note, {
-						isSpecified: true,
-						isMentioned: false,
-					});
-				}
-			} else {
-				for (const u of mentionedUsers) {
-					// ローカルユーザーのみ
-					if (!this.userEntityService.isLocalUser(u)) continue;
-
-					this.noteReadService.insertNoteUnread(u.id, note, {
-						isSpecified: false,
-						isMentioned: true,
-					});
-				}
-			}
+			if (this.userEntityService.isLocalUser(user)) this.activeUsersChart.write(user);
 
 			// Pack the note
 			const noteObj = await this.noteEntityService.pack(note, null, { skipHide: true, withReactionAndUserPairCache: true });
@@ -658,7 +845,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 				this.webhookService.getActiveWebhooks().then(webhooks => {
 					webhooks = webhooks.filter(x => x.userId === user.id && x.on.includes('note'));
 					for (const webhook of webhooks) {
-						this.queueService.webhookDeliver(webhook, 'note', {
+						this.queueService.userWebhookDeliver(webhook, 'note', {
 							note: noteObj,
 						});
 					}
@@ -667,12 +854,11 @@ export class NoteCreateService implements OnApplicationShutdown {
 
 			this.webhookService.enqueueUserWebhook(user.id, 'note', { note: noteObj });
 
-			const nm = new NotificationManager(this.mutingsRepository, this.notificationService, noteObj.user, note);
+		if (!noteObj.user) throw new Error('noteObj.user is undefined');
+		const nm = new NotificationManager(this.mutingsRepository, this.notificationService, noteObj.user, note);
 
-			await this.createMentionedEvents(mentionedUsers, note, nm);
-
-			// If has in reply to note
-			if (data.reply) {
+		// If has in reply to note
+		if (data.reply) {
 				// 通知
 				if (data.reply.userHost === null) {
 					const isThreadMuted = await this.noteThreadMutingsRepository.exists({
@@ -794,8 +980,8 @@ export class NoteCreateService implements OnApplicationShutdown {
 			.where('id = :id', { id: renote.id })
 			.execute();
 
-		// 30%の確率、3日以内に投稿されたノートの場合ハイライト用ランキング更新
-		if (Math.random() < 0.3 && (Date.now() - this.idService.parse(renote.id).date.getTime()) < 1000 * 60 * 60 * 24 * 3) {
+		// 3日以内に投稿されたノートの場合ハイライト用ランキング更新
+		if ((Date.now() - this.idService.parse(renote.id).date.getTime()) < 1000 * 60 * 60 * 24 * 3) {
 			if (renote.channelId != null) {
 				if (renote.replyId == null) {
 					this.featuredService.updateInChannelNotesRanking(renote.channelId, renote.id, 5);
@@ -1059,6 +1245,75 @@ export class NoteCreateService implements OnApplicationShutdown {
 				isFollowerHibernated: true,
 			});
 		}
+	}
+
+	@bindThis
+	private async genAnonymousChannelUsername(channel: MiChannel, userId: MiUser['id'], createdAt: Date): Promise<string> {
+		if (!channel.anonymousStrategy) {
+			throw new Error('channel.anonymousStrategy is not enabled');
+		}
+
+		let since: Date | null = new Date(Math.floor(createdAt.valueOf() / 864e5) * 864e5);
+		switch (channel.anonymousStrategy) {
+			case 'weekly':
+				since = new Date(since.valueOf() - since.getDay() * 864e5);
+				break;
+			case 'monthly':
+				since = new Date(since.valueOf() - (since.getDate() - 1) * 864e5);
+				break;
+			case 'yearly':
+				since = new Date(since.valueOf() - (since.getDate() - 1) * 864e5);
+				since.setMonth(0);
+				break;
+			case 'manual':
+				since = null;
+				break;
+		}
+
+		let until: Date | null = since && new Date(since.valueOf());
+		/* eslint-disable @typescript-eslint/no-non-null-assertion */
+		switch (channel.anonymousStrategy) {
+			case 'daily':
+				until = new Date(until!.valueOf() + 864e5);
+				break;
+			case 'weekly':
+				until = new Date(until!.valueOf() + 7 * 864e5);
+				break;
+			case 'monthly':
+				until!.setMonth(until!.getMonth() + 1);
+				break;
+			case 'yearly':
+				until!.setFullYear(until!.getFullYear() + 1);
+				break;
+		}
+		/* eslint-enable @typescript-eslint/no-non-null-assertion */
+
+		const nowId = this.idService.gen(createdAt.valueOf(), true);
+		const currentSaltModel = await this.channelAnonymousSaltsRepository.findOne({
+			where: {
+				channelId: channel.id,
+				since: LessThanOrEqual(nowId),
+				until: Or(Not(LessThanOrEqual(nowId)), IsNull()),
+			},
+			order: {
+				since: 'DESC',
+				until: {
+					direction: 'ASC',
+					nulls: 'LAST',
+				},
+			},
+		});
+
+		const saltModel = currentSaltModel ?? await this.channelAnonymousSaltsRepository.insert({
+			id: this.idService.gen(createdAt.valueOf()),
+			channelId: channel.id,
+			since: this.idService.gen(since ? since.valueOf() : 0, true),
+			until: until && this.idService.gen(until.valueOf(), true),
+			salt: crypto.getRandomValues(new BigInt64Array(1))[0].toString(),
+		}).then(x => this.channelAnonymousSaltsRepository.findOneByOrFail(x.identifiers[0]));
+
+		const salt = BigInt(saltModel!.salt);
+		return `${channel.anonymousStrategy === 'manual' ? 'x' : channel.anonymousStrategy[0]}.${crypto.createHash('shake256').update(userId + salt.toString(16).padStart(16, '0'), 'utf-8').copy({ outputLength: 6 }).digest('base64url')}`;
 	}
 
 	public checkProhibitedWordsContain(content: Parameters<UtilityService['concatNoteContentsForKeyWordCheck']>[0], prohibitedWords?: string[]) {

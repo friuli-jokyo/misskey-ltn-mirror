@@ -1,0 +1,1962 @@
+diff --git a/packages/backend/src/core/AntennaService.ts b/packages/backend/src/core/AntennaService.ts
+index e827ffa68c..ec79675b06 100644
+--- a/packages/backend/src/core/AntennaService.ts
++++ b/packages/backend/src/core/AntennaService.ts
+@@ -5,18 +5,20 @@
+ 
+ import { Inject, Injectable } from '@nestjs/common';
+ import * as Redis from 'ioredis';
+-import type { MiAntenna } from '@/models/Antenna.js';
+-import type { MiNote } from '@/models/Note.js';
+-import type { MiUser } from '@/models/User.js';
++import { In } from 'typeorm';
++import { FanoutTimelineService } from '@/core/FanoutTimelineService.js';
++import type { GlobalEvents } from '@/core/GlobalEventService.js';
+ import { GlobalEventService } from '@/core/GlobalEventService.js';
++import { UtilityService } from '@/core/UtilityService.js';
++import { bindThis } from '@/decorators.js';
++import { DI } from '@/di-symbols.js';
+ import * as Acct from '@/misc/acct.js';
+ import type { Packed } from '@/misc/json-schema.js';
+-import { DI } from '@/di-symbols.js';
+ import type { AntennasRepository, UserListMembershipsRepository } from '@/models/_.js';
+-import { UtilityService } from '@/core/UtilityService.js';
+-import { bindThis } from '@/decorators.js';
+-import type { GlobalEvents } from '@/core/GlobalEventService.js';
+-import { FanoutTimelineService } from '@/core/FanoutTimelineService.js';
++import type { MiAntenna } from '@/models/Antenna.js';
++import type { MiNote } from '@/models/Note.js';
++import type { MiUser } from '@/models/User.js';
++import { CacheService } from './CacheService.js';
+ import type { OnApplicationShutdown } from '@nestjs/common';
+ 
+ @Injectable()
+@@ -37,6 +39,7 @@ export class AntennaService implements OnApplicationShutdown {
+ 		@Inject(DI.userListMembershipsRepository)
+ 		private userListMembershipsRepository: UserListMembershipsRepository,
+ 
++		private cacheService: CacheService,
+ 		private utilityService: UtilityService,
+ 		private globalEventService: GlobalEventService,
+ 		private fanoutTimelineService: FanoutTimelineService,
+@@ -111,8 +114,7 @@ export class AntennaService implements OnApplicationShutdown {
+ 
+ 	@bindThis
+ 	public async checkHitAntenna(antenna: MiAntenna, note: (MiNote | Packed<'Note'>), noteUser: { id: MiUser['id']; username: string; host: string | null; isBot: boolean; }): Promise<boolean> {
+-		if (note.visibility === 'specified') return false;
+-		if (note.visibility === 'followers') return false;
++		if (antenna.excludeNotesInSensitiveChannel && note.channel?.isSensitive) return false;
+ 
+ 		if (antenna.excludeBots && noteUser.isBot) return false;
+ 
+@@ -120,6 +122,18 @@ export class AntennaService implements OnApplicationShutdown {
+ 
+ 		if (!antenna.withReplies && note.replyId != null) return false;
+ 
++		if (note.visibility === 'specified') {
++			if (note.userId !== antenna.userId) {
++				if (note.visibleUserIds == null) return false;
++				if (!note.visibleUserIds.includes(antenna.userId)) return false;
++			}
++		}
++
++		if (note.visibility === 'followers') {
++			const isFollowing = Object.hasOwn(await this.cacheService.userFollowingsCache.fetch(antenna.userId), note.userId);
++			if (!isFollowing && antenna.userId !== note.userId) return false;
++		}
++
+ 		if (antenna.src === 'home') {
+ 			// TODO
+ 		} else if (antenna.src === 'list') {
+@@ -206,6 +220,41 @@ export class AntennaService implements OnApplicationShutdown {
+ 		return this.antennas;
+ 	}
+ 
++	@bindThis
++	public async onMoveAccount(src: MiUser, dst: MiUser): Promise<void> {
++		// There is a possibility for users to add the srcUser to their antennas, but it's low, so we don't check it.
++
++		// Get MiAntenna[] from cache and filter to select antennas with the src user is in the users list
++		const srcUserAcct = this.utilityService.getFullApAccount(src.username, src.host).toLowerCase();
++		const antennasToMigrate = (await this.getAntennas()).filter(antenna => {
++			return antenna.users.some(user => {
++				const { username, host } = Acct.parse(user);
++				return this.utilityService.getFullApAccount(username, host).toLowerCase() === srcUserAcct;
++			});
++		});
++
++		if (antennasToMigrate.length === 0) return;
++
++		const antennaIds = antennasToMigrate.map(x => x.id);
++
++		// Update the antennas by appending dst users acct to the users list
++		const dstUserAcct = '@' + Acct.toString({ username: dst.username, host: dst.host });
++
++		await this.antennasRepository.createQueryBuilder('antenna')
++			.update()
++			.set({
++				users: () => 'array_append(antenna.users, :dstUserAcct)',
++			})
++			.where('antenna.id IN (:...antennaIds)', { antennaIds })
++			.setParameters({ dstUserAcct })
++			.execute();
++
++		// announce update to event
++		for (const newAntenna of await this.antennasRepository.findBy({ id: In(antennaIds) })) {
++			this.globalEventService.publishInternalEvent('antennaUpdated', newAntenna);
++		}
++	}
++
+ 	@bindThis
+ 	public dispose(): void {
+ 		this.redisForSub.off('message', this.onRedisMessage);
+diff --git a/packages/backend/src/core/FanoutTimelineEndpointService.ts b/packages/backend/src/core/FanoutTimelineEndpointService.ts
+index b05af99c5e..e39d70d683 100644
+--- a/packages/backend/src/core/FanoutTimelineEndpointService.ts
++++ b/packages/backend/src/core/FanoutTimelineEndpointService.ts
+@@ -8,15 +8,21 @@ import { DI } from '@/di-symbols.js';
+ import { bindThis } from '@/decorators.js';
+ import type { MiUser } from '@/models/User.js';
+ import type { MiNote } from '@/models/Note.js';
++import type { MiMeta } from '@/models/Meta.js';
+ import { Packed } from '@/misc/json-schema.js';
+ import type { NotesRepository } from '@/models/_.js';
+ import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
+ import { FanoutTimelineName, FanoutTimelineService } from '@/core/FanoutTimelineService.js';
++import { UtilityService } from '@/core/UtilityService.js';
+ import { isUserRelated } from '@/misc/is-user-related.js';
+ import { isQuote, isRenote } from '@/misc/is-renote.js';
+ import { CacheService } from '@/core/CacheService.js';
+ import { isReply } from '@/misc/is-reply.js';
+ import { isInstanceMuted } from '@/misc/is-instance-muted.js';
++import { ChannelMutingService } from '@/core/ChannelMutingService.js';
++import { isChannelRelated } from '@/misc/is-channel-related.js';
++
++type NoteFilter = (note: MiNote) => boolean;
+ 
+ type TimelineOptions = {
+ 	untilId: string | null,
+@@ -26,13 +32,16 @@ type TimelineOptions = {
+ 	me?: { id: MiUser['id'] } | undefined | null,
+ 	useDbFallback: boolean,
+ 	redisTimelines: FanoutTimelineName[],
+-	noteFilter?: (note: MiNote) => boolean,
++	noteFilter?: NoteFilter,
+ 	alwaysIncludeMyNotes?: boolean;
+ 	ignoreAuthorFromBlock?: boolean;
+ 	ignoreAuthorFromMute?: boolean;
++	ignoreAuthorFromInstanceBlock?: boolean;
++	ignoreAuthorChannelFromMute?: boolean;
+ 	excludeNoFiles?: boolean;
+ 	excludeReplies?: boolean;
+ 	excludePureRenotes: boolean;
++	ignoreAuthorFromUserSuspension?: boolean;
+ 	dbFallback: (untilId: string | null, sinceId: string | null, limit: number) => Promise<MiNote[]>,
+ };
+ 
+@@ -42,9 +51,14 @@ export class FanoutTimelineEndpointService {
+ 		@Inject(DI.notesRepository)
+ 		private notesRepository: NotesRepository,
+ 
++		@Inject(DI.meta)
++		private meta: MiMeta,
++
+ 		private noteEntityService: NoteEntityService,
+ 		private cacheService: CacheService,
+ 		private fanoutTimelineService: FanoutTimelineService,
++		private utilityService: UtilityService,
++		private channelMutingService: ChannelMutingService,
+ 	) {
+ 	}
+ 
+@@ -54,7 +68,7 @@ export class FanoutTimelineEndpointService {
+ 	}
+ 
+ 	@bindThis
+-	private async getMiNotes(ps: TimelineOptions): Promise<MiNote[]> {
++	async getMiNotes(ps: TimelineOptions): Promise<MiNote[]> {
+ 		// 呼び出し元と以下の処理をシンプルにするためにdbFallbackを置き換える
+ 		if (!ps.useDbFallback) ps.dbFallback = () => Promise.resolve([]);
+ 
+@@ -71,7 +85,7 @@ export class FanoutTimelineEndpointService {
+ 		const shouldFallbackToDb = noteIds.length === 0 || ps.sinceId != null && ps.sinceId < oldestNoteId;
+ 
+ 		if (!shouldFallbackToDb) {
+-			let filter = ps.noteFilter ?? (_note => true);
++			let filter = ps.noteFilter ?? (_note => true) as NoteFilter;
+ 
+ 			if (ps.alwaysIncludeMyNotes && ps.me) {
+ 				const me = ps.me;
+@@ -101,19 +115,50 @@ export class FanoutTimelineEndpointService {
+ 					userIdsWhoMeMutingRenotes,
+ 					userIdsWhoBlockingMe,
+ 					userMutedInstances,
++					userMutedChannels,
+ 				] = await Promise.all([
+ 					this.cacheService.userMutingsCache.fetch(ps.me.id),
+ 					this.cacheService.renoteMutingsCache.fetch(ps.me.id),
+ 					this.cacheService.userBlockedCache.fetch(ps.me.id),
+ 					this.cacheService.userProfileCache.fetch(me.id).then(p => new Set(p.mutedInstances)),
++					this.channelMutingService.mutingChannelsCache.fetch(me.id),
+ 				]);
+ 
+ 				const parentFilter = filter;
+ 				filter = (note) => {
+ 					if (isUserRelated(note, userIdsWhoBlockingMe, ps.ignoreAuthorFromBlock)) return false;
+ 					if (isUserRelated(note, userIdsWhoMeMuting, ps.ignoreAuthorFromMute)) return false;
++					if (isUserRelated(note.renote, userIdsWhoBlockingMe, ps.ignoreAuthorFromBlock)) return false;
++					if (isUserRelated(note.renote, userIdsWhoMeMuting, ps.ignoreAuthorFromMute)) return false;
+ 					if (!ps.ignoreAuthorFromMute && isRenote(note) && !isQuote(note) && userIdsWhoMeMutingRenotes.has(note.userId)) return false;
+ 					if (isInstanceMuted(note, userMutedInstances)) return false;
++					if (isChannelRelated(note, userMutedChannels, ps.ignoreAuthorChannelFromMute)) return false;
++
++					return parentFilter(note);
++				};
++			}
++
++			{
++				const parentFilter = filter;
++				filter = (note) => {
++					if (!ps.ignoreAuthorFromInstanceBlock) {
++						if (this.utilityService.isBlockedHost(this.meta.blockedHosts, note.userHost)) return false;
++					}
++					if (note.userId !== note.renoteUserId && this.utilityService.isBlockedHost(this.meta.blockedHosts, note.renoteUserHost)) return false;
++					if (note.userId !== note.replyUserId && this.utilityService.isBlockedHost(this.meta.blockedHosts, note.replyUserHost)) return false;
++
++					return parentFilter(note);
++				};
++			}
++
++			{
++				const parentFilter = filter;
++				filter = (note) => {
++					if (!ps.ignoreAuthorFromUserSuspension) {
++						if (note.user!.isSuspended) return false;
++					}
++					if (note.userId !== note.renoteUserId && note.renote?.user?.isSuspended) return false;
++					if (note.userId !== note.replyUserId && note.reply?.user?.isSuspended) return false;
+ 
+ 					return parentFilter(note);
+ 				};
+@@ -160,7 +205,7 @@ export class FanoutTimelineEndpointService {
+ 		return await ps.dbFallback(ps.untilId, ps.sinceId, ps.limit);
+ 	}
+ 
+-	private async getAndFilterFromDb(noteIds: string[], noteFilter: (note: MiNote) => boolean, idCompare: (a: string, b: string) => number): Promise<MiNote[]> {
++	private async getAndFilterFromDb(noteIds: string[], noteFilter: NoteFilter, idCompare: (a: string, b: string) => number): Promise<MiNote[]> {
+ 		const query = this.notesRepository.createQueryBuilder('note')
+ 			.where('note.id IN (:...noteIds)', { noteIds: noteIds })
+ 			.innerJoinAndSelect('note.user', 'user')
+diff --git a/packages/backend/src/core/entities/ChannelEntityService.ts b/packages/backend/src/core/entities/ChannelEntityService.ts
+index 1ba7ca8e57..e26cddd281 100644
+--- a/packages/backend/src/core/entities/ChannelEntityService.ts
++++ b/packages/backend/src/core/entities/ChannelEntityService.ts
+@@ -4,36 +4,40 @@
+  */
+ 
+ import { Inject, Injectable } from '@nestjs/common';
++import { In } from 'typeorm';
+ import { DI } from '@/di-symbols.js';
+-import type { ChannelFavoritesRepository, ChannelFollowingsRepository, ChannelsRepository, DriveFilesRepository, NotesRepository } from '@/models/_.js';
++import type {
++	ChannelFavoritesRepository,
++	ChannelFollowingsRepository, ChannelMutingRepository,
++	ChannelsRepository,
++	DriveFilesRepository,
++	MiDriveFile,
++	MiNote,
++	NotesRepository,
++} from '@/models/_.js';
+ import type { Packed } from '@/misc/json-schema.js';
+-import type { } from '@/models/Blocking.js';
+ import type { MiUser } from '@/models/User.js';
+ import type { MiChannel } from '@/models/Channel.js';
+ import { bindThis } from '@/decorators.js';
+ import { IdService } from '@/core/IdService.js';
+ import { DriveFileEntityService } from './DriveFileEntityService.js';
+ import { NoteEntityService } from './NoteEntityService.js';
+-import { In } from 'typeorm';
+ 
+ @Injectable()
+ export class ChannelEntityService {
+ 	constructor(
+ 		@Inject(DI.channelsRepository)
+ 		private channelsRepository: ChannelsRepository,
+-
+ 		@Inject(DI.channelFollowingsRepository)
+ 		private channelFollowingsRepository: ChannelFollowingsRepository,
+-
+ 		@Inject(DI.channelFavoritesRepository)
+ 		private channelFavoritesRepository: ChannelFavoritesRepository,
+-
++		@Inject(DI.channelMutingRepository)
++		private channelMutingRepository: ChannelMutingRepository,
+ 		@Inject(DI.notesRepository)
+ 		private notesRepository: NotesRepository,
+-
+ 		@Inject(DI.driveFilesRepository)
+ 		private driveFilesRepository: DriveFilesRepository,
+-
+ 		private noteEntityService: NoteEntityService,
+ 		private driveFileEntityService: DriveFileEntityService,
+ 		private idService: IdService,
+@@ -45,31 +49,59 @@ export class ChannelEntityService {
+ 		src: MiChannel['id'] | MiChannel,
+ 		me?: { id: MiUser['id'] } | null | undefined,
+ 		detailed?: boolean,
++		opts?: {
++			bannerFiles?: Map<MiDriveFile['id'], MiDriveFile>;
++			followings?: Set<MiChannel['id']>;
++			favorites?: Set<MiChannel['id']>;
++			muting?: Set<MiChannel['id']>;
++			pinnedNotes?: Map<MiNote['id'], MiNote>;
++		},
+ 	): Promise<Packed<'Channel'>> {
+ 		const channel = typeof src === 'object' ? src : await this.channelsRepository.findOneByOrFail({ id: src });
+-		const meId = me ? me.id : null;
+-
+-		const banner = channel.bannerId ? await this.driveFilesRepository.findOneBy({ id: channel.bannerId }) : null;
+-
+-		const isFollowing = meId ? await this.channelFollowingsRepository.exists({
+-			where: {
+-				followerId: meId,
+-				followeeId: channel.id,
+-			},
+-		}) : false;
+-
+-		const isFavorited = meId ? await this.channelFavoritesRepository.exists({
+-			where: {
+-				userId: meId,
+-				channelId: channel.id,
+-			},
+-		}) : false;
+-
+-		const pinnedNotes = channel.pinnedNoteIds.length > 0 ? await this.notesRepository.find({
+-			where: {
+-				id: In(channel.pinnedNoteIds),
+-			},
+-		}) : [];
++
++		let bannerFile: MiDriveFile | null = null;
++		if (channel.bannerId) {
++			bannerFile = opts?.bannerFiles?.get(channel.bannerId)
++				?? await this.driveFilesRepository.findOneByOrFail({ id: channel.bannerId });
++		}
++
++		let isFollowing = false;
++		let isFavorited = false;
++		let isMuting = false;
++		if (me) {
++			isFollowing = opts?.followings?.has(channel.id) ?? await this.channelFollowingsRepository.exists({
++				where: {
++					followerId: me.id,
++					followeeId: channel.id,
++				},
++			});
++
++			isFavorited = opts?.favorites?.has(channel.id) ?? await this.channelFavoritesRepository.exists({
++				where: {
++					userId: me.id,
++					channelId: channel.id,
++				},
++			});
++
++			isMuting = opts?.muting?.has(channel.id) ?? await this.channelMutingRepository.exists({
++				where: {
++					userId: me.id,
++					channelId: channel.id,
++				},
++			});
++		}
++
++		const pinnedNotes = Array.of<MiNote>();
++		if (channel.pinnedNoteIds.length > 0) {
++			pinnedNotes.push(
++				...(
++					opts?.pinnedNotes
++						// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
++						? channel.pinnedNoteIds.map(it => opts.pinnedNotes!.get(it)).filter(it => it != null)
++						: await this.notesRepository.findBy({ id: In(channel.pinnedNoteIds) })
++				),
++			);
++		}
+ 
+ 		return {
+ 			id: channel.id,
+@@ -78,7 +110,8 @@ export class ChannelEntityService {
+ 			name: channel.name,
+ 			description: channel.description,
+ 			userId: channel.userId,
+-			bannerUrl: banner ? this.driveFileEntityService.getPublicUrl(banner) : null,
++			bannerUrl: bannerFile ? this.driveFileEntityService.getPublicUrl(bannerFile) : null,
++			bannerId: channel.bannerId,
+ 			pinnedNoteIds: channel.pinnedNoteIds,
+ 			color: channel.color,
+ 			isArchived: channel.isArchived,
+@@ -90,6 +123,7 @@ export class ChannelEntityService {
+ 			...(me ? {
+ 				isFollowing,
+ 				isFavorited,
++				isMuting,
+ 				hasUnreadNote: false, // 後方互換性のため
+ 			} : {}),
+ 
+@@ -98,5 +132,72 @@ export class ChannelEntityService {
+ 			} : {}),
+ 		};
+ 	}
++
++	@bindThis
++	public async packMany(
++		src: MiChannel['id'][] | MiChannel[],
++		me?: { id: MiUser['id'] } | null | undefined,
++		detailed?: boolean,
++	): Promise<Packed<'Channel'>[]> {
++		// IDのみの要素がある場合、DBからオブジェクトを取得して補う
++		const channels = src.filter(it => typeof it === 'object') as MiChannel[];
++		channels.push(
++			...(await this.channelsRepository.find({
++				where: {
++					id: In(src.filter(it => typeof it !== 'object') as MiChannel['id'][]),
++				},
++			})),
++		);
++		channels.sort((a, b) => a.id.localeCompare(b.id));
++
++		const bannerFiles = await this.driveFilesRepository
++			.findBy({
++				id: In(channels.map(it => it.bannerId).filter(it => it != null)),
++			})
++			.then(it => new Map(it.map(it => [it.id, it])));
++
++		const followings = me
++			? await this.channelFollowingsRepository
++				.findBy({
++					followerId: me.id,
++					followeeId: In(channels.map(it => it.id)),
++				})
++				.then(it => new Set(it.map(it => it.followeeId)))
++			: new Set<MiChannel['id']>();
++
++		const favorites = me
++			? await this.channelFavoritesRepository
++				.findBy({
++					userId: me.id,
++					channelId: In(channels.map(it => it.id)),
++				})
++				.then(it => new Set(it.map(it => it.channelId)))
++			: new Set<MiChannel['id']>();
++
++		const muting = me
++			? await this.channelMutingRepository
++				.findBy({
++					userId: me.id,
++					channelId: In(channels.map(it => it.id)),
++				})
++				.then(it => new Set(it.map(it => it.channelId)))
++			: new Set<MiChannel['id']>();
++
++		const pinnedNotes = await this.notesRepository
++			.find({
++				where: {
++					id: In(channels.flatMap(it => it.pinnedNoteIds)),
++				},
++			})
++			.then(it => new Map(it.map(it => [it.id, it])));
++
++		return Promise.all(channels.map(it => this.pack(it, me, detailed, {
++			bannerFiles,
++			followings,
++			favorites,
++			muting,
++			pinnedNotes,
++		})));
++	}
+ }
+ 
+diff --git a/packages/backend/src/models/Channel.ts b/packages/backend/src/models/Channel.ts
+index f5e9b17e3e..5a5b914eb1 100644
+--- a/packages/backend/src/models/Channel.ts
++++ b/packages/backend/src/models/Channel.ts
+@@ -27,7 +27,7 @@ export class MiChannel {
+ 	})
+ 	public userId: MiUser['id'] | null;
+ 
+-	@ManyToOne(type => MiUser, {
++	@ManyToOne(() => MiUser, {
+ 		onDelete: 'SET NULL',
+ 	})
+ 	@JoinColumn()
+@@ -52,7 +52,7 @@ export class MiChannel {
+ 	})
+ 	public bannerId: MiDriveFile['id'] | null;
+ 
+-	@ManyToOne(type => MiDriveFile, {
++	@ManyToOne(() => MiDriveFile, {
+ 		onDelete: 'SET NULL',
+ 	})
+ 	@JoinColumn()
+diff --git a/packages/backend/src/models/json-schema/channel.ts b/packages/backend/src/models/json-schema/channel.ts
+index d233f7858d..e7613290d1 100644
+--- a/packages/backend/src/models/json-schema/channel.ts
++++ b/packages/backend/src/models/json-schema/channel.ts
+@@ -40,6 +40,11 @@ export const packedChannelSchema = {
+ 			format: 'url',
+ 			nullable: true, optional: false,
+ 		},
++		bannerId: {
++			type: 'string',
++			nullable: true, optional: false,
++			format: 'id',
++		},
+ 		pinnedNoteIds: {
+ 			type: 'array',
+ 			nullable: false, optional: false,
+@@ -80,6 +85,10 @@ export const packedChannelSchema = {
+ 			type: 'boolean',
+ 			optional: true, nullable: false,
+ 		},
++		isMuting: {
++			type: 'boolean',
++			optional: true, nullable: false,
++		},
+ 		pinnedNotes: {
+ 			type: 'array',
+ 			optional: true, nullable: false,
+diff --git a/packages/backend/src/server/api/endpoints/channels/create.ts b/packages/backend/src/server/api/endpoints/channels/create.ts
+index e3a6d2d670..8d49b6fd0f 100644
+--- a/packages/backend/src/server/api/endpoints/channels/create.ts
++++ b/packages/backend/src/server/api/endpoints/channels/create.ts
+@@ -46,7 +46,7 @@ export const paramDef = {
+ 	type: 'object',
+ 	properties: {
+ 		name: { type: 'string', minLength: 1, maxLength: 128 },
+-		description: { type: 'string', nullable: true, minLength: 1, maxLength: 2048 },
++		description: { type: 'string', nullable: true, maxLength: 2048 },
+ 		bannerId: { type: 'string', format: 'misskey:id', nullable: true },
+ 		color: { type: 'string', minLength: 1, maxLength: 16 },
+ 		isSensitive: { type: 'boolean', nullable: true },
+diff --git a/packages/backend/src/server/api/endpoints/channels/update.ts b/packages/backend/src/server/api/endpoints/channels/update.ts
+index dba2938b39..5ec55896e4 100644
+--- a/packages/backend/src/server/api/endpoints/channels/update.ts
++++ b/packages/backend/src/server/api/endpoints/channels/update.ts
+@@ -50,7 +50,7 @@ export const paramDef = {
+ 	properties: {
+ 		channelId: { type: 'string', format: 'misskey:id' },
+ 		name: { type: 'string', minLength: 1, maxLength: 128 },
+-		description: { type: 'string', nullable: true, minLength: 1, maxLength: 2048 },
++		description: { type: 'string', nullable: true, maxLength: 2048 },
+ 		bannerId: { type: 'string', format: 'misskey:id', nullable: true },
+ 		isArchived: { type: 'boolean', nullable: true },
+ 		pinnedNoteIds: {
+diff --git a/packages/backend/src/server/api/stream/channel.ts b/packages/backend/src/server/api/stream/channel.ts
+index 686aea423c..86b073414d 100644
+--- a/packages/backend/src/server/api/stream/channel.ts
++++ b/packages/backend/src/server/api/stream/channel.ts
+@@ -6,7 +6,8 @@
+ import { bindThis } from '@/decorators.js';
+ import { isInstanceMuted } from '@/misc/is-instance-muted.js';
+ import { isUserRelated } from '@/misc/is-user-related.js';
+-import { isRenotePacked, isQuotePacked } from '@/misc/is-renote.js';
++import { isQuotePacked, isRenotePacked } from '@/misc/is-renote.js';
++import { isChannelRelated } from '@/misc/is-channel-related.js';
+ import type { Packed } from '@/misc/json-schema.js';
+ import type { JsonObject, JsonValue } from '@/misc/json-value.js';
+ import type Connection from './Connection.js';
+@@ -21,7 +22,7 @@ export default abstract class Channel {
+ 	public abstract readonly chName: string;
+ 	public static readonly shouldShare: boolean;
+ 	public static readonly requireCredential: boolean;
+-	public static readonly kind?: string | null;
++	public static readonly kind: string | null;
+ 
+ 	protected get user() {
+ 		return this.connection.user;
+@@ -55,6 +56,10 @@ export default abstract class Channel {
+ 		return this.connection.followingChannels;
+ 	}
+ 
++	protected get mutingChannels() {
++		return this.connection.mutingChannels;
++	}
++
+ 	protected get subscriber() {
+ 		return this.connection.subscriber;
+ 	}
+@@ -74,12 +79,15 @@ export default abstract class Channel {
+ 		// 流れてきたNoteがリノートをミュートしてるユーザが行ったもの
+ 		if (isRenotePacked(note) && !isQuotePacked(note) && this.userIdsWhoMeMutingRenotes.has(note.user.id)) return true;
+ 
++		// 流れてきたNoteがミュートしているチャンネルと関わる
++		if (isChannelRelated(note, this.mutingChannels)) return true;
++
+ 		return false;
+ 	}
+ 
+-	constructor(id: string, connection: Connection) {
+-		this.id = id;
+-		this.connection = connection;
++	constructor(request: ChannelRequest) {
++		this.id = request.id;
++		this.connection = request.connection;
+ 	}
+ 
+ 	public send(payload: { type: string, body: JsonValue }): void;
+@@ -103,9 +111,14 @@ export default abstract class Channel {
+ 	public onMessage?(type: string, body: JsonValue): void;
+ }
+ 
+-export type MiChannelService<T extends boolean> = {
++export interface ChannelRequest {
++	id: string,
++	connection: Connection,
++}
++
++export interface ChannelConstructor<T extends boolean> {
++	new(...args: any[]): Channel;
+ 	shouldShare: boolean;
+ 	requireCredential: T;
+ 	kind: T extends true ? string : string | null | undefined;
+-	create: (id: string, connection: Connection) => Channel;
+-};
++}
+diff --git a/packages/frontend/src/cache.ts b/packages/frontend/src/cache.ts
+index bfe8fbe0e4..39cf73feb8 100644
+--- a/packages/frontend/src/cache.ts
++++ b/packages/frontend/src/cache.ts
+@@ -4,11 +4,11 @@
+  */
+ 
+ import * as Misskey from 'misskey-js';
+-import { Cache } from '@/scripts/cache.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { Cache } from '@/utility/cache.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ 
+-export const clipsCache = new Cache<Misskey.entities.Clip[]>(1000 * 60 * 30, () => misskeyApi('clips/list'));
+-export const rolesCache = new Cache(1000 * 60 * 30, () => misskeyApi('admin/roles/list'));
++export const clipsCache = new Cache<Misskey.entities.Clip[]>(1000 * 60 * 30, () => misskeyApi('clips/list', { limit: 30 }));
++export const rolesCache = new Cache(1000 * 60 * 30, () => misskeyApi('admin/roles/list', { limit: 30 }));
+ export const userListsCache = new Cache<Misskey.entities.UserList[]>(1000 * 60 * 30, () => misskeyApi('users/lists/list'));
+-export const antennasCache = new Cache<Misskey.entities.Antenna[]>(1000 * 60 * 30, () => misskeyApi('antennas/list'));
++export const antennasCache = new Cache<Misskey.entities.Antenna[]>(1000 * 60 * 30, () => misskeyApi('antennas/list', { limit: 30 }));
+ export const favoritedChannelsCache = new Cache<Misskey.entities.Channel[]>(1000 * 60 * 30, () => misskeyApi('channels/my-favorites', { limit: 100 }));
+diff --git a/packages/frontend/src/components/MkChannelFollowButton.vue b/packages/frontend/src/components/MkChannelFollowButton.vue
+index d4e4f6179a..1aec8d0c07 100644
+--- a/packages/frontend/src/components/MkChannelFollowButton.vue
++++ b/packages/frontend/src/components/MkChannelFollowButton.vue
+@@ -27,7 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { ref } from 'vue';
+ import * as Misskey from 'misskey-js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ import { i18n } from '@/i18n.js';
+ 
+ const props = withDefaults(defineProps<{
+@@ -103,13 +103,13 @@ async function onClick() {
+ 		background: var(--MI_THEME-accent);
+ 
+ 		&:hover {
+-			background: var(--MI_THEME-accentLighten);
+-			border-color: var(--MI_THEME-accentLighten);
++			background: hsl(from var(--MI_THEME-accent) h s calc(l + 10));
++			border-color: hsl(from var(--MI_THEME-accent) h s calc(l + 10));
+ 		}
+ 
+ 		&:active {
+-			background: var(--MI_THEME-accentDarken);
+-			border-color: var(--MI_THEME-accentDarken);
++			background: hsl(from var(--MI_THEME-accent) h s calc(l - 10));
++			border-color: hsl(from var(--MI_THEME-accent) h s calc(l - 10));
+ 		}
+ 	}
+ 
+diff --git a/packages/frontend/src/components/MkReactionsViewer.reaction.vue b/packages/frontend/src/components/MkReactionsViewer.reaction.vue
+index 41e475eade..a89f947fa7 100644
+--- a/packages/frontend/src/components/MkReactionsViewer.reaction.vue
++++ b/packages/frontend/src/components/MkReactionsViewer.reaction.vue
+@@ -8,61 +8,74 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	ref="buttonEl"
+ 	v-ripple="canToggle"
+ 	class="_button"
+-	:class="[$style.root, { [$style.reacted]: note.myReaction == reaction, [$style.canToggle]: canToggle, [$style.small]: defaultStore.state.reactionsDisplaySize === 'small', [$style.large]: defaultStore.state.reactionsDisplaySize === 'large' }]"
++	:class="[$style.root, { [$style.reacted]: myReaction == reaction, [$style.canToggle]: canToggle, [$style.small]: prefer.s.reactionsDisplaySize === 'small', [$style.large]: prefer.s.reactionsDisplaySize === 'large' }]"
+ 	@click="toggleReaction()"
+ 	@contextmenu.prevent.stop="menu"
+ >
+-	<MkReactionIcon :class="defaultStore.state.limitWidthOfReaction ? $style.limitWidth : ''" :reaction="reaction" :emojiUrl="note.reactionEmojis[reaction.substring(1, reaction.length - 1)]"/>
++	<MkReactionIcon style="pointer-events: none;" :class="prefer.s.limitWidthOfReaction ? $style.limitWidth : ''" :reaction="reaction" :emojiUrl="reactionEmojis[reaction.substring(1, reaction.length - 1)]"/>
+ 	<span :class="$style.count">{{ count }}</span>
+ </button>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, inject, onMounted, shallowRef, watch } from 'vue';
++import { computed, inject, onMounted, useTemplateRef, watch } from 'vue';
+ import * as Misskey from 'misskey-js';
+-import { getUnicodeEmoji } from '@@/js/emojilist.js';
++import { getUnicodeEmojiOrNull } from '@@/js/emojilist.js';
+ import MkCustomEmojiDetailedDialog from './MkCustomEmojiDetailedDialog.vue';
++import type { MenuItem } from '@/types/menu';
+ import XDetails from '@/components/MkReactionsViewer.details.vue';
+ import MkReactionIcon from '@/components/MkReactionIcon.vue';
+ import * as os from '@/os.js';
+-import { misskeyApi, misskeyApiGet } from '@/scripts/misskey-api.js';
+-import { useTooltip } from '@/scripts/use-tooltip.js';
+-import { $i } from '@/account.js';
++import { misskeyApi, misskeyApiGet } from '@/utility/misskey-api.js';
++import { useTooltip } from '@/composables/use-tooltip.js';
++import { $i } from '@/i.js';
+ import MkReactionEffect from '@/components/MkReactionEffect.vue';
+-import { claimAchievement } from '@/scripts/achievements.js';
+-import { defaultStore } from '@/store.js';
+ import { i18n } from '@/i18n.js';
+-import * as sound from '@/scripts/sound.js';
+-import { checkReactionPermissions } from '@/scripts/check-reaction-permissions.js';
++import * as sound from '@/utility/sound.js';
++import { checkReactionPermissions } from '@/utility/check-reaction-permissions.js';
+ import { customEmojisMap } from '@/custom-emojis.js';
++import { prefer } from '@/preferences.js';
++import { DI } from '@/di.js';
++import { noteEvents } from '@/composables/use-note-capture.js';
++import { mute as muteEmoji, unmute as unmuteEmoji, checkMuted as isEmojiMuted } from '@/utility/emoji-mute.js';
++import { haptic } from '@/utility/haptic.js';
+ 
+ const props = defineProps<{
++	noteId: Misskey.entities.Note['id'];
+ 	reaction: string;
++	reactionEmojis: Misskey.entities.Note['reactionEmojis'];
++	myReaction: Misskey.entities.Note['myReaction'];
+ 	count: number;
+ 	isInitial: boolean;
+-	note: Misskey.entities.Note;
+ }>();
+ 
+-const mock = inject<boolean>('mock', false);
++const mock = inject(DI.mock, false);
+ 
+ const emit = defineEmits<{
+ 	(ev: 'reactionToggled', emoji: string, newCount: number): void;
+ }>();
+ 
+-const buttonEl = shallowRef<HTMLElement>();
++const buttonEl = useTemplateRef('buttonEl');
+ 
+ const emojiName = computed(() => props.reaction.replace(/:/g, '').replace(/@\./, ''));
+-const emoji = computed(() => customEmojisMap.get(emojiName.value) ?? getUnicodeEmoji(props.reaction));
+ 
+ const canToggle = computed(() => {
+-	return !props.reaction.match(/@\w/) && $i && emoji.value && checkReactionPermissions($i, props.note, emoji.value);
++	const emoji = customEmojisMap.get(emojiName.value) ?? getUnicodeEmojiOrNull(props.reaction);
++
++	// TODO
++	//return !props.reaction.match(/@\w/) && $i && emoji && checkReactionPermissions($i, props.note, emoji);
++	return props.reaction.match(/@\w/) == null && $i != null && emoji != null;
+ });
+ const canGetInfo = computed(() => !props.reaction.match(/@\w/) && props.reaction.includes(':'));
++const isLocalCustomEmoji = props.reaction[0] === ':' && props.reaction.includes('@.');
+ 
+ async function toggleReaction() {
+ 	if (!canToggle.value) return;
++	if ($i == null) return;
++
++	const me = $i;
+ 
+-	const oldReaction = props.note.myReaction;
++	const oldReaction = props.myReaction;
+ 	if (oldReaction) {
+ 		const confirm = await os.confirm({
+ 			type: 'warning',
+@@ -72,6 +85,7 @@ async function toggleReaction() {
+ 
+ 		if (oldReaction !== props.reaction) {
+ 			sound.playMisskeySfx('reaction');
++			haptic();
+ 		}
+ 
+ 		if (mock) {
+@@ -80,17 +94,29 @@ async function toggleReaction() {
+ 		}
+ 
+ 		misskeyApi('notes/reactions/delete', {
+-			noteId: props.note.id,
++			noteId: props.noteId,
+ 		}).then(() => {
++			noteEvents.emit(`unreacted:${props.noteId}`, {
++				userId: me.id,
++				reaction: oldReaction,
++			});
+ 			if (oldReaction !== props.reaction) {
+ 				misskeyApi('notes/reactions/create', {
+-					noteId: props.note.id,
++					noteId: props.noteId,
+ 					reaction: props.reaction,
++				}).then(() => {
++					const emoji = customEmojisMap.get(emojiName.value);
++					if (emoji == null) return;
++					noteEvents.emit(`reacted:${props.noteId}`, {
++						userId: me.id,
++						reaction: props.reaction,
++						emoji: emoji,
++					});
+ 				});
+ 			}
+ 		});
+ 	} else {
+-		if (defaultStore.state.confirmOnReact) {
++		if (prefer.s.confirmOnReact) {
+ 			const confirm = await os.confirm({
+ 				type: 'question',
+ 				text: i18n.tsx.reactAreYouSure({ emoji: props.reaction.replace('@.', '') }),
+@@ -100,6 +126,7 @@ async function toggleReaction() {
+ 		}
+ 
+ 		sound.playMisskeySfx('reaction');
++		haptic();
+ 
+ 		if (mock) {
+ 			emit('reactionToggled', props.reaction, (props.count + 1));
+@@ -107,35 +134,79 @@ async function toggleReaction() {
+ 		}
+ 
+ 		misskeyApi('notes/reactions/create', {
+-			noteId: props.note.id,
++			noteId: props.noteId,
+ 			reaction: props.reaction,
++		}).then(() => {
++			const emoji = customEmojisMap.get(emojiName.value);
++			if (emoji == null) return;
++
++			noteEvents.emit(`reacted:${props.noteId}`, {
++				userId: me.id,
++				reaction: props.reaction,
++				emoji: emoji,
++			});
+ 		});
+-		if (props.note.text && props.note.text.length > 100 && (Date.now() - new Date(props.note.createdAt).getTime() < 1000 * 3)) {
+-			claimAchievement('reactWithoutRead');
+-		}
++		// TODO: 上位コンポーネントでやる
++		//if (props.note.text && props.note.text.length > 100 && (Date.now() - new Date(props.note.createdAt).getTime() < 1000 * 3)) {
++		//	claimAchievement('reactWithoutRead');
++		//}
+ 	}
+ }
+ 
+-async function menu(ev) {
+-	if (!canGetInfo.value) return;
+-
+-	os.popupMenu([{
+-		text: i18n.ts.info,
+-		icon: 'ti ti-info-circle',
+-		action: async () => {
+-			const { dispose } = os.popup(MkCustomEmojiDetailedDialog, {
+-				emoji: await misskeyApiGet('emoji', {
+-					name: props.reaction.replace(/:/g, '').replace(/@\./, ''),
+-				}),
+-			}, {
+-				closed: () => dispose(),
+-			});
+-		},
+-	}], ev.currentTarget ?? ev.target);
++async function menu(ev: PointerEvent) {
++	let menuItems: MenuItem[] = [];
++
++	if (canGetInfo.value) {
++		menuItems.push({
++			text: i18n.ts.info,
++			icon: 'ti ti-info-circle',
++			action: async () => {
++				const { dispose } = os.popup(MkCustomEmojiDetailedDialog, {
++					emoji: await misskeyApiGet('emoji', {
++						name: props.reaction.replace(/:/g, '').replace(/@\./, ''),
++					}),
++				}, {
++					closed: () => dispose(),
++				});
++			},
++		});
++	}
++
++	if (isEmojiMuted(props.reaction).value) {
++		menuItems.push({
++			text: i18n.ts.emojiUnmute,
++			icon: 'ti ti-mood-smile',
++			action: () => {
++				os.confirm({
++					type: 'question',
++					title: i18n.tsx.unmuteX({ x: isLocalCustomEmoji ? `:${emojiName.value}:` : props.reaction }),
++				}).then(({ canceled }) => {
++					if (canceled) return;
++					unmuteEmoji(props.reaction);
++				});
++			},
++		});
++	} else {
++		menuItems.push({
++			text: i18n.ts.emojiMute,
++			icon: 'ti ti-mood-off',
++			action: () => {
++				os.confirm({
++					type: 'question',
++					title: i18n.tsx.muteX({ x: isLocalCustomEmoji ? `:${emojiName.value}:` : props.reaction }),
++				}).then(({ canceled }) => {
++					if (canceled) return;
++					muteEmoji(props.reaction);
++				});
++			},
++		});
++	}
++
++	os.popupMenu(menuItems, ev.currentTarget ?? ev.target);
+ }
+ 
+ function anime() {
+-	if (document.hidden || !defaultStore.state.animation || buttonEl.value == null) return;
++	if (window.document.hidden || !prefer.s.animation || buttonEl.value == null) return;
+ 
+ 	const rect = buttonEl.value.getBoundingClientRect();
+ 	const x = rect.left + 16;
+@@ -155,8 +226,10 @@ onMounted(() => {
+ 
+ if (!mock) {
+ 	useTooltip(buttonEl, async (showing) => {
++		if (buttonEl.value == null) return;
++
+ 		const reactions = await misskeyApiGet('notes/reactions', {
+-			noteId: props.note.id,
++			noteId: props.noteId,
+ 			type: props.reaction,
+ 			limit: 10,
+ 			_cacheKey_: props.count,
+@@ -169,7 +242,7 @@ if (!mock) {
+ 			reaction: props.reaction,
+ 			users,
+ 			count: props.count,
+-			targetElement: buttonEl.value,
++			anchorElement: buttonEl.value,
+ 		}, {
+ 			closed: () => dispose(),
+ 		});
+@@ -181,7 +254,6 @@ if (!mock) {
+ .root {
+ 	display: inline-flex;
+ 	height: 42px;
+-	margin: 2px;
+ 	padding: 0 6px;
+ 	font-size: 1.5em;
+ 	border-radius: 6px;
+diff --git a/packages/frontend/src/local-storage.ts b/packages/frontend/src/local-storage.ts
+index 9c8863f863..f79f62f80e 100644
+--- a/packages/frontend/src/local-storage.ts
++++ b/packages/frontend/src/local-storage.ts
+@@ -9,7 +9,6 @@ export type Keys = (
+ 	'instance' |
+ 	'instanceCachedAt' |
+ 	'account' |
+-	'accounts' |
+ 	'latestDonationInfoShownAt' |
+ 	'neverShowDonationInfo' |
+ 	'neverShowLocalOnlyInfo' |
+@@ -18,23 +17,26 @@ export type Keys = (
+ 	'lang' |
+ 	'drafts' |
+ 	'hashtags' |
+-	'wallpaper' |
+-	'theme' |
+ 	'colorScheme' |
+ 	'useSystemFont' |
+ 	'fontSize' |
+ 	'ui' |
+ 	'ui_temp' |
+-	'locale' |
+-	'localeVersion' |
++	'bootloaderLocales' |
+ 	'theme' |
++	'themeId' |
++	'themeCachedVersion' |
+ 	'customCss' |
+-	'message_drafts' |
++	'chatMessageDrafts' |
+ 	'scratchpad' |
+ 	'debug' |
++	'preferences' |
++	'latestPreferencesUpdate' |
++	'hidePreferencesRestoreSuggestion' |
++	'isSafeMode' |
+ 	`miux:${string}` |
+ 	`ui:folder:${string}` |
+-	`themes:${string}` |
++	`themes:${string}` | // DEPRECATED
+ 	`aiscript:${string}` |
+ 	'lastEmojisFetchedAt' | // DEPRECATED, stored in indexeddb (13.9.0~)
+ 	'emojis' | // DEPRECATED, stored in indexeddb (13.9.0~);
+diff --git a/packages/frontend/src/pages/channel-editor.vue b/packages/frontend/src/pages/channel-editor.vue
+index 6d8274a55c..4b73b6c6b3 100644
+--- a/packages/frontend/src/pages/channel-editor.vue
++++ b/packages/frontend/src/pages/channel-editor.vue
+@@ -4,9 +4,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<MkStickyContainer>
+-	<template #header><MkPageHeader :actions="headerActions" :tabs="headerTabs"/></template>
+-	<MkSpacer :contentMax="700">
++<PageWithHeader :actions="headerActions" :tabs="headerTabs">
++	<div class="_spacer" style="--MI_SPACER-w: 700px;">
+ 		<div v-if="channelId == null || channel != null" class="_gaps_m">
+ 			<MkInput v-model="name">
+ 				<template #label>{{ i18n.ts.name }}</template>
+@@ -42,20 +41,19 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<div class="_gaps">
+ 					<MkButton primary rounded @click="addPinnedNote()"><i class="ti ti-plus"></i></MkButton>
+ 
+-					<Sortable
+-						v-model="pinnedNotes"
+-						itemKey="id"
+-						:handle="'.' + $style.pinnedNoteHandle"
+-						:animation="150"
++					<MkDraggable
++						:modelValue="pinnedNoteIds.map(id => ({ id }))"
++						direction="vertical"
++						@update:modelValue="v => pinnedNoteIds = v.map(x => x.id)"
+ 					>
+-						<template #item="{element,index}">
++						<template #default="{ item }">
+ 							<div :class="$style.pinnedNote">
+ 								<button class="_button" :class="$style.pinnedNoteHandle"><i class="ti ti-menu"></i></button>
+-								{{ element.id }}
+-								<button class="_button" :class="$style.pinnedNoteRemove" @click="removePinnedNote(index)"><i class="ti ti-x"></i></button>
++								{{ item.id }}
++								<button class="_button" :class="$style.pinnedNoteRemove" @click="removePinnedNote(item.id)"><i class="ti ti-x"></i></button>
+ 							</div>
+ 						</template>
+-					</Sortable>
++					</MkDraggable>
+ 				</div>
+ 			</MkFolder>
+ 
+@@ -64,27 +62,26 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<MkButton v-if="channelId" danger @click="archive()"><i class="ti ti-trash"></i> {{ i18n.ts.archive }}</MkButton>
+ 			</div>
+ 		</div>
+-	</MkSpacer>
+-</MkStickyContainer>
++	</div>
++</PageWithHeader>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, ref, watch, defineAsyncComponent } from 'vue';
++import { computed, ref, watch } from 'vue';
+ import * as Misskey from 'misskey-js';
+ import MkButton from '@/components/MkButton.vue';
+ import MkInput from '@/components/MkInput.vue';
+ import MkColorInput from '@/components/MkColorInput.vue';
+-import { selectFile } from '@/scripts/select-file.js';
++import { selectFile } from '@/utility/drive.js';
+ import * as os from '@/os.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
++import { definePage } from '@/page.js';
+ import { i18n } from '@/i18n.js';
+ import MkFolder from '@/components/MkFolder.vue';
+ import MkSwitch from '@/components/MkSwitch.vue';
+ import MkTextarea from '@/components/MkTextarea.vue';
+-import { useRouter } from '@/router/supplier.js';
+-
+-const Sortable = defineAsyncComponent(() => import('vuedraggable').then(x => x.default));
++import MkDraggable from '@/components/MkDraggable.vue';
++import { useRouter } from '@/router.js';
+ 
+ const router = useRouter();
+ 
+@@ -93,14 +90,14 @@ const props = defineProps<{
+ }>();
+ 
+ const channel = ref<Misskey.entities.Channel | null>(null);
+-const name = ref<string | null>(null);
++const name = ref<string>('');
+ const description = ref<string | null>(null);
+ const bannerUrl = ref<string | null>(null);
+ const bannerId = ref<string | null>(null);
+ const color = ref('#000');
+ const isSensitive = ref(false);
+ const allowRenoteToExternal = ref(true);
+-const pinnedNotes = ref<{ id: Misskey.entities.Note['id'] }[]>([]);
++const pinnedNoteIds = ref<Misskey.entities.Note['id'][]>([]);
+ 
+ watch(() => bannerId.value, async () => {
+ 	if (bannerId.value == null) {
+@@ -115,20 +112,20 @@ watch(() => bannerId.value, async () => {
+ async function fetchChannel() {
+ 	if (props.channelId == null) return;
+ 
+-	channel.value = await misskeyApi('channels/show', {
++	const result = await misskeyApi('channels/show', {
+ 		channelId: props.channelId,
+ 	});
+ 
+-	name.value = channel.value.name;
+-	description.value = channel.value.description;
+-	bannerId.value = channel.value.bannerId;
+-	bannerUrl.value = channel.value.bannerUrl;
+-	isSensitive.value = channel.value.isSensitive;
+-	pinnedNotes.value = channel.value.pinnedNoteIds.map(id => ({
+-		id,
+-	}));
+-	color.value = channel.value.color;
+-	allowRenoteToExternal.value = channel.value.allowRenoteToExternal;
++	name.value = result.name;
++	description.value = result.description;
++	bannerId.value = result.bannerId;
++	bannerUrl.value = result.bannerUrl;
++	isSensitive.value = result.isSensitive;
++	pinnedNoteIds.value = result.pinnedNoteIds;
++	color.value = result.color;
++	allowRenoteToExternal.value = result.allowRenoteToExternal;
++
++	channel.value = result;
+ }
+ 
+ fetchChannel();
+@@ -137,17 +134,16 @@ async function addPinnedNote() {
+ 	const { canceled, result: value } = await os.inputText({
+ 		title: i18n.ts.noteIdOrUrl,
+ 	});
+-	if (canceled) return;
++	if (canceled || value == null) return;
++	const fromUrl = value.includes('/') ? value.split('/').pop() : null;
+ 	const note = await os.apiWithDialog('notes/show', {
+-		noteId: value.includes('/') ? value.split('/').pop() : value,
++		noteId: fromUrl ?? value,
+ 	});
+-	pinnedNotes.value = [{
+-		id: note.id,
+-	}, ...pinnedNotes.value];
++	pinnedNoteIds.value.unshift(note.id);
+ }
+ 
+-function removePinnedNote(index: number) {
+-	pinnedNotes.value.splice(index, 1);
++function removePinnedNote(id: string) {
++	pinnedNoteIds.value = pinnedNoteIds.value.filter(x => x !== id);
+ }
+ 
+ function save() {
+@@ -155,29 +151,36 @@ function save() {
+ 		name: name.value,
+ 		description: description.value,
+ 		bannerId: bannerId.value,
+-		pinnedNoteIds: pinnedNotes.value.map(x => x.id),
+ 		color: color.value,
+ 		isSensitive: isSensitive.value,
+ 		allowRenoteToExternal: allowRenoteToExternal.value,
+-	};
++	} satisfies Misskey.entities.ChannelsCreateRequest;
+ 
+-	if (props.channelId) {
+-		params.channelId = props.channelId;
+-		os.apiWithDialog('channels/update', params);
++	if (props.channelId != null) {
++		os.apiWithDialog('channels/update', {
++			...params,
++			channelId: props.channelId,
++			pinnedNoteIds: pinnedNoteIds.value,
++		});
+ 	} else {
+ 		os.apiWithDialog('channels/create', params).then(created => {
+-			router.push(`/channels/${created.id}`);
++			router.push('/channels/:channelId', {
++				params: {
++					channelId: created.id,
++				},
++			});
+ 		});
+ 	}
+ }
+ 
+ async function archive() {
++	if (props.channelId == null) return;
++
+ 	const { canceled } = await os.confirm({
+ 		type: 'warning',
+ 		title: i18n.tsx.channelArchiveConfirmTitle({ name: name.value }),
+ 		text: i18n.ts.channelArchiveConfirmDescription,
+ 	});
+-
+ 	if (canceled) return;
+ 
+ 	misskeyApi('channels/update', {
+@@ -188,8 +191,11 @@ async function archive() {
+ 	});
+ }
+ 
+-function setBannerImage(evt) {
+-	selectFile(evt.currentTarget ?? evt.target, null).then(file => {
++function setBannerImage(evt: PointerEvent) {
++	selectFile({
++		anchorElement: evt.currentTarget ?? evt.target,
++		multiple: false,
++	}).then(file => {
+ 		bannerId.value = file.id;
+ 	});
+ }
+@@ -202,7 +208,7 @@ const headerActions = computed(() => []);
+ 
+ const headerTabs = computed(() => []);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: props.channelId ? i18n.ts._channel.edit : i18n.ts._channel.create,
+ 	icon: 'ti ti-device-tv',
+ }));
+diff --git a/packages/frontend/src/pages/channel.vue b/packages/frontend/src/pages/channel.vue
+index 4a91165d50..0879aa72be 100644
+--- a/packages/frontend/src/pages/channel.vue
++++ b/packages/frontend/src/pages/channel.vue
+@@ -4,102 +4,101 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<MkStickyContainer>
+-	<template #header><MkPageHeader v-model:tab="tab" :actions="headerActions" :tabs="headerTabs"/></template>
+-	<MkSpacer :contentMax="700" :class="$style.main">
+-		<MkHorizontalSwipe v-model:tab="tab" :tabs="headerTabs">
+-			<div v-if="channel && tab === 'overview'" key="overview" class="_gaps">
+-				<div class="_panel" :class="$style.bannerContainer">
+-					<XChannelFollowButton :channel="channel" :full="true" :class="$style.subscribe"/>
+-					<MkButton v-if="favorited" v-tooltip="i18n.ts.unfavorite" asLike class="button" rounded primary :class="$style.favorite" @click="unfavorite()"><i class="ti ti-star"></i></MkButton>
+-					<MkButton v-else v-tooltip="i18n.ts.favorite" asLike class="button" rounded :class="$style.favorite" @click="favorite()"><i class="ti ti-star"></i></MkButton>
+-					<div :style="{ backgroundImage: channel.bannerUrl ? `url(${channel.bannerUrl})` : undefined }" :class="$style.banner">
+-						<div :class="$style.bannerStatus">
+-							<div><i class="ti ti-users ti-fw"></i><I18n :src="i18n.ts._channel.usersCount" tag="span" style="margin-left: 4px;"><template #n><b>{{ channel.usersCount }}</b></template></I18n></div>
+-							<div><i class="ti ti-pencil ti-fw"></i><I18n :src="i18n.ts._channel.notesCount" tag="span" style="margin-left: 4px;"><template #n><b>{{ channel.notesCount }}</b></template></I18n></div>
+-						</div>
+-						<div v-if="channel.isSensitive" :class="$style.sensitiveIndicator">{{ i18n.ts.sensitive }}</div>
+-						<div :class="$style.bannerFade"></div>
+-					</div>
+-					<div v-if="channel.description" :class="$style.description">
+-						<Mfm :text="channel.description" :isNote="false"/>
++<PageWithHeader v-model:tab="tab" :actions="headerActions" :tabs="headerTabs" :swipable="true">
++	<div class="_spacer" style="--MI_SPACER-w: 700px;">
++		<div v-if="channel && tab === 'overview'" class="_gaps">
++			<div class="_panel" :class="$style.bannerContainer">
++				<XChannelFollowButton :channel="channel" :full="true" :class="$style.subscribe"/>
++				<MkButton v-if="favorited" v-tooltip="i18n.ts.unfavorite" asLike class="button" rounded primary :class="$style.favorite" @click="unfavorite()"><i class="ti ti-star"></i></MkButton>
++				<MkButton v-else v-tooltip="i18n.ts.favorite" asLike class="button" rounded :class="$style.favorite" @click="favorite()"><i class="ti ti-star"></i></MkButton>
++				<div :style="{ backgroundImage: channel.bannerUrl ? `url(${channel.bannerUrl})` : undefined }" :class="$style.banner">
++					<div :class="$style.bannerStatus">
++						<div><i class="ti ti-users ti-fw"></i><I18n :src="i18n.ts._channel.usersCount" tag="span" style="margin-left: 4px;"><template #n><b>{{ channel.usersCount }}</b></template></I18n></div>
++						<div><i class="ti ti-pencil ti-fw"></i><I18n :src="i18n.ts._channel.notesCount" tag="span" style="margin-left: 4px;"><template #n><b>{{ channel.notesCount }}</b></template></I18n></div>
++						<div v-if="$i != null && channel != null && $i.id === channel.userId" style="color: var(--MI_THEME-warn)"><i class="ti ti-user-star ti-fw"></i><span style="margin-left: 4px;">{{ i18n.ts.youAreAdmin }}</span></div>
+ 					</div>
++					<div v-if="channel.isSensitive" :class="$style.sensitiveIndicator">{{ i18n.ts.sensitive }}</div>
++					<div :class="$style.bannerFade"></div>
++				</div>
++				<div v-if="channel.description" :class="$style.description">
++					<Mfm :text="channel.description" :isNote="false"/>
+ 				</div>
+-
+-				<MkFoldableSection>
+-					<template #header><i class="ti ti-pin ti-fw" style="margin-right: 0.5em;"></i>{{ i18n.ts.pinnedNotes }}</template>
+-					<div v-if="channel.pinnedNotes && channel.pinnedNotes.length > 0" class="_gaps">
+-						<MkNote v-for="note in channel.pinnedNotes" :key="note.id" class="_panel" :note="note"/>
+-					</div>
+-				</MkFoldableSection>
+ 			</div>
+-			<div v-if="channel && tab === 'timeline'" key="timeline" class="_gaps">
+-				<MkInfo v-if="channel.isArchived" warn>{{ i18n.ts.thisChannelArchived }}</MkInfo>
+ 
+-				<!-- スマホ・タブレットの場合、キーボードが表示されると投稿が見づらくなるので、デスクトップ場合のみ自動でフォーカスを当てる -->
+-				<MkPostForm v-if="$i && defaultStore.reactiveState.showFixedPostFormInChannel.value" :channel="channel" class="post-form _panel" fixed :autofocus="deviceKind === 'desktop'"/>
+-
+-				<MkTimeline :key="channelId" src="channel" :channel="channelId" @before="before" @after="after" @note="miLocalStorage.setItemAsJson(`channelLastReadedAt:${channel.id}`, Date.now())"/>
+-			</div>
+-			<div v-else-if="tab === 'featured'" key="featured">
+-				<MkNotes :pagination="featuredPagination"/>
+-			</div>
+-			<div v-else-if="tab === 'search'" key="search">
+-				<div v-if="notesSearchAvailable" class="_gaps">
+-					<div>
+-						<MkInput v-model="searchQuery" @enter="search()">
+-							<template #prefix><i class="ti ti-search"></i></template>
+-						</MkInput>
+-						<MkButton primary rounded style="margin-top: 8px;" @click="search()">{{ i18n.ts.search }}</MkButton>
+-					</div>
+-					<MkNotes v-if="searchPagination" :key="searchKey" :pagination="searchPagination"/>
++			<MkFoldableSection>
++				<template #header><i class="ti ti-pin ti-fw" style="margin-right: 0.5em;"></i>{{ i18n.ts.pinnedNotes }}</template>
++				<div v-if="channel.pinnedNotes && channel.pinnedNotes.length > 0" class="_gaps">
++					<MkNote v-for="note in channel.pinnedNotes" :key="note.id" class="_panel" :note="note"/>
+ 				</div>
+-				<div v-else>
+-					<MkInfo warn>{{ i18n.ts.notesSearchNotAvailable }}</MkInfo>
++			</MkFoldableSection>
++		</div>
++		<div v-if="channel && tab === 'timeline'" class="_gaps">
++			<MkInfo v-if="channel.isArchived" warn>{{ i18n.ts.thisChannelArchived }}</MkInfo>
++
++			<!-- スマホ・タブレットの場合、キーボードが表示されると投稿が見づらくなるので、デスクトップ場合のみ自動でフォーカスを当てる -->
++			<MkPostForm v-if="$i && prefer.r.showFixedPostFormInChannel.value" :channel="channel" class="post-form _panel" fixed :autofocus="deviceKind === 'desktop'"/>
++
++			<MkStreamingNotesTimeline :key="channelId" src="channel" :channel="channelId"/>
++		</div>
++		<div v-else-if="tab === 'featured'">
++			<MkNotesTimeline :paginator="featuredPaginator"/>
++		</div>
++		<div v-else-if="tab === 'search'">
++			<div v-if="notesSearchAvailable" class="_gaps">
++				<div>
++					<MkInput v-model="searchQuery" @enter="search()">
++						<template #prefix><i class="ti ti-search"></i></template>
++					</MkInput>
++					<MkButton primary rounded style="margin-top: 8px;" @click="search()">{{ i18n.ts.search }}</MkButton>
+ 				</div>
++				<MkNotesTimeline v-if="searchPaginator" :key="searchKey" :paginator="searchPaginator"/>
+ 			</div>
+-		</MkHorizontalSwipe>
+-	</MkSpacer>
++			<div v-else>
++				<MkInfo warn>{{ i18n.ts.notesSearchNotAvailable }}</MkInfo>
++			</div>
++		</div>
++	</div>
+ 	<template #footer>
+ 		<div :class="$style.footer">
+-			<MkSpacer :contentMax="700" :marginMin="16" :marginMax="16">
++			<div class="_spacer" style="--MI_SPACER-w: 700px; --MI_SPACER-min: 16px; --MI_SPACER-max: 16px;">
+ 				<div class="_buttonsCenter">
+ 					<MkButton inline rounded primary gradate @click="openPostForm()"><i class="ti ti-pencil"></i> {{ i18n.ts.postToTheChannel }}</MkButton>
+ 				</div>
+-			</MkSpacer>
++			</div>
+ 		</div>
+ 	</template>
+-</MkStickyContainer>
++</PageWithHeader>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, watch, ref } from 'vue';
++import { computed, watch, ref, markRaw, shallowRef } from 'vue';
+ import * as Misskey from 'misskey-js';
++import { url } from '@@/js/config.js';
++import { useInterval } from '@@/js/use-interval.js';
++import type { PageHeaderItem } from '@/types/page-header.js';
+ import MkPostForm from '@/components/MkPostForm.vue';
+-import MkTimeline from '@/components/MkTimeline.vue';
++import MkStreamingNotesTimeline from '@/components/MkStreamingNotesTimeline.vue';
+ import XChannelFollowButton from '@/components/MkChannelFollowButton.vue';
+ import * as os from '@/os.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { $i, iAmModerator } from '@/account.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
++import { $i, iAmModerator } from '@/i.js';
+ import { i18n } from '@/i18n.js';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
+-import { deviceKind } from '@/scripts/device-kind.js';
+-import MkNotes from '@/components/MkNotes.vue';
+-import { url } from '@@/js/config.js';
++import { definePage } from '@/page.js';
++import { deviceKind } from '@/utility/device-kind.js';
++import MkNotesTimeline from '@/components/MkNotesTimeline.vue';
+ import { favoritedChannelsCache } from '@/cache.js';
+ import MkButton from '@/components/MkButton.vue';
+ import MkInput from '@/components/MkInput.vue';
+-import { defaultStore } from '@/store.js';
++import { prefer } from '@/preferences.js';
+ import MkNote from '@/components/MkNote.vue';
+ import MkInfo from '@/components/MkInfo.vue';
+ import MkFoldableSection from '@/components/MkFoldableSection.vue';
+-import MkHorizontalSwipe from '@/components/MkHorizontalSwipe.vue';
+-import type { PageHeaderItem } from '@/types/page-header.js';
+-import { isSupportShare } from '@/scripts/navigator.js';
+-import { copyToClipboard } from '@/scripts/copy-to-clipboard.js';
+-import { notesSearchAvailable } from '@/scripts/check-permissions.js';
++import { isSupportShare } from '@/utility/navigator.js';
++import { copyToClipboard } from '@/utility/copy-to-clipboard.js';
++import { notesSearchAvailable } from '@/utility/check-permissions.js';
+ import { miLocalStorage } from '@/local-storage.js';
+-import { useRouter } from '@/router/supplier.js';
++import { useRouter } from '@/router.js';
++import { Paginator } from '@/utility/paginator.js';
+ 
+ const router = useRouter();
+ 
+@@ -112,37 +111,51 @@ const tab = ref('overview');
+ const channel = ref<Misskey.entities.Channel | null>(null);
+ const favorited = ref(false);
+ const searchQuery = ref('');
+-const searchPagination = ref();
++const searchPaginator = shallowRef();
+ const searchKey = ref('');
+-const featuredPagination = computed(() => ({
+-	endpoint: 'notes/featured' as const,
++const featuredPaginator = markRaw(new Paginator('notes/featured', {
+ 	limit: 10,
+-	params: {
++	computedParams: computed(() => ({
+ 		channelId: props.channelId,
+-	},
++	})),
+ }));
+ 
++useInterval(() => {
++	if (channel.value == null) return;
++	miLocalStorage.setItemAsJson(`channelLastReadedAt:${channel.value.id}`, Date.now());
++}, 3000, {
++	immediate: true,
++	afterMounted: true,
++});
++
+ watch(() => props.channelId, async () => {
+-	channel.value = await misskeyApi('channels/show', {
++	const _channel = await misskeyApi('channels/show', {
+ 		channelId: props.channelId,
+ 	});
+-	favorited.value = channel.value.isFavorited ?? false;
+-	if (favorited.value || channel.value.isFollowing) {
++
++	favorited.value = _channel.isFavorited ?? false;
++	if (favorited.value || _channel.isFollowing) {
+ 		tab.value = 'timeline';
+ 	}
+ 
+-	if ((favorited.value || channel.value.isFollowing) && channel.value.lastNotedAt) {
+-		const lastReadedAt: number = miLocalStorage.getItemAsJson(`channelLastReadedAt:${channel.value.id}`) ?? 0;
+-		const lastNotedAt = Date.parse(channel.value.lastNotedAt);
++	if ((favorited.value || _channel.isFollowing) && _channel.lastNotedAt) {
++		const lastReadedAt: number = miLocalStorage.getItemAsJson(`channelLastReadedAt:${_channel.id}`) ?? 0;
++		const lastNotedAt = Date.parse(_channel.lastNotedAt);
+ 
+ 		if (lastNotedAt > lastReadedAt) {
+-			miLocalStorage.setItemAsJson(`channelLastReadedAt:${channel.value.id}`, lastNotedAt);
++			miLocalStorage.setItemAsJson(`channelLastReadedAt:${_channel.id}`, lastNotedAt);
+ 		}
+ 	}
++
++	channel.value = _channel;
+ }, { immediate: true });
+ 
+ function edit() {
+-	router.push(`/channels/${channel.value?.id}/edit`);
++	router.push('/channels/:channelId/edit', {
++		params: {
++			channelId: props.channelId,
++		},
++	});
+ }
+ 
+ function openPostForm() {
+@@ -178,6 +191,53 @@ async function unfavorite() {
+ 	});
+ }
+ 
++async function mute() {
++	if (!channel.value) return;
++	const _channel = channel.value;
++
++	const { canceled, result: period } = await os.select({
++		title: i18n.ts.mutePeriod,
++		items: [{
++			value: 'indefinitely', label: i18n.ts.indefinitely,
++		}, {
++			value: 'tenMinutes', label: i18n.ts.tenMinutes,
++		}, {
++			value: 'oneHour', label: i18n.ts.oneHour,
++		}, {
++			value: 'oneDay', label: i18n.ts.oneDay,
++		}, {
++			value: 'oneWeek', label: i18n.ts.oneWeek,
++		}],
++		default: 'indefinitely',
++	});
++	if (canceled) return;
++
++	const expiresAt = period === 'indefinitely' ? null
++		: period === 'tenMinutes' ? Date.now() + (1000 * 60 * 10)
++		: period === 'oneHour' ? Date.now() + (1000 * 60 * 60)
++		: period === 'oneDay' ? Date.now() + (1000 * 60 * 60 * 24)
++		: period === 'oneWeek' ? Date.now() + (1000 * 60 * 60 * 24 * 7)
++		: null;
++
++	os.apiWithDialog('channels/mute/create', {
++		channelId: _channel.id,
++		expiresAt,
++	}).then(() => {
++		_channel.isMuting = true;
++	});
++}
++
++async function unmute() {
++	if (!channel.value) return;
++	const _channel = channel.value;
++
++	os.apiWithDialog('channels/mute/delete', {
++		channelId: _channel.id,
++	}).then(() => {
++		_channel.isMuting = false;
++	});
++}
++
+ async function search() {
+ 	if (!channel.value) return;
+ 
+@@ -185,20 +245,19 @@ async function search() {
+ 
+ 	if (query == null) return;
+ 
+-	searchPagination.value = {
+-		endpoint: 'notes/search',
++	searchPaginator.value = markRaw(new Paginator('notes/search', {
+ 		limit: 10,
+ 		params: {
+ 			query: query,
+ 			channelId: channel.value.id,
+ 		},
+-	};
++	}));
+ 
+ 	searchKey.value = query;
+ }
+ 
+ const headerActions = computed(() => {
+-	if (channel.value && channel.value.userId) {
++	if (channel.value) {
+ 		const headerItems: PageHeaderItem[] = [];
+ 
+ 		headerItems.push({
+@@ -210,7 +269,6 @@ const headerActions = computed(() => {
+ 					return;
+ 				}
+ 				copyToClipboard(`${url}/channels/${channel.value.id}`);
+-				os.success();
+ 			},
+ 		});
+ 
+@@ -233,6 +291,24 @@ const headerActions = computed(() => {
+ 			});
+ 		}
+ 
++		if (!channel.value.isMuting) {
++			headerItems.push({
++				icon: 'ti ti-volume',
++				text: i18n.ts.mute,
++				handler: async (): Promise<void> => {
++					await mute();
++				},
++			});
++		} else {
++			headerItems.push({
++				icon: 'ti ti-volume-off',
++				text: i18n.ts.unmute,
++				handler: async (): Promise<void> => {
++					await unmute();
++				},
++			});
++		}
++
+ 		if (($i && $i.id === channel.value.userId) || iAmModerator) {
+ 			headerItems.push({
+ 				icon: 'ti ti-settings',
+@@ -265,21 +341,17 @@ const headerTabs = computed(() => [{
+ 	icon: 'ti ti-search',
+ }]);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: channel.value ? channel.value.name : i18n.ts.channel,
+ 	icon: 'ti ti-device-tv',
+ }));
+ </script>
+ 
+ <style lang="scss" module>
+-.main {
+-	min-height: calc(100cqh - (var(--MI-stickyTop, 0px) + var(--MI-stickyBottom, 0px)));
+-}
+-
+ .footer {
+ 	-webkit-backdrop-filter: var(--MI-blur, blur(15px));
+ 	backdrop-filter: var(--MI-blur, blur(15px));
+-	background: var(--MI_THEME-acrylicBg);
++	background: color(from var(--MI_THEME-bg) srgb r g b / 0.5);
+ 	border-top: solid 0.5px var(--MI_THEME-divider);
+ }
+ 
+diff --git a/packages/frontend/src/pages/channels.vue b/packages/frontend/src/pages/channels.vue
+index 6830c1ace4..26dc5b80df 100644
+--- a/packages/frontend/src/pages/channels.vue
++++ b/packages/frontend/src/pages/channels.vue
+@@ -4,63 +4,65 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<MkStickyContainer>
+-	<template #header><MkPageHeader v-model:tab="tab" :actions="headerActions" :tabs="headerTabs"/></template>
+-	<MkSpacer :contentMax="1200">
+-		<MkHorizontalSwipe v-model:tab="tab" :tabs="headerTabs">
+-			<div v-if="tab === 'search'" key="search" :class="$style.searchRoot">
+-				<div class="_gaps">
+-					<MkInput v-model="searchQuery" :large="true" :autofocus="true" type="search" @enter="search">
+-						<template #prefix><i class="ti ti-search"></i></template>
+-					</MkInput>
+-					<MkRadios v-model="searchType" @update:modelValue="search()">
+-						<option value="nameAndDescription">{{ i18n.ts._channel.nameAndDescription }}</option>
+-						<option value="nameOnly">{{ i18n.ts._channel.nameOnly }}</option>
+-					</MkRadios>
+-					<MkButton large primary gradate rounded @click="search">{{ i18n.ts.search }}</MkButton>
+-				</div>
+-
+-				<MkFoldableSection v-if="channelPagination">
+-					<template #header>{{ i18n.ts.searchResult }}</template>
+-					<MkChannelList :key="key" :pagination="channelPagination"/>
+-				</MkFoldableSection>
+-			</div>
+-			<div v-if="tab === 'featured'" key="featured">
+-				<MkPagination v-slot="{items}" :pagination="featuredPagination">
+-					<div :class="$style.root">
+-						<MkChannelPreview v-for="channel in items" :key="channel.id" :channel="channel"/>
+-					</div>
+-				</MkPagination>
+-			</div>
+-			<div v-else-if="tab === 'favorites'" key="favorites">
+-				<MkPagination v-slot="{items}" :pagination="favoritesPagination">
+-					<div :class="$style.root">
+-						<MkChannelPreview v-for="channel in items" :key="channel.id" :channel="channel"/>
+-					</div>
+-				</MkPagination>
+-			</div>
+-			<div v-else-if="tab === 'following'" key="following">
+-				<MkPagination v-slot="{items}" :pagination="followingPagination">
+-					<div :class="$style.root">
+-						<MkChannelPreview v-for="channel in items" :key="channel.id" :channel="channel"/>
+-					</div>
+-				</MkPagination>
++<PageWithHeader v-model:tab="tab" :actions="headerActions" :tabs="headerTabs" :swipable="true">
++	<div class="_spacer" style="--MI_SPACER-w: 1200px;">
++		<div v-if="tab === 'search'" :class="$style.searchRoot">
++			<div class="_gaps">
++				<MkInput v-model="searchQuery" :large="true" :autofocus="true" type="search" @enter="search">
++					<template #prefix><i class="ti ti-search"></i></template>
++				</MkInput>
++				<MkRadios
++					v-model="searchType"
++					:options="[
++						{ value: 'nameAndDescription', label: i18n.ts._channel.nameAndDescription },
++						{ value: 'nameOnly', label: i18n.ts._channel.nameOnly },
++					]"
++					@update:modelValue="search()"
++				>
++				</MkRadios>
++				<MkButton large primary gradate rounded @click="search">{{ i18n.ts.search }}</MkButton>
+ 			</div>
+-			<div v-else-if="tab === 'owned'" key="owned">
+-				<MkButton class="new" @click="create()"><i class="ti ti-plus"></i></MkButton>
+-				<MkPagination v-slot="{items}" :pagination="ownedPagination">
+-					<div :class="$style.root">
+-						<MkChannelPreview v-for="channel in items" :key="channel.id" :channel="channel"/>
+-					</div>
+-				</MkPagination>
+-			</div>
+-		</MkHorizontalSwipe>
+-	</MkSpacer>
+-</MkStickyContainer>
++
++			<MkFoldableSection v-if="channelPaginator">
++				<template #header>{{ i18n.ts.searchResult }}</template>
++				<MkChannelList :key="key" :paginator="channelPaginator"/>
++			</MkFoldableSection>
++		</div>
++		<div v-if="tab === 'featured'">
++			<MkPagination v-slot="{items}" :paginator="featuredPaginator">
++				<div :class="$style.root">
++					<MkChannelPreview v-for="channel in items" :key="channel.id" :channel="channel"/>
++				</div>
++			</MkPagination>
++		</div>
++		<div v-else-if="tab === 'favorites'">
++			<MkPagination v-slot="{items}" :paginator="favoritesPaginator">
++				<div :class="$style.root">
++					<MkChannelPreview v-for="channel in items" :key="channel.id" :channel="channel"/>
++				</div>
++			</MkPagination>
++		</div>
++		<div v-else-if="tab === 'following'">
++			<MkPagination v-slot="{items}" :paginator="followingPaginator">
++				<div :class="$style.root">
++					<MkChannelPreview v-for="channel in items" :key="channel.id" :channel="channel"/>
++				</div>
++			</MkPagination>
++		</div>
++		<div v-else-if="tab === 'owned'" class="_gaps">
++			<MkButton link primary rounded to="/channels/new"><i class="ti ti-plus"></i> {{ i18n.ts.createNew }}</MkButton>
++			<MkPagination v-slot="{items}" :paginator="ownedPaginator">
++				<div :class="$style.root">
++					<MkChannelPreview v-for="channel in items" :key="channel.id" :channel="channel"/>
++				</div>
++			</MkPagination>
++		</div>
++	</div>
++</PageWithHeader>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, onMounted, ref } from 'vue';
++import { computed, markRaw, onMounted, ref, shallowRef } from 'vue';
+ import MkChannelPreview from '@/components/MkChannelPreview.vue';
+ import MkChannelList from '@/components/MkChannelList.vue';
+ import MkPagination from '@/components/MkPagination.vue';
+@@ -68,47 +70,45 @@ import MkInput from '@/components/MkInput.vue';
+ import MkRadios from '@/components/MkRadios.vue';
+ import MkButton from '@/components/MkButton.vue';
+ import MkFoldableSection from '@/components/MkFoldableSection.vue';
+-import MkHorizontalSwipe from '@/components/MkHorizontalSwipe.vue';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
++import { definePage } from '@/page.js';
+ import { i18n } from '@/i18n.js';
+-import { useRouter } from '@/router/supplier.js';
++import { useRouter } from '@/router.js';
++import { Paginator } from '@/utility/paginator.js';
+ 
+ const router = useRouter();
+ 
++type SearchType = 'nameAndDescription' | 'nameOnly';
++
+ const props = defineProps<{
+ 	query: string;
+-	type?: string;
++	type?: SearchType;
+ }>();
+ 
+ const key = ref('');
+ const tab = ref('featured');
+ const searchQuery = ref('');
+-const searchType = ref('nameAndDescription');
+-const channelPagination = ref();
++const searchType = ref<SearchType>('nameAndDescription');
++const channelPaginator = shallowRef();
+ 
+ onMounted(() => {
+ 	searchQuery.value = props.query ?? '';
+ 	searchType.value = props.type ?? 'nameAndDescription';
+ });
+ 
+-const featuredPagination = {
+-	endpoint: 'channels/featured' as const,
++const featuredPaginator = markRaw(new Paginator('channels/featured', {
+ 	limit: 10,
+ 	noPaging: true,
+-};
+-const favoritesPagination = {
+-	endpoint: 'channels/my-favorites' as const,
++}));
++const favoritesPaginator = markRaw(new Paginator('channels/my-favorites', {
+ 	limit: 100,
+ 	noPaging: true,
+-};
+-const followingPagination = {
+-	endpoint: 'channels/followed' as const,
++}));
++const followingPaginator = markRaw(new Paginator('channels/followed', {
+ 	limit: 10,
+-};
+-const ownedPagination = {
+-	endpoint: 'channels/owned' as const,
++}));
++const ownedPaginator = markRaw(new Paginator('channels/owned', {
+ 	limit: 10,
+-};
++}));
+ 
+ async function search() {
+ 	const query = searchQuery.value.toString().trim();
+@@ -117,27 +117,23 @@ async function search() {
+ 
+ 	const type = searchType.value.toString().trim();
+ 
+-	channelPagination.value = {
+-		endpoint: 'channels/search',
++	if (type !== 'nameAndDescription' && type !== 'nameOnly') {
++		console.error(`Unrecognized search type: ${type}`);
++		return;
++	}
++
++	channelPaginator.value = markRaw(new Paginator('channels/search', {
+ 		limit: 10,
+ 		params: {
+ 			query: searchQuery.value,
+ 			type: type,
+ 		},
+-	};
++	}));
+ 
+ 	key.value = query + type;
+ }
+ 
+-function create() {
+-	router.push('/channels/new');
+-}
+-
+-const headerActions = computed(() => [{
+-	icon: 'ti ti-plus',
+-	text: i18n.ts.create,
+-	handler: create,
+-}]);
++const headerActions = computed(() => []);
+ 
+ const headerTabs = computed(() => [{
+ 	key: 'search',
+@@ -161,7 +157,7 @@ const headerTabs = computed(() => [{
+ 	icon: 'ti ti-edit',
+ }]);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: i18n.ts.channel,
+ 	icon: 'ti ti-device-tv',
+ }));
+diff --git a/packages/frontend/src/types/menu.ts b/packages/frontend/src/types/menu.ts
+index 7cadef136d..05fb3034f0 100644
+--- a/packages/frontend/src/types/menu.ts
++++ b/packages/frontend/src/types/menu.ts
+@@ -4,27 +4,119 @@
+  */
+ 
+ import * as Misskey from 'misskey-js';
+-import type { ComputedRef, Ref } from 'vue';
++import type { Component, ComputedRef, Ref, MaybeRef } from 'vue';
++import type { ComponentProps as CP } from 'vue-component-type-helpers';
++import type { OptionValue } from '@/types/option-value.js';
+ 
+-type MenuRadioOptionsDef = Record<string, any>;
++type ComponentProps<T extends Component> = { [K in keyof CP<T>]: MaybeRef<CP<T>[K]> };
+ 
+-export type MenuAction = (ev: MouseEvent) => void;
++type MenuRadioOptionsDef = Record<string, OptionValue>;
+ 
+-export type MenuDivider = { type: 'divider' };
+-export type MenuNull = undefined;
+-export type MenuLabel = { type: 'label', text: string };
+-export type MenuLink = { type: 'link', to: string, text: string, icon?: string, indicate?: boolean, avatar?: Misskey.entities.User };
+-export type MenuA = { type: 'a', href: string, target?: string, download?: string, text: string, icon?: string, indicate?: boolean };
+-export type MenuUser = { type: 'user', user: Misskey.entities.User, active?: boolean, indicate?: boolean, action: MenuAction };
+-export type MenuSwitch = { type: 'switch', ref: Ref<boolean>, text: string, icon?: string, disabled?: boolean | Ref<boolean> };
+-export type MenuButton = { type?: 'button', text: string, icon?: string, indicate?: boolean, danger?: boolean, active?: boolean | ComputedRef<boolean>, avatar?: Misskey.entities.User; action: MenuAction };
+-export type MenuRadio = { type: 'radio', text: string, icon?: string, ref: Ref<MenuRadioOptionsDef[keyof MenuRadioOptionsDef]>, options: MenuRadioOptionsDef, disabled?: boolean | Ref<boolean> };
+-export type MenuRadioOption = { type: 'radioOption', text: string, action: MenuAction; active?: boolean | ComputedRef<boolean> };
+-export type MenuParent = { type: 'parent', text: string, icon?: string, children: MenuItem[] | (() => Promise<MenuItem[]> | MenuItem[]) };
++type Text = string | ComputedRef<string>;
+ 
+-export type MenuPending = { type: 'pending' };
++export type MenuAction = (ev: PointerEvent) => void;
+ 
+-type OuterMenuItem = MenuDivider | MenuNull | MenuLabel | MenuLink | MenuA | MenuUser | MenuSwitch | MenuButton | MenuRadio | MenuRadioOption | MenuParent;
+-type OuterPromiseMenuItem = Promise<MenuLabel | MenuLink | MenuA | MenuUser | MenuSwitch | MenuButton | MenuParent>;
++export interface MenuButton {
++	type?: 'button';
++	text: Text;
++	caption?: Text | null | undefined | ComputedRef<null | undefined>;
++	icon?: string;
++	indicate?: boolean;
++	danger?: boolean;
++	active?: boolean | ComputedRef<boolean>;
++	avatar?: Misskey.entities.User;
++	action: MenuAction;
++}
++
++interface MenuBase {
++	type: string;
++}
++
++export interface MenuDivider extends MenuBase {
++	type: 'divider';
++}
++
++export interface MenuLabel extends MenuBase {
++	type: 'label';
++	text: Text;
++	caption?: Text | null | undefined | ComputedRef<null | undefined>;
++}
++
++export interface MenuLink extends MenuBase {
++	type: 'link';
++	to: string;
++	text: Text;
++	caption?: Text | null | undefined | ComputedRef<null | undefined>;
++	icon?: string;
++	indicate?: boolean;
++	avatar?: Misskey.entities.User;
++}
++
++export interface MenuA extends MenuBase {
++	type: 'a';
++	href: string;
++	target?: string;
++	download?: string;
++	text: Text;
++	caption?: Text | null | undefined | ComputedRef<null | undefined>;
++	icon?: string;
++	indicate?: boolean;
++}
++
++export interface MenuUser extends MenuBase {
++	type: 'user';
++	user: Misskey.entities.User;
++	active?: boolean;
++	indicate?: boolean;
++	action: MenuAction;
++}
++
++export interface MenuSwitch extends MenuBase {
++	type: 'switch';
++	ref: Ref<boolean>;
++	text: Text;
++	caption?: Text | null | undefined | ComputedRef<null | undefined>;
++	icon?: string;
++	disabled?: boolean | Ref<boolean>;
++}
++
++export interface MenuRadio extends MenuBase {
++	type: 'radio';
++	text: Text;
++	caption?: Text | null | undefined | ComputedRef<null | undefined>;
++	icon?: string;
++	ref: Ref<MenuRadioOptionsDef[keyof MenuRadioOptionsDef]>;
++	options: MenuRadioOptionsDef;
++	disabled?: boolean | Ref<boolean>;
++}
++
++export interface MenuRadioOption extends MenuBase {
++	type: 'radioOption';
++	text: Text;
++	caption?: Text | null | undefined | ComputedRef<null | undefined>;
++	action: MenuAction;
++	active?: boolean | ComputedRef<boolean>;
++}
++
++export interface MenuComponent<T extends Component = any> extends MenuBase {
++	type: 'component';
++	component: T;
++	props?: ComponentProps<T>;
++}
++
++export interface MenuParent extends MenuBase {
++	type: 'parent';
++	text: Text;
++	caption?: Text | null | undefined | ComputedRef<null | undefined>;
++	icon?: string;
++	children: MenuItem[] | (() => Promise<MenuItem[]> | MenuItem[]);
++}
++
++export interface MenuPending extends MenuBase {
++	type: 'pending';
++}
++
++type OuterMenuItem = MenuDivider | MenuLabel | MenuLink | MenuA | MenuUser | MenuSwitch | MenuButton | MenuRadio | MenuRadioOption | MenuComponent | MenuParent;
++type OuterPromiseMenuItem = Promise<MenuLabel | MenuLink | MenuA | MenuUser | MenuSwitch | MenuButton | MenuComponent | MenuParent>;
+ export type MenuItem = OuterMenuItem | OuterPromiseMenuItem;
+-export type InnerMenuItem = MenuDivider | MenuPending | MenuLabel | MenuLink | MenuA | MenuUser | MenuSwitch | MenuButton | MenuRadio | MenuRadioOption | MenuParent;
++export type InnerMenuItem = MenuDivider | MenuPending | MenuLabel | MenuLink | MenuA | MenuUser | MenuSwitch | MenuButton | MenuRadio | MenuRadioOption | MenuComponent | MenuParent;

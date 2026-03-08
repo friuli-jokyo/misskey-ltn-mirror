@@ -1,0 +1,775 @@
+diff --git a/packages/backend/src/config.ts b/packages/backend/src/config.ts
+index 32ea700748..5a62695910 100644
+--- a/packages/backend/src/config.ts
++++ b/packages/backend/src/config.ts
+@@ -52,6 +52,8 @@ type Source = {
+ 	redisForReactions?: RedisOptionsSource;
+ 	fulltextSearch?: {
+ 		provider?: FulltextSearchProvider;
++		tableSample?: string;
++		commonTermThreshold?: number;
+ 	};
+ 	meilisearch?: {
+ 		host: string;
+@@ -137,6 +139,8 @@ export type Config = {
+ 	}[] | undefined;
+ 	fulltextSearch?: {
+ 		provider?: FulltextSearchProvider;
++		tableSample?: string;
++		commonTermThreshold?: number;
+ 	};
+ 	meilisearch: {
+ 		host: string;
+@@ -205,7 +209,7 @@ export type Config = {
+ 	pidFile: string;
+ };
+ 
+-export type FulltextSearchProvider = 'sqlLike' | 'sqlPgroonga' | 'meilisearch';
++export type FulltextSearchProvider = 'auto' | 'sqlLike' | 'sqlPgroonga' | 'meilisearch';
+ 
+ const _filename = fileURLToPath(import.meta.url);
+ const _dirname = dirname(_filename);
+diff --git a/packages/backend/src/core/IdService.ts b/packages/backend/src/core/IdService.ts
+index 10df6ef266..19c87ea406 100644
+--- a/packages/backend/src/core/IdService.ts
++++ b/packages/backend/src/core/IdService.ts
+@@ -44,16 +44,16 @@ export class IdService {
+ 	 * @param time 日時
+ 	 */
+ 	@bindThis
+-	public gen(time?: number): string {
+-		const t = (!time || (time > Date.now())) ? Date.now() : time;
++	public gen(time?: number, immutable = false): string {
++		const t = (!time || !immutable && (time > Date.now())) ? Date.now() : time;
+ 
+ 		switch (this.method) {
+-			case 'aid': return genAid(t);
+-			case 'aidx': return genAidx(t);
+-			case 'meid': return genMeid(t);
+-			case 'meidg': return genMeidg(t);
++			case 'aid': return genAid(t, immutable);
++			case 'aidx': return genAidx(t, immutable);
++			case 'meid': return genMeid(t, immutable);
++			case 'meidg': return genMeidg(t, immutable);
+ 			case 'ulid': return ulid(t);
+-			case 'objectid': return genObjectId(t);
++			case 'objectid': return genObjectId(t, immutable);
+ 			default: throw new Error('unrecognized id generation method');
+ 		}
+ 	}
+diff --git a/packages/backend/src/core/QueryService.ts b/packages/backend/src/core/QueryService.ts
+index c4feeaf971..0e82fd4c5c 100644
+--- a/packages/backend/src/core/QueryService.ts
++++ b/packages/backend/src/core/QueryService.ts
+@@ -40,29 +40,29 @@ export class QueryService {
+ 	) {
+ 	}
+ 
+-	public makePaginationQuery<T extends ObjectLiteral>(q: SelectQueryBuilder<T>, sinceId?: string | null, untilId?: string | null, sinceDate?: number | null, untilDate?: number | null): SelectQueryBuilder<T> {
++	public makePaginationQuery<T extends ObjectLiteral>(q: SelectQueryBuilder<T>, sinceId?: string | null, untilId?: string | null, sinceDate?: number | null, untilDate?: number | null, combinator = '.'): SelectQueryBuilder<T> {
+ 		if (sinceId && untilId) {
+-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: sinceId });
+-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: untilId });
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.andWhere(`${q.alias}${combinator}id > :sinceId`, { sinceId: sinceId });
++			q.andWhere(`${q.alias}${combinator}id < :untilId`, { untilId: untilId });
++			q.orderBy(`${q.alias}${combinator}id`, 'DESC');
+ 		} else if (sinceId) {
+-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: sinceId });
+-			q.orderBy(`${q.alias}.id`, 'ASC');
++			q.andWhere(`${q.alias}${combinator}id > :sinceId`, { sinceId: sinceId });
++			q.orderBy(`${q.alias}${combinator}id`, 'ASC');
+ 		} else if (untilId) {
+-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: untilId });
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.andWhere(`${q.alias}${combinator}id < :untilId`, { untilId: untilId });
++			q.orderBy(`${q.alias}${combinator}id`, 'DESC');
+ 		} else if (sinceDate && untilDate) {
+-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: this.idService.gen(sinceDate) });
+-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: this.idService.gen(untilDate) });
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.andWhere(`${q.alias}${combinator}id > :sinceId`, { sinceId: this.idService.gen(sinceDate, true) });
++			q.andWhere(`${q.alias}${combinator}id < :untilId`, { untilId: this.idService.gen(untilDate, true) });
++			q.orderBy(`${q.alias}${combinator}id`, 'DESC');
+ 		} else if (sinceDate) {
+-			q.andWhere(`${q.alias}.id > :sinceId`, { sinceId: this.idService.gen(sinceDate) });
+-			q.orderBy(`${q.alias}.id`, 'ASC');
++			q.andWhere(`${q.alias}${combinator}id > :sinceId`, { sinceId: this.idService.gen(sinceDate, true) });
++			q.orderBy(`${q.alias}${combinator}id`, 'ASC');
+ 		} else if (untilDate) {
+-			q.andWhere(`${q.alias}.id < :untilId`, { untilId: this.idService.gen(untilDate) });
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.andWhere(`${q.alias}${combinator}id < :untilId`, { untilId: this.idService.gen(untilDate, true) });
++			q.orderBy(`${q.alias}${combinator}id`, 'DESC');
+ 		} else {
+-			q.orderBy(`${q.alias}.id`, 'DESC');
++			q.orderBy(`${q.alias}${combinator}id`, 'DESC');
+ 		}
+ 		return q;
+ 	}
+diff --git a/packages/backend/src/core/SearchService.ts b/packages/backend/src/core/SearchService.ts
+index bc62559e46..c626e3c7f4 100644
+--- a/packages/backend/src/core/SearchService.ts
++++ b/packages/backend/src/core/SearchService.ts
+@@ -4,12 +4,14 @@
+  */
+ 
+ import { Inject, Injectable } from '@nestjs/common';
+-import { In } from 'typeorm';
++import * as Redis from 'ioredis';
++import postgresqlParser from 'node-sql-parser/build/postgresql.js';
++import { And, DataSource, In, LessThan, MoreThan, SelectQueryBuilder } from 'typeorm';
+ import { DI } from '@/di-symbols.js';
+ import { type Config, FulltextSearchProvider } from '@/config.js';
+ import { bindThis } from '@/decorators.js';
+ import { MiNote } from '@/models/Note.js';
+-import type { NotesRepository } from '@/models/_.js';
++import type { FollowingsRepository, NotesRepository } from '@/models/_.js';
+ import { MiUser } from '@/models/_.js';
+ import { sqlLikeEscape } from '@/misc/sql-like-escape.js';
+ import { isUserRelated } from '@/misc/is-user-related.js';
+@@ -38,8 +40,56 @@ export type SearchOpts = {
+ 	userId?: MiNote['userId'] | null;
+ 	channelId?: MiNote['channelId'] | null;
+ 	host?: string | null;
++	onlyFollows?: boolean;
++	onlyMentioned?: boolean;
++	onlySpecified?: boolean;
++	minRenoteCount?: number | null;
++	maxRenoteCount?: number | null;
++	minRepliesCount?: number | null;
++	maxRepliesCount?: number | null;
++	minReactionsCount?: number | null;
++	maxReactionsCount?: number | null;
+ };
+ 
++function parseSearch(search: string): [string, SearchOpts] {
++	const [q, userId, channelId, host, onlyFollows, onlyMentioned, onlySpecified, minRenoteCount, maxRenoteCount, minRepliesCount, maxRepliesCount, minReactionsCount, maxReactionsCount] = JSON.parse(Buffer.from(search, 'base64url').toString());
++	return [
++		q,
++		{
++			userId,
++			channelId,
++			host,
++			onlyFollows,
++			onlyMentioned,
++			onlySpecified,
++			minRenoteCount,
++			maxRenoteCount,
++			minRepliesCount,
++			maxRepliesCount,
++			minReactionsCount,
++			maxReactionsCount,
++		},
++	];
++}
++
++function stringifySearch(q: string, opts: SearchOpts): string {
++	return Buffer.from(JSON.stringify([
++		q,
++		opts.userId,
++		opts.channelId,
++		opts.host,
++		opts.onlyFollows,
++		opts.onlyMentioned,
++		opts.onlySpecified,
++		opts.minRenoteCount,
++		opts.maxRenoteCount,
++		opts.minRepliesCount,
++		opts.maxRepliesCount,
++		opts.minReactionsCount,
++		opts.maxReactionsCount,
++	])).toString('base64url');
++}
++
+ export type SearchPagination = {
+ 	untilId?: MiNote['id'];
+ 	sinceId?: MiNote['id'];
+@@ -74,6 +124,8 @@ function compileQuery(q: Q): string {
+ 	}
+ }
+ 
++const parser = new postgresqlParser.Parser();
++
+ @Injectable()
+ export class SearchService {
+ 	private readonly meilisearchIndexScope: 'local' | 'global' | string[] = 'local';
+@@ -84,12 +136,21 @@ export class SearchService {
+ 		@Inject(DI.config)
+ 		private config: Config,
+ 
++		@Inject(DI.db)
++		private db: DataSource,
++
++		@Inject(DI.redis)
++		private redisClient: Redis.Redis,
++
+ 		@Inject(DI.meilisearch)
+ 		private meilisearch: MeiliSearch | null,
+ 
+ 		@Inject(DI.notesRepository)
+ 		private notesRepository: NotesRepository,
+ 
++		@Inject(DI.followingsRepository)
++		private followingsRepository: FollowingsRepository,
++
+ 		private cacheService: CacheService,
+ 		private queryService: QueryService,
+ 		private idService: IdService,
+@@ -125,7 +186,7 @@ export class SearchService {
+ 			this.meilisearchIndexScope = config.meilisearch.scope;
+ 		}
+ 
+-		this.provider = config.fulltextSearch?.provider ?? 'sqlLike';
++		this.provider = config.fulltextSearch?.provider ?? 'auto';
+ 		this.loggerService.getLogger('SearchService').info(`-- Provider: ${this.provider}`);
+ 	}
+ 
+@@ -134,6 +195,7 @@ export class SearchService {
+ 		if (!this.meilisearch) return;
+ 		if (note.text == null && note.cw == null) return;
+ 		if (!['home', 'public'].includes(note.visibility)) return;
++		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
+ 
+ 		switch (this.meilisearchIndexScope) {
+ 			case 'global':
+@@ -179,13 +241,28 @@ export class SearchService {
+ 		opts: SearchOpts,
+ 		pagination: SearchPagination,
+ 	): Promise<MiNote[]> {
++		const cached = await this.redisClient.lrange(`search:${me?.id}:${stringifySearch(q, opts)}}`, 0, -1);
++		if (cached.length) {
++			return await this.notesRepository.find({
++				where: {
++					id: And(In(cached), ...(pagination.sinceId ? [MoreThan(pagination.sinceId)] : []), ...(pagination.untilId ? [LessThan(pagination.untilId)] : [])),
++				},
++				order: {
++					id: pagination.sinceId && !pagination.untilId ? 'ASC' : 'DESC',
++				},
++				take: pagination.limit,
++			});
++		}
+ 		switch (this.provider) {
+-			case 'sqlLike':
+-			case 'sqlPgroonga': {
+-				// ほとんど内容に差がないのでsqlLikeとsqlPgroongaを同じ処理にしている.
+-				// 今後の拡張で差が出る用であれば関数を分ける.
++			case 'auto': {
++				return this.searchNoteAuto(q, me, opts, pagination);
++			}
++			case 'sqlLike': {
+ 				return this.searchNoteByLike(q, me, opts, pagination);
+ 			}
++			case 'sqlPgroonga': {
++				return this.searchNoteByPgroonga(q, me, opts, pagination);
++			}
+ 			case 'meilisearch': {
+ 				return this.searchNoteByMeiliSearch(q, me, opts, pagination);
+ 			}
+@@ -197,14 +274,132 @@ export class SearchService {
+ 		}
+ 	}
+ 
++	@bindThis
++	private async searchNoteAuto(
++		q: string,
++		me: MiUser | null,
++		opts: SearchOpts,
++		pagination: SearchPagination,
++	): Promise<MiNote[]> {
++		const isPgroongaAvailable = (await this.db.query('SELECT 0 FROM pg_extension WHERE extname = \'pgroonga\'')).length > 0;
++		if (this.meilisearch) {
++			const commonTermThreshold = this.config.fulltextSearch?.commonTermThreshold;
++			if (Number.isSafeInteger(commonTermThreshold)) {
++				const sampling = this.queryNoteBySql(q, me, opts, isPgroongaAvailable);
++				const attributes: PropertyDescriptor = Object.create(null);
++				const tableSample = this.config.fulltextSearch?.tableSample;
++				if (tableSample) {
++					const { ast } = parser.parse(`SELECT * FROM _ TABLESAMPLE ${tableSample}`);
++					// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
++					if (Array.isArray(ast) || ast.type !== 'select' || ast.where || ast.groupby || ast.having || ast.orderby || ast.window || ast.limit?.value.length || [ast.from].flat().length !== 1) {
++						throw new Error('malformed tableSample detected');
++					}
++				}
++				attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
++					let expression = `SELECT COUNT(*) > ${commonTermThreshold} AS "isCommonTerm" FROM note note`;
++					if (tableSample) {
++						expression += ` TABLESAMPLE ${tableSample}`;
++					}
++					return expression;
++				};
++				Object.defineProperty(sampling, 'createSelectExpression', attributes);
++				const { isCommonTerm } = (await sampling.getRawOne<{ isCommonTerm: boolean }>())!;
++				if (isCommonTerm) {
++					return this.searchNoteByMeiliSearch(q, me, opts, pagination);
++				}
++			}
++		}
++		if (isPgroongaAvailable) {
++			return this.searchNoteByPgroonga(q, me, opts, pagination, !!this.meilisearch);
++		} else {
++			return this.searchNoteByLike(q, me, opts, pagination, !!this.meilisearch);
++		}
++	}
++
+ 	@bindThis
+ 	private async searchNoteByLike(
+ 		q: string,
+ 		me: MiUser | null,
+ 		opts: SearchOpts,
+ 		pagination: SearchPagination,
++		softLimit = false,
++	): Promise<MiNote[]> {
++		const cte = this.queryNoteBySql(q, me, opts, false);
++		const query = this.queryService.makePaginationQuery(
++			this.notesRepository.createQueryBuilder('note')
++				.addCommonTableExpression(cte.getQuery(), 'note')
++				.setParameters(cte.expressionMap.parameters),
++			pagination.sinceId,
++			pagination.untilId,
++			undefined,
++			undefined,
++			'_',
++		);
++		if (!softLimit) {
++			query.limit(pagination.limit);
++		}
++		query.expressionMap.selects = cte.expressionMap.selects;
++		const attributes: PropertyDescriptor = Object.create(null);
++		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
++			return 'SELECT * FROM note note'; // NOTE: selected columns in the cte are already transformed so just pass-through here
++		};
++		Object.defineProperty(query, 'createSelectExpression', attributes);
++		const result = await query.getMany();
++		if (softLimit) {
++			return result.slice(0, pagination.limit);
++		} else {
++			return result;
++		}
++	}
++
++	@bindThis
++	private async searchNoteByPgroonga(
++		q: string,
++		me: MiUser | null,
++		opts: SearchOpts,
++		pagination: SearchPagination,
++		softLimit = false,
+ 	): Promise<MiNote[]> {
+-		const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), pagination.sinceId, pagination.untilId);
++		const cte = this.queryNoteBySql(q, me, opts, true);
++		const query = this.queryService.makePaginationQuery(
++			this.notesRepository.createQueryBuilder('note')
++				.addCommonTableExpression(cte.getQuery(), 'note')
++				.setParameters(cte.expressionMap.parameters),
++			pagination.sinceId,
++			pagination.untilId,
++			undefined,
++			undefined,
++			'_',
++		);
++		if (!softLimit) {
++			query.limit(pagination.limit);
++		}
++		query.expressionMap.selects = cte.expressionMap.selects;
++		const attributes: PropertyDescriptor = Object.create(null);
++		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
++			return 'SELECT * FROM note note'; // NOTE: selected columns in the cte are already transformed so just pass-through here
++		};
++		Object.defineProperty(query, 'createSelectExpression', attributes);
++		const result = await query.getMany();
++		if (softLimit) {
++			this.redisClient.multi()
++				.lpush(`search:${me?.id}:${stringifySearch(q, opts)}}`, ...result.map((note) => note.id))
++				.expire(`search:${me?.id}:${stringifySearch(q, opts)}}`, 300)
++				.exec();
++			return result.slice(0, pagination.limit);
++		} else {
++			return result;
++		}
++	}
++
++	@bindThis
++	private queryNoteBySql(
++		q: string,
++		me: MiUser | null,
++		opts: SearchOpts,
++		usePgroonga: boolean,
++	): SelectQueryBuilder<MiNote> {
++		const query = this.notesRepository.createQueryBuilder('note');
+ 
+ 		if (opts.userId) {
+ 			query.andWhere('note.userId = :userId', { userId: opts.userId });
+@@ -219,12 +414,16 @@ export class SearchService {
+ 			.leftJoinAndSelect('reply.user', 'replyUser')
+ 			.leftJoinAndSelect('renote.user', 'renoteUser');
+ 
+-		if (this.config.fulltextSearch?.provider === 'sqlPgroonga') {
+-			query.andWhere('note.text &@~ :q', { q });
++		if (usePgroonga) {
++			query.andWhere('concat_ws_unsafe_immutable(\' \', note.cw, note.text) &@~ :q', { q });
+ 		} else {
+-			query.andWhere('LOWER(note.text) LIKE :q', { q: `%${ sqlLikeEscape(q.toLowerCase()) }%` });
++			query.andWhere('lower(concat_ws_unsafe_immutable(\' \', note.cw, note.text)) LIKE :q', { q: `%${sqlLikeEscape(q.toLowerCase())}%` });
+ 		}
+ 
++		query
++			.andWhere('note.anonymouslySendToUserId IS NULL')
++			.andWhere('note.anonymousChannelUsername IS NULL');
++
+ 		if (opts.host) {
+ 			if (opts.host === '.') {
+ 				query.andWhere('user.host IS NULL');
+@@ -233,11 +432,47 @@ export class SearchService {
+ 			}
+ 		}
+ 
++		if (opts.onlyFollows) {
++			query.andWhere(`note.userId IN (${this.followingsRepository.createQueryBuilder('following').select('following.followeeId').where('following.followerId = :followerId').getQuery()})`, { followerId: me?.id });
++		}
++
++		if (opts.onlyMentioned) {
++			query.andWhere(':mentions <@ note.mentions', { mentions: [me?.id] });
++		}
++
++		if (opts.onlySpecified) {
++			query.andWhere(':visibleUserIds <@ note.visibleUserIds', { visibleUserIds: [me?.id] });
++		}
++
++		if (opts.minRenoteCount) {
++			query.andWhere('note.renoteCount >= :minRenoteCount', { minRenoteCount: opts.minRenoteCount });
++		}
++
++		if (opts.maxRenoteCount != null) {
++			query.andWhere('note.renoteCount <= :maxRenoteCount', { maxRenoteCount: opts.maxRenoteCount });
++		}
++
++		if (opts.minRepliesCount) {
++			query.andWhere('note.repliesCount >= :minRepliesCount', { minRepliesCount: opts.minRepliesCount });
++		}
++
++		if (opts.maxRepliesCount != null) {
++			query.andWhere('note.repliesCount <= :maxRepliesCount', { maxRepliesCount: opts.maxRepliesCount });
++		}
++
++		if (opts.minReactionsCount) {
++			query.andWhere('COALESCE((SELECT sum(value::INTEGER) FROM LATERAL jsonb_each(note.reactions)), 0) >= :minReactionsCount', { minReactionsCount: opts.minReactionsCount });
++		}
++
++		if (opts.maxReactionsCount != null) {
++			query.andWhere('COALESCE((SELECT sum(value::INTEGER) FROM LATERAL jsonb_each(note.reactions)), 0) <= :maxReactionsCount', { maxReactionsCount: opts.maxReactionsCount });
++		}
++
+ 		this.queryService.generateVisibilityQuery(query, me);
+ 		if (me) this.queryService.generateMutedUserQuery(query, me);
+ 		if (me) this.queryService.generateBlockedUserQuery(query, me);
+ 
+-		return query.limit(pagination.limit).getMany();
++		return query;
+ 	}
+ 
+ 	@bindThis
+diff --git a/packages/backend/src/misc/id/aid.ts b/packages/backend/src/misc/id/aid.ts
+index 60ba788e44..02c168bc65 100644
+--- a/packages/backend/src/misc/id/aid.ts
++++ b/packages/backend/src/misc/id/aid.ts
+@@ -24,8 +24,11 @@ function getNoise(): string {
+ 	return counter.toString(36).padStart(2, '0').slice(-2);
+ }
+ 
+-export function genAid(t: number): string {
++export function genAid(t: number, immutable = false): string {
+ 	if (isNaN(t)) throw new Error('Failed to create AID: Invalid Date');
++	if (immutable) {
++		return getTime(t) + '00';
++	}
+ 	counter++;
+ 	return getTime(t) + getNoise();
+ }
+diff --git a/packages/backend/src/misc/id/aidx.ts b/packages/backend/src/misc/id/aidx.ts
+index 1b087e70af..62187fdefd 100644
+--- a/packages/backend/src/misc/id/aidx.ts
++++ b/packages/backend/src/misc/id/aidx.ts
+@@ -31,7 +31,10 @@ function getNoise(): string {
+ 	return counter.toString(36).padStart(NOISE_LENGTH, '0').slice(-NOISE_LENGTH);
+ }
+ 
+-export function genAidx(t: number): string {
++export function genAidx(t: number, immutable = false): string {
++	if (immutable) {
++		return getTime(t) + '00000000';
++	}
+ 	if (isNaN(t)) throw new Error('Failed to create AIDX: Invalid Date');
+ 	counter++;
+ 	return getTime(t) + nodeId + getNoise();
+diff --git a/packages/backend/src/misc/id/meid.ts b/packages/backend/src/misc/id/meid.ts
+index dfab48a369..0599d39276 100644
+--- a/packages/backend/src/misc/id/meid.ts
++++ b/packages/backend/src/misc/id/meid.ts
+@@ -29,7 +29,10 @@ function getRandom() {
+ 	return str;
+ }
+ 
+-export function genMeid(t: number): string {
++export function genMeid(t: number, immutable = false): string {
++	if (immutable) {
++		return getTime(t) + '000000000000';
++	}
+ 	return getTime(t) + getRandom();
+ }
+ 
+diff --git a/packages/backend/src/misc/id/meidg.ts b/packages/backend/src/misc/id/meidg.ts
+index b9c0cc3dda..0b2924d5b6 100644
+--- a/packages/backend/src/misc/id/meidg.ts
++++ b/packages/backend/src/misc/id/meidg.ts
+@@ -29,7 +29,10 @@ function getRandom() {
+ 	return str;
+ }
+ 
+-export function genMeidg(t: number): string {
++export function genMeidg(t: number, immutable = false): string {
++	if (immutable) {
++		return getTime(t) + '000000000000';
++	}
+ 	return 'g' + getTime(t) + getRandom();
+ }
+ 
+diff --git a/packages/backend/src/misc/id/object-id.ts b/packages/backend/src/misc/id/object-id.ts
+index 243f92bbac..615daf1607 100644
+--- a/packages/backend/src/misc/id/object-id.ts
++++ b/packages/backend/src/misc/id/object-id.ts
+@@ -29,7 +29,10 @@ function getRandom() {
+ 	return str;
+ }
+ 
+-export function genObjectId(t: number): string {
++export function genObjectId(t: number, immutable = false): string {
++	if (immutable) {
++		return getTime(t) + '0000000000000000';
++	}
+ 	return getTime(t) + getRandom();
+ }
+ 
+diff --git a/packages/backend/src/server/api/endpoints/notes/search.ts b/packages/backend/src/server/api/endpoints/notes/search.ts
+index 3fe19806e3..acb00bf00e 100644
+--- a/packages/backend/src/server/api/endpoints/notes/search.ts
++++ b/packages/backend/src/server/api/endpoints/notes/search.ts
+@@ -5,6 +5,7 @@
+ 
+ import { Injectable } from '@nestjs/common';
+ import { Endpoint } from '@/server/api/endpoint-base.js';
++import { IdService } from '@/core/IdService.js';
+ import { SearchService } from '@/core/SearchService.js';
+ import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
+ import { RoleService } from '@/core/RoleService.js';
+@@ -40,6 +41,8 @@ export const paramDef = {
+ 		query: { type: 'string' },
+ 		sinceId: { type: 'string', format: 'misskey:id' },
+ 		untilId: { type: 'string', format: 'misskey:id' },
++		sinceDate: { type: 'integer' },
++		untilDate: { type: 'integer' },
+ 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
+ 		offset: { type: 'integer', default: 0 },
+ 		host: {
+@@ -48,6 +51,15 @@ export const paramDef = {
+ 		},
+ 		userId: { type: 'string', format: 'misskey:id', nullable: true, default: null },
+ 		channelId: { type: 'string', format: 'misskey:id', nullable: true, default: null },
++		onlyFollows: { type: 'boolean', default: false },
++		onlyMentioned: { type: 'boolean', default: false },
++		onlySpecified: { type: 'boolean', default: false },
++		minRenoteCount: { type: 'integer', minimum: 0, nullable: true, default: null },
++		maxRenoteCount: { type: 'integer', minimum: 0, nullable: true, default: null },
++		minRepliesCount: { type: 'integer', minimum: 0, nullable: true, default: null },
++		maxRepliesCount: { type: 'integer', minimum: 0, nullable: true, default: null },
++		minReactionsCount: { type: 'integer', minimum: 0, nullable: true, default: null },
++		maxReactionsCount: { type: 'integer', minimum: 0, nullable: true, default: null },
+ 	},
+ 	required: ['query'],
+ } as const;
+@@ -57,6 +69,7 @@ export const paramDef = {
+ @Injectable()
+ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
+ 	constructor(
++		private idService: IdService,
+ 		private noteEntityService: NoteEntityService,
+ 		private searchService: SearchService,
+ 		private roleService: RoleService,
+@@ -67,13 +80,25 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				throw new ApiError(meta.errors.unavailable);
+ 			}
+ 
++			const untilId = ps.untilId ?? (ps.untilDate != null ? this.idService.gen(ps.untilDate) : undefined);
++			const sinceId = ps.sinceId ?? (ps.sinceDate != null ? this.idService.gen(ps.sinceDate) : undefined);
++
+ 			const notes = await this.searchService.searchNote(ps.query, me, {
+ 				userId: ps.userId,
+ 				channelId: ps.channelId,
+ 				host: ps.host,
++				onlyFollows: ps.onlyFollows,
++				onlyMentioned: ps.onlyMentioned,
++				onlySpecified: ps.onlySpecified,
++				minRenoteCount: ps.minRenoteCount,
++				maxRenoteCount: ps.maxRenoteCount,
++				minRepliesCount: ps.minRepliesCount,
++				maxRepliesCount: ps.maxRepliesCount,
++				minReactionsCount: ps.minReactionsCount,
++				maxReactionsCount: ps.maxReactionsCount,
+ 			}, {
+-				untilId: ps.untilId,
+-				sinceId: ps.sinceId,
++				untilId,
++				sinceId,
+ 				limit: ps.limit,
+ 			});
+ 
+diff --git a/packages/frontend/src/pages/search.note.vue b/packages/frontend/src/pages/search.note.vue
+index 14b9f7a741..38d244b6ca 100644
+--- a/packages/frontend/src/pages/search.note.vue
++++ b/packages/frontend/src/pages/search.note.vue
+@@ -25,6 +25,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					</MkInput>
+ 				</template>
+ 
++				<MkRadios v-model="targetSelect">
++					<template #label>{{ i18n.ts.target }}</template>
++					<option value="all" default>{{ i18n.ts.all }}</option>
++					<option value="follows">{{ i18n.ts.following }}</option>
++					<option value="mentioned">{{ i18n.ts.mentions }}</option>
++					<option value="specified">{{ i18n.ts.directNotes }}</option>
++				</MkRadios>
++
+ 				<MkFolder :defaultOpen="true">
+ 					<template #label>{{ i18n.ts.specifyUser }}</template>
+ 					<template v-if="user" #suffix>@{{ user.username }}{{ user.host ? `@${user.host}` : "" }}</template>
+@@ -38,6 +46,72 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 						</div>
+ 					</div>
+ 				</MkFolder>
++
++				<MkFolder :defaultOpen="true">
++					<template #label>{{ i18n.ts._poll.duration }}</template>
++					<template v-if="sinceDate || untilDate" #suffix>
++						<MkTime v-if="sinceDate" :time="sinceDate" mode="absolute"/>
++						-
++						<MkTime v-if="untilDate" :time="untilDate" mode="absolute"/>
++					</template>
++
++					<div class="_gaps" :class="$style.range">
++						<MkInput v-model="sinceDate" :class="$style.dtl" type="datetime-local"/>
++						-
++						<MkInput v-model="untilDate" :class="$style.dtl" type="datetime-local"/>
++					</div>
++				</MkFolder>
++
++				<MkFolder>
++					<template #label>{{ i18n.ts.repliedCount }}</template>
++					<template v-if="Number.isSafeInteger(minRepliesCount) || Number.isSafeInteger(maxRepliesCount)" #suffix>
++						{{ Number.isSafeInteger(minRepliesCount) ? minRepliesCount : 0 }}
++						-
++						{{ Number.isSafeInteger(maxRepliesCount) ? maxRepliesCount : '∞' }}
++					</template>
++
++					<div class="_gaps">
++						<div class="_gaps" :class="$style.range">
++							<MkInput v-model="minRepliesCount" :class="$style.dtl" type="number"/>
++							-
++							<MkInput v-model="maxRepliesCount" :class="$style.dtl" type="number"/>
++						</div>
++					</div>
++				</MkFolder>
++
++				<MkFolder>
++					<template #label>{{ i18n.ts.renotedCount }}</template>
++					<template v-if="Number.isSafeInteger(minRenoteCount) || Number.isSafeInteger(maxRenoteCount)" #suffix>
++						{{ Number.isSafeInteger(minRenoteCount) ? minRenoteCount : 0 }}
++						-
++						{{ Number.isSafeInteger(maxRenoteCount) ? maxRenoteCount : '∞' }}
++					</template>
++
++					<div class="_gaps">
++						<div class="_gaps" :class="$style.range">
++							<MkInput v-model="minRenoteCount" :class="$style.dtl" type="number"/>
++							-
++							<MkInput v-model="maxRenoteCount" :class="$style.dtl" type="number"/>
++						</div>
++					</div>
++				</MkFolder>
++
++				<MkFolder>
++					<template #label>{{ i18n.ts.receivedReactionsCount }}</template>
++					<template v-if="Number.isSafeInteger(minReactionsCount) || Number.isSafeInteger(minReactionsCount)" #suffix>
++						{{ Number.isSafeInteger(minReactionsCount) ? minReactionsCount : 0 }}
++						-
++						{{ Number.isSafeInteger(minReactionsCount) ? maxReactionsCount : '∞' }}
++					</template>
++
++					<div class="_gaps">
++						<div class="_gaps" :class="$style.range">
++							<MkInput v-model="minReactionsCount" :class="$style.dtl" type="number"/>
++							-
++							<MkInput v-model="maxReactionsCount" :class="$style.dtl" type="number"/>
++						</div>
++					</div>
++				</MkFolder>
+ 			</div>
+ 		</MkFoldableSection>
+ 		<div>
+@@ -88,10 +162,19 @@ const searchQuery = ref(toRef(props, 'query').value);
+ const notePagination = ref<Paging>();
+ const user = ref<UserDetailed | null>(null);
+ const hostInput = ref(toRef(props, 'host').value);
++const sinceDate = ref('');
++const untilDate = ref('');
++const minRepliesCount = ref<number | null>(null);
++const maxRepliesCount = ref<number | null>(null);
++const minRenoteCount = ref<number | null>(null);
++const maxRenoteCount = ref<number | null>(null);
++const minReactionsCount = ref<number | null>(null);
++const maxReactionsCount = ref<number | null>(null);
+ 
+ const noteSearchableScope = instance.noteSearchableScope ?? 'local';
+ 
+ const hostSelect = ref<'all' | 'local' | 'specified'>('all');
++const targetSelect = ref<'all' | 'follows' | 'mentioned' | 'specified'>('all');
+ 
+ const setHostSelectWithInput = (after: string | undefined | null, before: string | undefined | null) => {
+ 	if (before === after) return;
+@@ -201,12 +284,24 @@ async function search() {
+ 			query: searchQuery.value,
+ 			userId: user.value ? user.value.id : null,
+ 			...(searchHost.value ? { host: searchHost.value } : {}),
++			sinceDate: sinceDate.value ? new Date(sinceDate.value).valueOf() : undefined,
++			untilDate: untilDate.value ? new Date(untilDate.value).valueOf() : undefined,
++			onlyFollows: targetSelect.value === 'follows',
++			onlyMentioned: targetSelect.value === 'mentioned',
++			onlySpecified: targetSelect.value === 'specified',
++			minRenoteCount: Number.isSafeInteger(minRenoteCount.value) ? minRenoteCount.value : undefined,
++			maxRenoteCount: Number.isSafeInteger(maxRenoteCount.value) ? maxRenoteCount.value : undefined,
++			minRepliesCount: Number.isSafeInteger(minRepliesCount.value) ? minRepliesCount.value : undefined,
++			maxRepliesCount: Number.isSafeInteger(maxRepliesCount.value) ? maxRepliesCount.value : undefined,
++			minReactionsCount: Number.isSafeInteger(minReactionsCount.value) ? minReactionsCount.value : undefined,
++			maxReactionsCount: Number.isSafeInteger(maxReactionsCount.value) ? maxReactionsCount.value : undefined,
+ 		},
+ 	};
+ 
+ 	key.value++;
+ }
+ </script>
++
+ <style lang="scss" module>
+ .userItem {
+ 	display: flex;
+@@ -245,4 +340,12 @@ async function search() {
+ 		opacity: 0;
+ 	}
+ }
++.range {
++	flex-flow: row;
++	align-items: center;
++	justify-content: space-between;
++}
++.dtl {
++	flex: 1;
++}
+ </style>

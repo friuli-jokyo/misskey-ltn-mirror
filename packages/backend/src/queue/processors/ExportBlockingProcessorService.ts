@@ -58,6 +58,10 @@ export class ExportBlockingProcessorService {
 			let exportedCount = 0;
 			let cursor: MiBlocking['id'] | null = null;
 
+			const total = await this.blockingsRepository.countBy({
+				blockerId: user.id,
+			});
+
 			while (true) {
 				const blockings = await this.blockingsRepository.find({
 					where: {
@@ -97,15 +101,10 @@ export class ExportBlockingProcessorService {
 					exportedCount++;
 				}
 
-				const total = await this.blockingsRepository.countBy({
-					blockerId: user.id,
-				});
-
 				job.updateProgress(100 * exportedCount / total);
 			}
 
 			stream.end();
-			this.logger.succ(`Exported to: ${path}`);
 
 			const fileName = 'blocking-' + dateFormat(new Date(), 'yyyy-MM-dd-HH-mm-ss') + '.csv';
 			const driveFile = await this.driveService.addFile({ user, path, name: fileName, force: true, ext: 'csv' });

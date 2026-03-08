@@ -1,0 +1,5537 @@
+diff --git a/packages/frontend/src/os.ts b/packages/frontend/src/os.ts
+index 6e48366092..f7b59612c4 100644
+--- a/packages/frontend/src/os.ts
++++ b/packages/frontend/src/os.ts
+@@ -6,37 +6,42 @@
+ // TODO: なんでもかんでもos.tsに突っ込むのやめたいのでよしなに分割する
+ 
+ import { markRaw, ref, defineAsyncComponent, nextTick } from 'vue';
+-import type { Component, Ref } from 'vue';
+ import { EventEmitter } from 'eventemitter3';
+ import * as Misskey from 'misskey-js';
+-import type { ComponentProps as CP } from 'vue-component-type-helpers';
+-import type { Form, GetFormResultType } from '@/scripts/form.js';
++import type { Component, MaybeRef } from 'vue';
++import type { ComponentEmit, ComponentProps as CP } from 'vue-component-type-helpers';
++import type { Form, GetFormResultType } from '@/utility/form.js';
+ import type { MenuItem } from '@/types/menu.js';
+ import type { PostFormProps } from '@/types/post-form.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { defaultStore } from '@/store.js';
++import type { UploaderFeatures } from '@/composables/use-uploader.js';
++import type { MkSelectItem } from '@/components/MkSelect.vue';
++import type { OptionValue } from '@/types/option-value.js';
++import type { MkDialogReturnType } from '@/components/MkDialog.vue';
++import type { OverloadToUnion } from '@/types/overload-to-union.js';
++import type MkRoleSelectDialog_TypeReferenceOnly from '@/components/MkRoleSelectDialog.vue';
++import type MkEmojiPickerDialog_TypeReferenceOnly from '@/components/MkEmojiPickerDialog.vue';
++import { misskeyApi } from '@/utility/misskey-api.js';
++import { prefer } from '@/preferences.js';
+ import { i18n } from '@/i18n.js';
+ import MkPostFormDialog from '@/components/MkPostFormDialog.vue';
+ import MkWaitingDialog from '@/components/MkWaitingDialog.vue';
+ import MkPageWindow from '@/components/MkPageWindow.vue';
+ import MkToast from '@/components/MkToast.vue';
+ import MkDialog from '@/components/MkDialog.vue';
+-import MkPasswordDialog from '@/components/MkPasswordDialog.vue';
+-import MkEmojiPickerDialog from '@/components/MkEmojiPickerDialog.vue';
+ import MkPopupMenu from '@/components/MkPopupMenu.vue';
+ import MkContextMenu from '@/components/MkContextMenu.vue';
+-import { copyToClipboard } from '@/scripts/copy-to-clipboard.js';
+-import { pleaseLogin } from '@/scripts/please-login.js';
+-import { showMovedDialog } from '@/scripts/show-moved-dialog.js';
+-import { getHTMLElementOrNull } from '@/scripts/get-dom-node-or-null.js';
+-import { focusParent } from '@/scripts/focus.js';
++import { copyToClipboard } from '@/utility/copy-to-clipboard.js';
++import { pleaseLogin } from '@/utility/please-login.js';
++import { showMovedDialog } from '@/utility/show-moved-dialog.js';
++import { getHTMLElementOrNull } from '@/utility/get-dom-node-or-null.js';
++import { focusParent } from '@/utility/focus.js';
+ 
+ export const openingWindowsCount = ref(0);
+ 
+ export type ApiWithDialogCustomErrors = Record<string, { title?: string; text: string; }>;
+-export const apiWithDialog = (<E extends keyof Misskey.Endpoints, P extends Misskey.Endpoints[E]['req'] = Misskey.Endpoints[E]['req']>(
++export const apiWithDialog = (<E extends keyof Misskey.Endpoints>(
+ 	endpoint: E,
+-	data: P,
++	data: Misskey.Endpoints[E]['req'],
+ 	token?: string | null | undefined,
+ 	customErrors?: ApiWithDialogCustomErrors,
+ ) => {
+@@ -63,7 +68,6 @@ export const apiWithDialog = (<E extends keyof Misskey.Endpoints, P extends Miss
+ 			});
+ 			if (result === 'copy') {
+ 				copyToClipboard(`Endpoint: ${endpoint}\nInfo: ${JSON.stringify(err.info)}\nDate: ${date}`);
+-				success();
+ 			}
+ 			return;
+ 		} else if (err.code === 'RATE_LIMIT_EXCEEDED') {
+@@ -75,7 +79,7 @@ export const apiWithDialog = (<E extends keyof Misskey.Endpoints, P extends Miss
+ 		} else if (err.code === 'ROLE_PERMISSION_DENIED') {
+ 			title = i18n.ts.permissionDeniedError;
+ 			text = i18n.ts.permissionDeniedErrorDescription;
+-		} else if (err.code.startsWith('TOO_MANY')) {
++		} else if (err.code.startsWith('TOO_MANY')) { // TODO: バックエンドに kind: client/contentsLimitExceeded みたいな感じで送るように統一してもらってそれで判定する
+ 			title = i18n.ts.youCannotCreateAnymore;
+ 			text = `${i18n.ts.error}: ${err.id}`;
+ 		} else if (err.message.startsWith('Unexpected token')) {
+@@ -157,32 +161,35 @@ export function claimZIndex(priority: keyof typeof zIndexes = 'low'): number {
+ 	return zIndexes[priority];
+ }
+ 
+-// InstanceType<typeof Component>['$emit'] だとインターセクション型が返ってきて
+-// 使い物にならないので、代わりに ['$props'] から色々省くことで emit の型を生成する
+-// FIXME: 何故か *.ts ファイルからだと型がうまく取れない？ことがあるのをなんとかしたい
+-type ComponentEmit<T> = T extends new () => { $props: infer Props }
+-	? [keyof Pick<T, Extract<keyof T, `on${string}`>>] extends [never]
+-		? Record<string, unknown> // *.ts ファイルから型がうまく取れないとき用（これがないと {} になって型エラーがうるさい）
+-		: EmitsExtractor<Props>
+-	: T extends (...args: any) => any
+-		? ReturnType<T> extends { [x: string]: any; __ctx?: { [x: string]: any; props: infer Props } }
+-			? [keyof Pick<T, Extract<keyof T, `on${string}`>>] extends [never]
+-				? Record<string, unknown>
+-				: EmitsExtractor<Props>
+-			: never
+-		: never;
+-
+ // props に ref を許可するようにする
+-type ComponentProps<T extends Component> = { [K in keyof CP<T>]: CP<T>[K] | Ref<CP<T>[K]> };
+-
+-type EmitsExtractor<T> = {
+-	[K in keyof T as K extends `onVnode${string}` ? never : K extends `on${infer E}` ? Uncapitalize<E> : K extends string ? never : K]: T[K];
++type PropsWithRefs<P> = { [K in keyof P]: MaybeRef<P[K]> };
++type ComponentProps<T extends Component> = PropsWithRefs<CP<T>>;
++
++// 関数の引数が any[] (もっとも広義なもの) かどうかを判定し、any[] の場合は排除 (never) するヘルパー
++type FilterSpecificFunc<T> = T extends (...args: any[]) => void
++	? (any[] extends Parameters<T> ? never : T)
++	: T;
++
++// オブジェクトの各プロパティに対して再帰的、あるいは単純に適用する型関数
++type CleanFunctions<T> = {
++	[K in keyof T]: T[K] extends (...args: any[]) => any
++		? FilterSpecificFunc<T[K]>
++		: T[K];
+ };
+ 
++// emitの関数群をオブジェクト型に変換する（InstanceType<Component>['$emit']はFunctionalComponent = ジェネリックコンポーネントでは使用できない）
++type ComponentEmitsObject<C extends Component, IE = OverloadToUnion<ComponentEmit<C>>> = CleanFunctions<{
++	[K in IE extends (evName: infer U, ...args: any[]) => any ? U & PropertyKey : never]: IE extends (evName: K, ...args: infer A) => infer R
++		? (...args: A) => R
++		: (...args: any[]) => void;
++}>;
++
++// NOTE: ジェネリック型つきのコンポーネントでは、emitsの型推論がうまく働かない（型変数を取り出すことはできないため）
++// NOTE: emitsがOverloadToUnionで対応しているオーバーロードの数を超える場合は、OverloadToUnionの個数を増やせばOK
+ export function popup<T extends Component>(
+ 	component: T,
+ 	props: ComponentProps<T>,
+-	events: ComponentEmit<T> = {} as ComponentEmit<T>,
++	events: Partial<ComponentEmitsObject<T>> = {},
+ ): { dispose: () => void } {
+ 	markRaw(component);
+ 
+@@ -207,6 +214,57 @@ export function popup<T extends Component>(
+ 	};
+ }
+ 
++export async function popupAsyncWithDialog<T extends Component>(
++	componentFetching: Promise<T>,
++	props: ComponentProps<T>,
++	events: Partial<ComponentEmitsObject<T>> = {},
++): Promise<{ dispose: () => void }> {
++	let component: T;
++	let closeWaiting = () => { };
++
++	const timer = window.setTimeout(() => {
++		closeWaiting = waiting();
++	}, 100); // コンポーネントがキャッシュされている場合にもwaitingが表示されて画面がちらつくのを防止するためにラグを追加
++
++	try {
++		component = await componentFetching;
++	} catch (err) {
++		window.clearTimeout(timer);
++		closeWaiting();
++		alert({
++			type: 'error',
++			title: i18n.ts.somethingHappened,
++			text: 'CODE: ASYNC_COMP_LOAD_FAIL',
++		});
++		throw err;
++	}
++
++	window.clearTimeout(timer);
++	closeWaiting();
++
++	markRaw(component);
++
++	const id = ++popupIdCount;
++	const dispose = () => {
++		// このsetTimeoutが無いと挙動がおかしくなる(autocompleteが閉じなくなる)。Vueのバグ？
++		window.setTimeout(() => {
++			popups.value = popups.value.filter(p => p.id !== id);
++		}, 0);
++	};
++	const state = {
++		component,
++		props,
++		events,
++		id,
++	};
++
++	popups.value.push(state);
++
++	return {
++		dispose,
++	};
++}
++
+ export function pageWindow(path: string) {
+ 	const { dispose } = popup(MkPageWindow, {
+ 		initialPath: path,
+@@ -258,23 +316,19 @@ export function confirm(props: {
+ 	});
+ }
+ 
+-// TODO: const T extends ... にしたい
+-// https://zenn.dev/general_link/articles/813e47b7a0eef7#const-type-parameters
+-export function actions<T extends {
++type ActionsAction = {
+ 	value: string;
+ 	text: string;
+-	primary?: boolean,
+-	danger?: boolean,
+-}[]>(props: {
++	primary?: boolean;
++	danger?: boolean;
++};
++
++export function actions<const T extends ActionsAction[]>(props: {
+ 	type: 'error' | 'info' | 'success' | 'warning' | 'waiting' | 'question';
+ 	title?: string;
+ 	text?: string;
+ 	actions: T;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: T[number]['value'];
+-}> {
++}): Promise<MkDialogReturnType<T[number]['value']>> {
+ 	return new Promise(resolve => {
+ 		const { dispose } = popup(MkDialog, {
+ 			...props,
+@@ -288,7 +342,7 @@ export function actions<T extends {
+ 			})),
+ 		}, {
+ 			done: result => {
+-				resolve(result ? result : { canceled: true });
++				resolve(result as MkDialogReturnType<T[number]['value']>);
+ 			},
+ 			closed: () => dispose(),
+ 		});
+@@ -305,11 +359,7 @@ export function inputText(props: {
+ 	default: string;
+ 	minLength?: number;
+ 	maxLength?: number;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: string;
+-}>;
++}): Promise<MkDialogReturnType<string>>;
+ // min lengthが指定されてたら result は null になり得ないことを保証する overload function
+ export function inputText(props: {
+ 	type?: 'text' | 'email' | 'password' | 'url';
+@@ -320,11 +370,7 @@ export function inputText(props: {
+ 	default?: string;
+ 	minLength: number;
+ 	maxLength?: number;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: string;
+-}>;
++}): Promise<MkDialogReturnType<string>>;
+ export function inputText(props: {
+ 	type?: 'text' | 'email' | 'password' | 'url';
+ 	title?: string;
+@@ -334,11 +380,7 @@ export function inputText(props: {
+ 	default?: string | null;
+ 	minLength?: number;
+ 	maxLength?: number;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: string | null;
+-}>;
++}): Promise<MkDialogReturnType<string | null>>;
+ export function inputText(props: {
+ 	type?: 'text' | 'email' | 'password' | 'url';
+ 	title?: string;
+@@ -348,11 +390,7 @@ export function inputText(props: {
+ 	default?: string | null;
+ 	minLength?: number;
+ 	maxLength?: number;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: string | null;
+-}> {
++}): Promise<MkDialogReturnType<string | null>> {
+ 	return new Promise(resolve => {
+ 		const { dispose } = popup(MkDialog, {
+ 			title: props.title,
+@@ -367,7 +405,7 @@ export function inputText(props: {
+ 			},
+ 		}, {
+ 			done: result => {
+-				resolve(result ? result : { canceled: true });
++				resolve(result as MkDialogReturnType<string | null>);
+ 			},
+ 			closed: () => dispose(),
+ 		});
+@@ -381,33 +419,21 @@ export function inputNumber(props: {
+ 	placeholder?: string | null;
+ 	autocomplete?: string;
+ 	default: number;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: number;
+-}>;
++}): Promise<MkDialogReturnType<number>>;
+ export function inputNumber(props: {
+ 	title?: string;
+ 	text?: string;
+ 	placeholder?: string | null;
+ 	autocomplete?: string;
+ 	default?: number | null;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: number | null;
+-}>;
++}): Promise<MkDialogReturnType<number | null>>;
+ export function inputNumber(props: {
+ 	title?: string;
+ 	text?: string;
+ 	placeholder?: string | null;
+ 	autocomplete?: string;
+ 	default?: number | null;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: number | null;
+-}> {
++}): Promise<MkDialogReturnType<number | null>> {
+ 	return new Promise(resolve => {
+ 		const { dispose } = popup(MkDialog, {
+ 			title: props.title,
+@@ -420,35 +446,31 @@ export function inputNumber(props: {
+ 			},
+ 		}, {
+ 			done: result => {
+-				resolve(result ? result : { canceled: true });
++				resolve(result as MkDialogReturnType<number | null>);
+ 			},
+ 			closed: () => dispose(),
+ 		});
+ 	});
+ }
+ 
+-export function inputDate(props: {
++export function inputDatetime(props: {
+ 	title?: string;
+ 	text?: string;
+ 	placeholder?: string | null;
+ 	default?: string | null;
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: Date;
+-}> {
++}): Promise<MkDialogReturnType<Date>> {
+ 	return new Promise(resolve => {
+ 		const { dispose } = popup(MkDialog, {
+ 			title: props.title,
+ 			text: props.text,
+ 			input: {
+-				type: 'date',
++				type: 'datetime-local',
+ 				placeholder: props.placeholder,
+ 				default: props.default ?? null,
+ 			},
+ 		}, {
+ 			done: result => {
+-				resolve(result ? { result: new Date(result.result), canceled: false } : { result: undefined, canceled: true });
++				resolve(result != null && typeof result.result === 'string' ? { result: new Date(result.result), canceled: false } : { result: undefined, canceled: true });
+ 			},
+ 			closed: () => dispose(),
+ 		});
+@@ -461,7 +483,7 @@ export function authenticateDialog(): Promise<{
+ 	canceled: false; result: { password: string; token: string | null; };
+ }> {
+ 	return new Promise(resolve => {
+-		const { dispose } = popup(MkPasswordDialog, {}, {
++		const { dispose } = popup(defineAsyncComponent(() => import('@/components/MkPasswordDialog.vue')), {}, {
+ 			done: result => {
+ 				resolve(result ? { canceled: false, result } : { canceled: true, result: undefined });
+ 			},
+@@ -470,51 +492,12 @@ export function authenticateDialog(): Promise<{
+ 	});
+ }
+ 
+-type SelectItem<C> = {
+-	value: C;
+-	text: string;
+-};
+-
+-// default が指定されていたら result は null になり得ないことを保証する overload function
+-export function select<C = unknown>(props: {
+-	title?: string;
+-	text?: string;
+-	default: string;
+-	items: (SelectItem<C> | {
+-		sectionTitle: string;
+-		items: SelectItem<C>[];
+-	} | undefined)[];
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: C;
+-}>;
+-export function select<C = unknown>(props: {
+-	title?: string;
+-	text?: string;
+-	default?: string | null;
+-	items: (SelectItem<C> | {
+-		sectionTitle: string;
+-		items: SelectItem<C>[];
+-	} | undefined)[];
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: C | null;
+-}>;
+-export function select<C = unknown>(props: {
++export function select<C extends OptionValue, D extends C | null = null>(props: {
+ 	title?: string;
+ 	text?: string;
+-	default?: string | null;
+-	items: (SelectItem<C> | {
+-		sectionTitle: string;
+-		items: SelectItem<C>[];
+-	} | undefined)[];
+-}): Promise<{
+-	canceled: true; result: undefined;
+-} | {
+-	canceled: false; result: C | null;
+-}> {
++	default?: D;
++	items: (MkSelectItem<C> | undefined)[];
++}): Promise<MkDialogReturnType<Exclude<D, undefined> extends null ? C | null : C>> {
+ 	return new Promise(resolve => {
+ 		const { dispose } = popup(MkDialog, {
+ 			title: props.title,
+@@ -525,7 +508,7 @@ export function select<C = unknown>(props: {
+ 			},
+ 		}, {
+ 			done: result => {
+-				resolve(result ? result : { canceled: true });
++				resolve(result as MkDialogReturnType<Exclude<D, undefined> extends null ? C | null : C>);
+ 			},
+ 			closed: () => dispose(),
+ 		});
+@@ -548,24 +531,43 @@ export function success(): Promise<void> {
+ 	});
+ }
+ 
+-export function waiting(): Promise<void> {
+-	return new Promise(resolve => {
+-		const showing = ref(true);
+-		const { dispose } = popup(MkWaitingDialog, {
+-			success: false,
+-			showing: showing,
+-		}, {
+-			done: () => resolve(),
+-			closed: () => dispose(),
+-		});
++export function waiting(options: { text?: string } = {}) {
++	window.document.body.setAttribute('inert', 'true');
++
++	const showing = ref(true);
++	const isSuccess = ref(false);
++
++	function done(doneOptions: { success?: boolean } = {}) {
++		if (doneOptions.success) {
++			isSuccess.value = true;
++			window.setTimeout(() => {
++				showing.value = false;
++			}, 1000);
++		} else {
++			showing.value = false;
++		}
++	}
++
++	// NOTE: dynamic importすると挙動がおかしくなる(showingの変更が伝播しない)
++	const { dispose } = popup(MkWaitingDialog, {
++		success: isSuccess,
++		showing: showing,
++		text: options.text,
++	}, {
++		closed: () => {
++			window.document.body.removeAttribute('inert');
++			dispose();
++		},
+ 	});
++
++	return done;
+ }
+ 
+ export function form<F extends Form>(title: string, f: F): Promise<{ canceled: true, result?: undefined } | { canceled?: false, result: GetFormResultType<F> }> {
+ 	return new Promise(resolve => {
+ 		const { dispose } = popup(defineAsyncComponent(() => import('@/components/MkFormDialog.vue')), { title, form: f }, {
+ 			done: result => {
+-				resolve(result);
++				resolve(result as { canceled?: false, result: GetFormResultType<F> });
+ 			},
+ 			closed: () => dispose(),
+ 		});
+@@ -586,63 +588,27 @@ export async function selectUser(opts: { includeSelf?: boolean; localOnly?: bool
+ 	});
+ }
+ 
+-export async function selectDriveFile(multiple: boolean): Promise<Misskey.entities.DriveFile[]> {
+-	return new Promise(resolve => {
+-		const { dispose } = popup(defineAsyncComponent(() => import('@/components/MkDriveSelectDialog.vue')), {
+-			type: 'file',
+-			multiple,
+-		}, {
+-			done: files => {
+-				if (files) {
+-					resolve(files);
+-				}
+-			},
+-			closed: () => dispose(),
+-		});
+-	});
+-}
+-
+-export async function selectDriveFolder(multiple: boolean): Promise<Misskey.entities.DriveFolder[]> {
+-	return new Promise(resolve => {
+-		const { dispose } = popup(defineAsyncComponent(() => import('@/components/MkDriveSelectDialog.vue')), {
+-			type: 'folder',
+-			multiple,
+-		}, {
+-			done: folders => {
+-				if (folders) {
+-					resolve(folders);
+-				}
+-			},
+-			closed: () => dispose(),
+-		});
+-	});
+-}
+-
+-export async function selectRole(params: {
+-	initialRoleIds?: string[],
+-	title?: string,
+-	infoMessage?: string,
+-	publicOnly?: boolean,
+-}): Promise<
++export async function selectRole(params: ComponentProps<typeof MkRoleSelectDialog_TypeReferenceOnly>): Promise<
+ 	{ canceled: true; result: undefined; } |
+ 	{ canceled: false; result: Misskey.entities.Role[] }
+ > {
+ 	return new Promise((resolve) => {
+-		popup(defineAsyncComponent(() => import('@/components/MkRoleSelectDialog.vue')), params, {
++		const { dispose } = popup(defineAsyncComponent(() => import('@/components/MkRoleSelectDialog.vue')), params, {
+ 			done: roles => {
+ 				resolve({ canceled: false, result: roles });
+ 			},
+ 			close: () => {
+ 				resolve({ canceled: true, result: undefined });
+ 			},
+-		}, 'dispose');
++			closed: () => dispose(),
++		});
+ 	});
+ }
+ 
+-export async function pickEmoji(src: HTMLElement, opts: ComponentProps<typeof MkEmojiPickerDialog>): Promise<string> {
++export async function pickEmoji(anchorElement: HTMLElement, opts: ComponentProps<typeof MkEmojiPickerDialog_TypeReferenceOnly>): Promise<string> {
+ 	return new Promise(resolve => {
+-		const { dispose } = popup(MkEmojiPickerDialog, {
+-			src,
++		const { dispose } = popup(defineAsyncComponent(() => import('@/components/MkEmojiPickerDialog.vue')), {
++			anchorElement,
+ 			...opts,
+ 		}, {
+ 			done: emoji => {
+@@ -653,34 +619,37 @@ export async function pickEmoji(src: HTMLElement, opts: ComponentProps<typeof Mk
+ 	});
+ }
+ 
+-export async function cropImage(image: Misskey.entities.DriveFile, options: {
+-	aspectRatio: number;
+-	uploadFolder?: string | null;
+-}): Promise<Misskey.entities.DriveFile> {
++export async function cropImageFile<F extends File | Blob>(imageFile: F, options: {
++	aspectRatio: number | null;
++}): Promise<F> {
+ 	return new Promise(resolve => {
+ 		const { dispose } = popup(defineAsyncComponent(() => import('@/components/MkCropperDialog.vue')), {
+-			file: image,
++			imageFile: imageFile,
+ 			aspectRatio: options.aspectRatio,
+-			uploadFolder: options.uploadFolder,
+ 		}, {
+ 			ok: x => {
+-				resolve(x);
++				resolve(x as F);
+ 			},
+ 			closed: () => dispose(),
+ 		});
+ 	});
+ }
+ 
+-export function popupMenu(items: MenuItem[], src?: HTMLElement | EventTarget | null, options?: {
++export function popupMenu(items: (MenuItem | null)[], anchorElement?: HTMLElement | EventTarget | null, options?: {
+ 	align?: string;
+ 	width?: number;
+ 	onClosing?: () => void;
++	onClosed?: () => void;
+ }): Promise<void> {
+-	let returnFocusTo = getHTMLElementOrNull(src) ?? getHTMLElementOrNull(document.activeElement);
++	if (!(anchorElement instanceof HTMLElement)) {
++		anchorElement = null;
++	}
++
++	let returnFocusTo = getHTMLElementOrNull(anchorElement) ?? getHTMLElementOrNull(window.document.activeElement);
+ 	return new Promise(resolve => nextTick(() => {
+ 		const { dispose } = popup(MkPopupMenu, {
+-			items,
+-			src,
++			items: items.filter(x => x != null),
++			anchorElement,
+ 			width: options?.width,
+ 			align: options?.align,
+ 			returnFocusTo,
+@@ -689,6 +658,7 @@ export function popupMenu(items: MenuItem[], src?: HTMLElement | EventTarget | n
+ 				resolve();
+ 				dispose();
+ 				returnFocusTo = null;
++				options?.onClosed?.();
+ 			},
+ 			closing: () => {
+ 				options?.onClosing?.();
+@@ -697,15 +667,15 @@ export function popupMenu(items: MenuItem[], src?: HTMLElement | EventTarget | n
+ 	}));
+ }
+ 
+-export function contextMenu(items: MenuItem[], ev: MouseEvent): Promise<void> {
++export function contextMenu(items: MenuItem[], ev: PointerEvent): Promise<void> {
+ 	if (
+-		defaultStore.state.contextMenu === 'native' ||
+-		(defaultStore.state.contextMenu === 'appWithShift' && !ev.shiftKey)
++		prefer.s.contextMenu === 'native' ||
++		(prefer.s.contextMenu === 'appWithShift' && !ev.shiftKey)
+ 	) {
+ 		return Promise.resolve();
+ 	}
+ 
+-	let returnFocusTo = getHTMLElementOrNull(ev.currentTarget ?? ev.target) ?? getHTMLElementOrNull(document.activeElement);
++	let returnFocusTo = getHTMLElementOrNull(ev.currentTarget ?? ev.target) ?? getHTMLElementOrNull(window.document.activeElement);
+ 	ev.preventDefault();
+ 	return new Promise(resolve => nextTick(() => {
+ 		const { dispose } = popup(MkContextMenu, {
+@@ -726,8 +696,8 @@ export function contextMenu(items: MenuItem[], ev: MouseEvent): Promise<void> {
+ 	}));
+ }
+ 
+-export function post(props: PostFormProps = {}): Promise<void> {
+-	pleaseLogin({
++export async function post(props: PostFormProps = {}): Promise<void> {
++	const isLoggedIn = await pleaseLogin({
+ 		openOnRemote: (props.initialText || props.initialNote ? {
+ 			type: 'share',
+ 			params: {
+@@ -737,6 +707,7 @@ export function post(props: PostFormProps = {}): Promise<void> {
+ 			},
+ 		} : undefined),
+ 	});
++	if (!isLoggedIn) return;
+ 
+ 	showMovedDialog();
+ 	return new Promise(resolve => {
+@@ -769,3 +740,57 @@ export function checkExistence(fileData: ArrayBuffer): Promise<any> {
+ 		});
+ 	});
+ }*/
++
++export function chooseFileFromPc(
++	options: {
++		multiple?: boolean;
++	} = {},
++): Promise<File[]> {
++	return new Promise((res, rej) => {
++		const input = window.document.createElement('input');
++		input.type = 'file';
++		input.multiple = options.multiple ?? false;
++		input.onchange = () => {
++			if (!input.files) return res([]);
++
++			res(Array.from(input.files));
++
++			// 一応廃棄
++			(window as any).__misskey_input_ref__ = null;
++		};
++
++		// https://qiita.com/fukasawah/items/b9dc732d95d99551013d
++		// iOS Safari で正常に動かす為のおまじない
++		(window as any).__misskey_input_ref__ = input;
++
++		input.click();
++	});
++}
++
++export async function launchUploader(
++	files: File[],
++	options?: {
++		folderId?: string | null;
++		multiple?: boolean;
++		features?: UploaderFeatures;
++	},
++): Promise<Misskey.entities.DriveFile[]> {
++	return new Promise((res, rej) => {
++		if (files.length === 0) return rej();
++		let dispose: () => void;
++		popupAsyncWithDialog(import('@/components/MkUploaderDialog.vue').then(x => x.default), {
++			files: markRaw(files),
++			folderId: options?.folderId,
++			multiple: options?.multiple,
++			features: options?.features,
++		}, {
++			done: driveFiles => {
++				if (driveFiles.length === 0) return rej();
++				res(driveFiles);
++			},
++			closed: () => dispose(),
++		}).then(d => dispose = d.dispose, rej);
++	});
++}
++
++export const pageFolderTeleportCount = ref(0);
+diff --git a/packages/frontend/src/pages/note.vue b/packages/frontend/src/pages/note.vue
+index e6b4a0b222..2bbd7b2511 100644
+--- a/packages/frontend/src/pages/note.vue
++++ b/packages/frontend/src/pages/note.vue
+@@ -4,67 +4,65 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<MkStickyContainer>
+-	<template #header><MkPageHeader :actions="headerActions" :tabs="headerTabs"/></template>
+-	<MkSpacer :contentMax="800">
+-		<div>
+-			<Transition :name="defaultStore.state.animation ? 'fade' : ''" mode="out-in">
+-				<div v-if="note">
+-					<div v-if="showNext" class="_margin">
+-						<MkNotes class="" :pagination="showNext === 'channel' ? nextChannelPagination : nextUserPagination" :noGap="true" :disableAutoLoad="true"/>
+-					</div>
++<PageWithHeader :actions="headerActions" :tabs="headerTabs">
++	<div class="_spacer" style="--MI_SPACER-w: 800px;">
++		<Transition :name="prefer.s.animation ? 'fade' : ''" mode="out-in">
++			<div v-if="note">
++				<div v-if="showNext" class="_margin">
++					<MkNotesTimeline direction="up" :withControl="false" :pullToRefresh="false" class="" :paginator="showNext === 'channel' ? nextChannelPaginator : nextUserPaginator" :noGap="true" :forceDisableInfiniteScroll="true" />
++				</div>
+ 
+-					<div class="_margin">
+-						<div v-if="!showNext" class="_buttons" :class="$style.loadNext">
+-							<MkButton v-if="note.channelId" rounded :class="$style.loadButton" @click="showNext = 'channel'"><i class="ti ti-chevron-up"></i> <i class="ti ti-device-tv"></i></MkButton>
+-							<MkButton rounded :class="$style.loadButton" @click="showNext = 'user'"><i class="ti ti-chevron-up"></i> <i class="ti ti-user"></i></MkButton>
+-						</div>
+-						<div class="_margin _gaps_s">
+-							<MkRemoteCaution v-if="note.user.host != null" :href="note.url ?? note.uri"/>
+-							<MkNoteDetailed :key="note.id" v-model:note="note" :initialTab="initialTab" :class="$style.note"/>
+-						</div>
+-						<div v-if="clips && clips.length > 0" class="_margin">
+-							<div style="font-weight: bold; padding: 12px;">{{ i18n.ts.clip }}</div>
+-							<div class="_gaps">
+-								<MkClipPreview v-for="item in clips" :key="item.id" :clip="item"/>
+-							</div>
+-						</div>
+-						<div v-if="!showPrev" class="_buttons" :class="$style.loadPrev">
+-							<MkButton v-if="note.channelId" rounded :class="$style.loadButton" @click="showPrev = 'channel'"><i class="ti ti-chevron-down"></i> <i class="ti ti-device-tv"></i></MkButton>
+-							<MkButton rounded :class="$style.loadButton" @click="showPrev = 'user'"><i class="ti ti-chevron-down"></i> <i class="ti ti-user"></i></MkButton>
++				<div class="_margin">
++					<div v-if="!showNext" class="_buttons" :class="$style.loadNext">
++						<MkButton v-if="note.channelId" rounded :class="$style.loadButton" @click="showNext = 'channel'"><i class="ti ti-chevron-up"></i> <i class="ti ti-device-tv"></i></MkButton>
++						<MkButton rounded :class="$style.loadButton" @click="showNext = 'user'"><i class="ti ti-chevron-up"></i> <i class="ti ti-user"></i></MkButton>
++					</div>
++					<div class="_margin _gaps_s">
++						<MkRemoteCaution v-if="note.user.host != null" :href="note.url ?? note.uri"/>
++						<MkNoteDetailed :key="note.id" v-model:note="note" :initialTab="initialTab" :class="$style.note"/>
++					</div>
++					<div v-if="clips && clips.length > 0" class="_margin">
++						<div style="font-weight: bold; padding: 12px;">{{ i18n.ts.clip }}</div>
++						<div class="_gaps">
++							<MkClipPreview v-for="item in clips" :key="item.id" :clip="item"/>
+ 						</div>
+ 					</div>
+-
+-					<div v-if="showPrev" class="_margin">
+-						<MkNotes class="" :pagination="showPrev === 'channel' ? prevChannelPagination : prevUserPagination" :noGap="true"/>
++					<div v-if="!showPrev" class="_buttons" :class="$style.loadPrev">
++						<MkButton v-if="note.channelId" rounded :class="$style.loadButton" @click="showPrev = 'channel'"><i class="ti ti-chevron-down"></i> <i class="ti ti-device-tv"></i></MkButton>
++						<MkButton rounded :class="$style.loadButton" @click="showPrev = 'user'"><i class="ti ti-chevron-down"></i> <i class="ti ti-user"></i></MkButton>
+ 					</div>
+ 				</div>
+-				<MkError v-else-if="error" @retry="fetchNote()"/>
+-				<MkLoading v-else/>
+-			</Transition>
+-		</div>
+-	</MkSpacer>
+-</MkStickyContainer>
++
++				<div v-if="showPrev" class="_margin">
++					<MkNotesTimeline :withControl="false" :pullToRefresh="false" class="" :paginator="showPrev === 'channel' ? prevChannelPaginator : prevUserPaginator" :noGap="true"/>
++				</div>
++			</div>
++			<MkError v-else-if="error" @retry="fetchNote()"/>
++			<MkLoading v-else/>
++		</Transition>
++	</div>
++</PageWithHeader>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, watch, ref } from 'vue';
++import { computed, watch, ref, markRaw } from 'vue';
+ import * as Misskey from 'misskey-js';
+ import { host } from '@@/js/config.js';
+-import type { Paging } from '@/components/MkPagination.vue';
+ import MkNoteDetailed from '@/components/MkNoteDetailed.vue';
+-import MkNotes from '@/components/MkNotes.vue';
++import MkNotesTimeline from '@/components/MkNotesTimeline.vue';
+ import MkRemoteCaution from '@/components/MkRemoteCaution.vue';
+ import MkButton from '@/components/MkButton.vue';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
++import { definePage } from '@/page.js';
+ import { i18n } from '@/i18n.js';
+ import { dateString } from '@/filters/date.js';
+ import MkClipPreview from '@/components/MkClipPreview.vue';
+-import { defaultStore } from '@/store.js';
+-import { pleaseLogin } from '@/scripts/please-login.js';
++import { prefer } from '@/preferences.js';
++import { pleaseLogin } from '@/utility/please-login.js';
++import { getAppearNote } from '@/utility/get-appear-note.js';
+ import { serverContext, assertServerContext } from '@/server-context.js';
+-import { $i } from '@/account.js';
++import { $i } from '@/i.js';
++import { Paginator } from '@/utility/paginator.js';
+ 
+ // contextは非ログイン状態の情報しかないためログイン時は利用できない
+ const CTX_NOTE = !$i && assertServerContext(serverContext, 'note') ? serverContext.note : null;
+@@ -80,43 +78,39 @@ const showPrev = ref<'user' | 'channel' | false>(false);
+ const showNext = ref<'user' | 'channel' | false>(false);
+ const error = ref();
+ 
+-const prevUserPagination: Paging = {
+-	endpoint: 'users/notes',
++const prevUserPaginator = markRaw(new Paginator('users/notes', {
+ 	limit: 10,
+-	params: computed(() => note.value ? ({
++	initialId: props.noteId,
++	computedParams: computed(() => note.value ? ({
+ 		userId: note.value.userId,
+-		untilId: note.value.id,
+ 	}) : undefined),
+-};
++}));
+ 
+-const nextUserPagination: Paging = {
+-	reversed: true,
+-	endpoint: 'users/notes',
++const nextUserPaginator = markRaw(new Paginator('users/notes', {
+ 	limit: 10,
+-	params: computed(() => note.value ? ({
++	initialId: props.noteId,
++	initialDirection: 'newer',
++	computedParams: computed(() => note.value ? ({
+ 		userId: note.value.userId,
+-		sinceId: note.value.id,
+ 	}) : undefined),
+-};
++}));
+ 
+-const prevChannelPagination: Paging = {
+-	endpoint: 'channels/timeline',
++const prevChannelPaginator = markRaw(new Paginator('channels/timeline', {
+ 	limit: 10,
+-	params: computed(() => note.value ? ({
++	initialId: props.noteId,
++	computedParams: computed(() => note.value && note.value.channelId != null ? ({
+ 		channelId: note.value.channelId,
+-		untilId: note.value.id,
+ 	}) : undefined),
+-};
++}));
+ 
+-const nextChannelPagination: Paging = {
+-	reversed: true,
+-	endpoint: 'channels/timeline',
++const nextChannelPaginator = markRaw(new Paginator('channels/timeline', {
+ 	limit: 10,
+-	params: computed(() => note.value ? ({
++	initialId: props.noteId,
++	initialDirection: 'newer',
++	computedParams: computed(() => note.value && note.value.channelId != null ? ({
+ 		channelId: note.value.channelId,
+-		sinceId: note.value.id,
+ 	}) : undefined),
+-};
++}));
+ 
+ function fetchNote() {
+ 	showPrev.value = false;
+@@ -132,19 +126,20 @@ function fetchNote() {
+ 		noteId: props.noteId,
+ 	}).then(res => {
+ 		note.value = res;
++		const appearNote = getAppearNote(res) ?? res;
+ 		// 古いノートは被クリップ数をカウントしていないので、2023-10-01以前のものは強制的にnotes/clipsを叩く
+-		if (note.value.clippedCount > 0 || new Date(note.value.createdAt).getTime() < new Date('2023-10-01').getTime()) {
++		if ((appearNote.clippedCount ?? 0) > 0 || new Date(appearNote.createdAt).getTime() < new Date('2023-10-01').getTime()) {
+ 			misskeyApi('notes/clips', {
+-				noteId: note.value.id,
++				noteId: appearNote.id,
+ 			}).then((_clips) => {
+ 				clips.value = _clips;
+ 			});
+ 		}
+ 	}).catch(err => {
+-		if (err.id === '8e75455b-738c-471d-9f80-62693f33372e') {
++		if (['fbcc002d-37d9-4944-a6b0-d9e29f2d33ab', '145f88d2-b03d-4087-8143-a78928883c4b'].includes(err.id)) {
+ 			pleaseLogin({
+ 				path: '/',
+-				message: i18n.ts.thisContentsAreMarkedAsSigninRequiredByAuthor,
++				message: err.id === 'fbcc002d-37d9-4944-a6b0-d9e29f2d33ab' ? i18n.ts.thisContentsAreMarkedAsSigninRequiredByAuthor : i18n.ts.signinOrContinueOnRemote,
+ 				openOnRemote: {
+ 					type: 'lookup',
+ 					url: `https://${host}/notes/${props.noteId}`,
+@@ -163,14 +158,14 @@ const headerActions = computed(() => []);
+ 
+ const headerTabs = computed(() => []);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: i18n.ts.note,
+ 	...note.value ? {
+ 		subtitle: dateString(note.value.createdAt),
+ 		avatar: note.value.user,
+ 		path: `/notes/${note.value.id}`,
+ 		share: {
+-			title: i18n.tsx.noteOf({ user: note.value.user.name }),
++			title: i18n.tsx.noteOf({ user: note.value.user.name ?? note.value.user.username }),
+ 			text: note.value.text,
+ 		},
+ 	} : {},
+diff --git a/packages/frontend/src/pages/settings/general.vue b/packages/frontend/src/pages/settings/general.vue
+deleted file mode 100644
+index 4449d6169f..0000000000
+--- a/packages/frontend/src/pages/settings/general.vue
++++ /dev/null
+@@ -1,492 +0,0 @@
+-<!--
+-SPDX-FileCopyrightText: syuilo and misskey-project
+-SPDX-License-Identifier: AGPL-3.0-only
+--->
+-
+-<template>
+-<div class="_gaps_m">
+-	<MkSelect v-model="lang">
+-		<template #label>{{ i18n.ts.uiLanguage }}</template>
+-		<option v-for="x in langs" :key="x[0]" :value="x[0]">{{ x[1] }}</option>
+-		<template #caption>
+-			<I18n :src="i18n.ts.i18nInfo" tag="span">
+-				<template #link>
+-					<MkLink url="https://crowdin.com/project/misskey">Crowdin</MkLink>
+-				</template>
+-			</I18n>
+-		</template>
+-	</MkSelect>
+-
+-	<MkRadios v-model="overridedDeviceKind">
+-		<template #label>{{ i18n.ts.overridedDeviceKind }}</template>
+-		<option :value="null">{{ i18n.ts.auto }}</option>
+-		<option value="smartphone"><i class="ti ti-device-mobile"/> {{ i18n.ts.smartphone }}</option>
+-		<option value="tablet"><i class="ti ti-device-tablet"/> {{ i18n.ts.tablet }}</option>
+-		<option value="desktop"><i class="ti ti-device-desktop"/> {{ i18n.ts.desktop }}</option>
+-	</MkRadios>
+-
+-	<FormSection>
+-		<div class="_gaps_s">
+-			<MkSwitch v-model="showFixedPostForm">{{ i18n.ts.showFixedPostForm }}</MkSwitch>
+-			<MkSwitch v-model="showFixedPostFormInChannel">{{ i18n.ts.showFixedPostFormInChannel }}</MkSwitch>
+-			<MkFolder>
+-				<template #label>{{ i18n.ts.pinnedList }}</template>
+-				<!-- 複数ピン止め管理できるようにしたいけどめんどいので一旦ひとつのみ -->
+-				<MkButton v-if="defaultStore.reactiveState.pinnedUserLists.value.length === 0" @click="setPinnedList()">{{ i18n.ts.add }}</MkButton>
+-				<MkButton v-else danger @click="removePinnedList()"><i class="ti ti-trash"></i> {{ i18n.ts.remove }}</MkButton>
+-			</MkFolder>
+-		</div>
+-	</FormSection>
+-
+-	<FormSection>
+-		<template #label>{{ i18n.ts.displayOfNote }}</template>
+-
+-		<div class="_gaps_m">
+-			<div class="_gaps_s">
+-				<MkSwitch v-model="collapseRenotes">
+-					<template #label>{{ i18n.ts.collapseRenotes }}</template>
+-					<template #caption>{{ i18n.ts.collapseRenotesDescription }}</template>
+-				</MkSwitch>
+-				<MkSwitch v-model="showNoteActionsOnlyHover">{{ i18n.ts.showNoteActionsOnlyHover }}</MkSwitch>
+-				<MkSwitch v-model="showClipButtonInNoteFooter">{{ i18n.ts.showClipButtonInNoteFooter }}</MkSwitch>
+-				<MkSwitch v-model="advancedMfm">{{ i18n.ts.enableAdvancedMfm }}</MkSwitch>
+-				<MkSwitch v-if="advancedMfm" v-model="animatedMfm">{{ i18n.ts.enableAnimatedMfm }}</MkSwitch>
+-				<MkSwitch v-if="advancedMfm" v-model="enableQuickAddMfmFunction">{{ i18n.ts.enableQuickAddMfmFunction }}</MkSwitch>
+-				<MkSwitch v-model="showReactionsCount">{{ i18n.ts.showReactionsCount }}</MkSwitch>
+-				<MkSwitch v-model="showGapBetweenNotesInTimeline">{{ i18n.ts.showGapBetweenNotesInTimeline }}</MkSwitch>
+-				<MkSwitch v-model="loadRawImages">{{ i18n.ts.loadRawImages }}</MkSwitch>
+-				<MkRadios v-model="reactionsDisplaySize">
+-					<template #label>{{ i18n.ts.reactionsDisplaySize }}</template>
+-					<option value="small">{{ i18n.ts.small }}</option>
+-					<option value="medium">{{ i18n.ts.medium }}</option>
+-					<option value="large">{{ i18n.ts.large }}</option>
+-				</MkRadios>
+-				<MkSwitch v-model="limitWidthOfReaction">{{ i18n.ts.limitWidthOfReaction }}</MkSwitch>
+-			</div>
+-
+-			<MkSelect v-if="instance.federation !== 'none'" v-model="instanceTicker">
+-				<template #label>{{ i18n.ts.instanceTicker }}</template>
+-				<option value="none">{{ i18n.ts._instanceTicker.none }}</option>
+-				<option value="remote">{{ i18n.ts._instanceTicker.remote }}</option>
+-				<option value="always">{{ i18n.ts._instanceTicker.always }}</option>
+-			</MkSelect>
+-
+-			<MkSelect v-model="nsfw">
+-				<template #label>{{ i18n.ts.displayOfSensitiveMedia }}</template>
+-				<option value="respect">{{ i18n.ts._displayOfSensitiveMedia.respect }}</option>
+-				<option value="ignore">{{ i18n.ts._displayOfSensitiveMedia.ignore }}</option>
+-				<option value="force">{{ i18n.ts._displayOfSensitiveMedia.force }}</option>
+-			</MkSelect>
+-
+-			<MkRadios v-model="mediaListWithOneImageAppearance">
+-				<template #label>{{ i18n.ts.mediaListWithOneImageAppearance }}</template>
+-				<option value="expand">{{ i18n.ts.default }}</option>
+-				<option value="16_9">{{ i18n.tsx.limitTo({ x: '16:9' }) }}</option>
+-				<option value="1_1">{{ i18n.tsx.limitTo({ x: '1:1' }) }}</option>
+-				<option value="2_3">{{ i18n.tsx.limitTo({ x: '2:3' }) }}</option>
+-			</MkRadios>
+-		</div>
+-	</FormSection>
+-
+-	<FormSection>
+-		<template #label>{{ i18n.ts.notificationDisplay }}</template>
+-
+-		<div class="_gaps_m">
+-			<MkSwitch v-model="useGroupedNotifications">{{ i18n.ts.useGroupedNotifications }}</MkSwitch>
+-
+-			<MkRadios v-model="notificationPosition">
+-				<template #label>{{ i18n.ts.position }}</template>
+-				<option value="leftTop"><i class="ti ti-align-box-left-top"></i> {{ i18n.ts.leftTop }}</option>
+-				<option value="rightTop"><i class="ti ti-align-box-right-top"></i> {{ i18n.ts.rightTop }}</option>
+-				<option value="leftBottom"><i class="ti ti-align-box-left-bottom"></i> {{ i18n.ts.leftBottom }}</option>
+-				<option value="rightBottom"><i class="ti ti-align-box-right-bottom"></i> {{ i18n.ts.rightBottom }}</option>
+-			</MkRadios>
+-
+-			<MkRadios v-model="notificationStackAxis">
+-				<template #label>{{ i18n.ts.stackAxis }}</template>
+-				<option value="vertical"><i class="ti ti-carousel-vertical"></i> {{ i18n.ts.vertical }}</option>
+-				<option value="horizontal"><i class="ti ti-carousel-horizontal"></i> {{ i18n.ts.horizontal }}</option>
+-			</MkRadios>
+-
+-			<MkButton @click="testNotification">{{ i18n.ts._notification.checkNotificationBehavior }}</MkButton>
+-		</div>
+-	</FormSection>
+-
+-	<FormSection>
+-		<template #label>{{ i18n.ts.appearance }}</template>
+-
+-		<div class="_gaps_m">
+-			<div class="_gaps_s">
+-				<MkSwitch v-model="reduceAnimation">{{ i18n.ts.reduceUiAnimation }}</MkSwitch>
+-				<MkSwitch v-model="useBlurEffect">{{ i18n.ts.useBlurEffect }}</MkSwitch>
+-				<MkSwitch v-model="useBlurEffectForModal">{{ i18n.ts.useBlurEffectForModal }}</MkSwitch>
+-				<MkSwitch v-model="disableShowingAnimatedImages">{{ i18n.ts.disableShowingAnimatedImages }}</MkSwitch>
+-				<MkSwitch v-model="highlightSensitiveMedia">{{ i18n.ts.highlightSensitiveMedia }}</MkSwitch>
+-				<MkSwitch v-model="squareAvatars">{{ i18n.ts.squareAvatars }}</MkSwitch>
+-				<MkSwitch v-model="showAvatarDecorations">{{ i18n.ts.showAvatarDecorations }}</MkSwitch>
+-				<MkSwitch v-model="useSystemFont">{{ i18n.ts.useSystemFont }}</MkSwitch>
+-				<MkSwitch v-model="forceShowAds">{{ i18n.ts.forceShowAds }}</MkSwitch>
+-				<MkSwitch v-model="enableSeasonalScreenEffect">{{ i18n.ts.seasonalScreenEffect }}</MkSwitch>
+-				<MkSwitch v-model="useNativeUIForVideoAudioPlayer">{{ i18n.ts.useNativeUIForVideoAudioPlayer }}</MkSwitch>
+-			</div>
+-
+-			<MkSelect v-model="menuStyle">
+-				<template #label>{{ i18n.ts.menuStyle }}</template>
+-				<option value="auto">{{ i18n.ts.auto }}</option>
+-				<option value="popup">{{ i18n.ts.popup }}</option>
+-				<option value="drawer">{{ i18n.ts.drawer }}</option>
+-			</MkSelect>
+-
+-			<div>
+-				<MkRadios v-model="emojiStyle">
+-					<template #label>{{ i18n.ts.emojiStyle }}</template>
+-					<option value="native">{{ i18n.ts.native }}</option>
+-					<option value="fluentEmoji">Fluent Emoji</option>
+-					<option value="twemoji">Twemoji</option>
+-				</MkRadios>
+-				<div style="margin: 8px 0 0 0; font-size: 1.5em;"><Mfm :key="emojiStyle" text="🍮🍦🍭🍩🍰🍫🍬🥞🍪"/></div>
+-			</div>
+-
+-			<MkRadios v-model="fontSize">
+-				<template #label>{{ i18n.ts.fontSize }}</template>
+-				<option :value="null"><span style="font-size: 14px;">Aa</span></option>
+-				<option value="1"><span style="font-size: 15px;">Aa</span></option>
+-				<option value="2"><span style="font-size: 16px;">Aa</span></option>
+-				<option value="3"><span style="font-size: 17px;">Aa</span></option>
+-			</MkRadios>
+-		</div>
+-	</FormSection>
+-
+-	<FormSection>
+-		<template #label>{{ i18n.ts.behavior }}</template>
+-
+-		<div class="_gaps_m">
+-			<div class="_gaps_s">
+-				<MkSwitch v-model="imageNewTab">{{ i18n.ts.openImageInNewTab }}</MkSwitch>
+-				<MkSwitch v-model="useReactionPickerForContextMenu">{{ i18n.ts.useReactionPickerForContextMenu }}</MkSwitch>
+-				<MkSwitch v-model="enableInfiniteScroll">{{ i18n.ts.enableInfiniteScroll }}</MkSwitch>
+-				<MkSwitch v-model="keepScreenOn">{{ i18n.ts.keepScreenOn }}</MkSwitch>
+-				<MkSwitch v-model="disableStreamingTimeline">{{ i18n.ts.disableStreamingTimeline }}</MkSwitch>
+-				<MkSwitch v-model="enableHorizontalSwipe">{{ i18n.ts.enableHorizontalSwipe }}</MkSwitch>
+-				<MkSwitch v-model="alwaysConfirmFollow">{{ i18n.ts.alwaysConfirmFollow }}</MkSwitch>
+-				<MkSwitch v-model="confirmWhenRevealingSensitiveMedia">{{ i18n.ts.confirmWhenRevealingSensitiveMedia }}</MkSwitch>
+-				<MkSwitch v-model="confirmOnReact">{{ i18n.ts.confirmOnReact }}</MkSwitch>
+-			</div>
+-			<MkSelect v-model="serverDisconnectedBehavior">
+-				<template #label>{{ i18n.ts.whenServerDisconnected }}</template>
+-				<option value="reload">{{ i18n.ts._serverDisconnectedBehavior.reload }}</option>
+-				<option value="dialog">{{ i18n.ts._serverDisconnectedBehavior.dialog }}</option>
+-				<option value="quiet">{{ i18n.ts._serverDisconnectedBehavior.quiet }}</option>
+-			</MkSelect>
+-			<MkSelect v-model="contextMenu">
+-				<template #label>{{ i18n.ts._contextMenu.title }}</template>
+-				<option value="app">{{ i18n.ts._contextMenu.app }}</option>
+-				<option value="appWithShift">{{ i18n.ts._contextMenu.appWithShift }}</option>
+-				<option value="native">{{ i18n.ts._contextMenu.native }}</option>
+-			</MkSelect>
+-			<MkRange v-model="numberOfPageCache" :min="1" :max="10" :step="1" easing>
+-				<template #label>{{ i18n.ts.numberOfPageCache }}</template>
+-				<template #caption>{{ i18n.ts.numberOfPageCacheDescription }}</template>
+-			</MkRange>
+-
+-			<MkFolder>
+-				<template #label>{{ i18n.ts.dataSaver }}</template>
+-
+-				<div class="_gaps_m">
+-					<MkInfo>{{ i18n.ts.reloadRequiredToApplySettings }}</MkInfo>
+-
+-					<div class="_buttons">
+-						<MkButton inline @click="enableAllDataSaver">{{ i18n.ts.enableAll }}</MkButton>
+-						<MkButton inline @click="disableAllDataSaver">{{ i18n.ts.disableAll }}</MkButton>
+-					</div>
+-					<div class="_gaps_m">
+-						<MkSwitch v-model="dataSaver.media">
+-							{{ i18n.ts._dataSaver._media.title }}
+-							<template #caption>{{ i18n.ts._dataSaver._media.description }}</template>
+-						</MkSwitch>
+-						<MkSwitch v-model="dataSaver.avatar">
+-							{{ i18n.ts._dataSaver._avatar.title }}
+-							<template #caption>{{ i18n.ts._dataSaver._avatar.description }}</template>
+-						</MkSwitch>
+-						<MkSwitch v-model="dataSaver.urlPreview">
+-							{{ i18n.ts._dataSaver._urlPreview.title }}
+-							<template #caption>{{ i18n.ts._dataSaver._urlPreview.description }}</template>
+-						</MkSwitch>
+-						<MkSwitch v-model="dataSaver.code">
+-							{{ i18n.ts._dataSaver._code.title }}
+-							<template #caption>{{ i18n.ts._dataSaver._code.description }}</template>
+-						</MkSwitch>
+-					</div>
+-				</div>
+-			</MkFolder>
+-		</div>
+-	</FormSection>
+-
+-	<FormSection>
+-		<template #label>{{ i18n.ts.other }}</template>
+-
+-		<div class="_gaps">
+-			<MkRadios v-model="hemisphere">
+-				<template #label>{{ i18n.ts.hemisphere }}</template>
+-				<option value="N">{{ i18n.ts._hemisphere.N }}</option>
+-				<option value="S">{{ i18n.ts._hemisphere.S }}</option>
+-				<template #caption>{{ i18n.ts._hemisphere.caption }}</template>
+-			</MkRadios>
+-			<MkFolder>
+-				<template #label>{{ i18n.ts.additionalEmojiDictionary }}</template>
+-				<div class="_buttons">
+-					<template v-for="lang in emojiIndexLangs" :key="lang">
+-						<MkButton v-if="defaultStore.reactiveState.additionalUnicodeEmojiIndexes.value[lang]" danger @click="removeEmojiIndex(lang)"><i class="ti ti-trash"></i> {{ i18n.ts.remove }} ({{ getEmojiIndexLangName(lang) }})</MkButton>
+-						<MkButton v-else @click="downloadEmojiIndex(lang)"><i class="ti ti-download"></i> {{ getEmojiIndexLangName(lang) }}{{ defaultStore.reactiveState.additionalUnicodeEmojiIndexes.value[lang] ? ` (${ i18n.ts.installed })` : '' }}</MkButton>
+-					</template>
+-				</div>
+-			</MkFolder>
+-			<FormLink to="/settings/deck">{{ i18n.ts.deck }}</FormLink>
+-			<FormLink to="/settings/custom-css"><template #icon><i class="ti ti-code"></i></template>{{ i18n.ts.customCss }}</FormLink>
+-		</div>
+-	</FormSection>
+-</div>
+-</template>
+-
+-<script lang="ts" setup>
+-import { computed, ref, watch } from 'vue';
+-import * as Misskey from 'misskey-js';
+-import { langs } from '@@/js/config.js';
+-import MkSwitch from '@/components/MkSwitch.vue';
+-import MkSelect from '@/components/MkSelect.vue';
+-import MkRadios from '@/components/MkRadios.vue';
+-import MkRange from '@/components/MkRange.vue';
+-import MkFolder from '@/components/MkFolder.vue';
+-import MkButton from '@/components/MkButton.vue';
+-import FormSection from '@/components/form/section.vue';
+-import FormLink from '@/components/form/link.vue';
+-import MkLink from '@/components/MkLink.vue';
+-import MkInfo from '@/components/MkInfo.vue';
+-import { defaultStore } from '@/store.js';
+-import * as os from '@/os.js';
+-import { instance } from '@/instance.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { reloadAsk } from '@/scripts/reload-ask.js';
+-import { i18n } from '@/i18n.js';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
+-import { miLocalStorage } from '@/local-storage.js';
+-import { globalEvents } from '@/events.js';
+-import { claimAchievement } from '@/scripts/achievements.js';
+-
+-const lang = ref(miLocalStorage.getItem('lang'));
+-const fontSize = ref(miLocalStorage.getItem('fontSize'));
+-const useSystemFont = ref(miLocalStorage.getItem('useSystemFont') != null);
+-const dataSaver = ref(defaultStore.state.dataSaver);
+-
+-const hemisphere = computed(defaultStore.makeGetterSetter('hemisphere'));
+-const overridedDeviceKind = computed(defaultStore.makeGetterSetter('overridedDeviceKind'));
+-const serverDisconnectedBehavior = computed(defaultStore.makeGetterSetter('serverDisconnectedBehavior'));
+-const showNoteActionsOnlyHover = computed(defaultStore.makeGetterSetter('showNoteActionsOnlyHover'));
+-const showClipButtonInNoteFooter = computed(defaultStore.makeGetterSetter('showClipButtonInNoteFooter'));
+-const reactionsDisplaySize = computed(defaultStore.makeGetterSetter('reactionsDisplaySize'));
+-const limitWidthOfReaction = computed(defaultStore.makeGetterSetter('limitWidthOfReaction'));
+-const collapseRenotes = computed(defaultStore.makeGetterSetter('collapseRenotes'));
+-const reduceAnimation = computed(defaultStore.makeGetterSetter('animation', v => !v, v => !v));
+-const useBlurEffectForModal = computed(defaultStore.makeGetterSetter('useBlurEffectForModal'));
+-const useBlurEffect = computed(defaultStore.makeGetterSetter('useBlurEffect'));
+-const showGapBetweenNotesInTimeline = computed(defaultStore.makeGetterSetter('showGapBetweenNotesInTimeline'));
+-const animatedMfm = computed(defaultStore.makeGetterSetter('animatedMfm'));
+-const advancedMfm = computed(defaultStore.makeGetterSetter('advancedMfm'));
+-const showReactionsCount = computed(defaultStore.makeGetterSetter('showReactionsCount'));
+-const enableQuickAddMfmFunction = computed(defaultStore.makeGetterSetter('enableQuickAddMfmFunction'));
+-const emojiStyle = computed(defaultStore.makeGetterSetter('emojiStyle'));
+-const menuStyle = computed(defaultStore.makeGetterSetter('menuStyle'));
+-const disableShowingAnimatedImages = computed(defaultStore.makeGetterSetter('disableShowingAnimatedImages'));
+-const forceShowAds = computed(defaultStore.makeGetterSetter('forceShowAds'));
+-const loadRawImages = computed(defaultStore.makeGetterSetter('loadRawImages'));
+-const highlightSensitiveMedia = computed(defaultStore.makeGetterSetter('highlightSensitiveMedia'));
+-const imageNewTab = computed(defaultStore.makeGetterSetter('imageNewTab'));
+-const nsfw = computed(defaultStore.makeGetterSetter('nsfw'));
+-const showFixedPostForm = computed(defaultStore.makeGetterSetter('showFixedPostForm'));
+-const showFixedPostFormInChannel = computed(defaultStore.makeGetterSetter('showFixedPostFormInChannel'));
+-const numberOfPageCache = computed(defaultStore.makeGetterSetter('numberOfPageCache'));
+-const instanceTicker = computed(defaultStore.makeGetterSetter('instanceTicker'));
+-const enableInfiniteScroll = computed(defaultStore.makeGetterSetter('enableInfiniteScroll'));
+-const useReactionPickerForContextMenu = computed(defaultStore.makeGetterSetter('useReactionPickerForContextMenu'));
+-const squareAvatars = computed(defaultStore.makeGetterSetter('squareAvatars'));
+-const showAvatarDecorations = computed(defaultStore.makeGetterSetter('showAvatarDecorations'));
+-const mediaListWithOneImageAppearance = computed(defaultStore.makeGetterSetter('mediaListWithOneImageAppearance'));
+-const notificationPosition = computed(defaultStore.makeGetterSetter('notificationPosition'));
+-const notificationStackAxis = computed(defaultStore.makeGetterSetter('notificationStackAxis'));
+-const keepScreenOn = computed(defaultStore.makeGetterSetter('keepScreenOn'));
+-const disableStreamingTimeline = computed(defaultStore.makeGetterSetter('disableStreamingTimeline'));
+-const useGroupedNotifications = computed(defaultStore.makeGetterSetter('useGroupedNotifications'));
+-const enableSeasonalScreenEffect = computed(defaultStore.makeGetterSetter('enableSeasonalScreenEffect'));
+-const enableHorizontalSwipe = computed(defaultStore.makeGetterSetter('enableHorizontalSwipe'));
+-const useNativeUIForVideoAudioPlayer = computed(defaultStore.makeGetterSetter('useNativeUIForVideoAudioPlayer'));
+-const alwaysConfirmFollow = computed(defaultStore.makeGetterSetter('alwaysConfirmFollow'));
+-const confirmWhenRevealingSensitiveMedia = computed(defaultStore.makeGetterSetter('confirmWhenRevealingSensitiveMedia'));
+-const confirmOnReact = computed(defaultStore.makeGetterSetter('confirmOnReact'));
+-const contextMenu = computed(defaultStore.makeGetterSetter('contextMenu'));
+-
+-watch(lang, () => {
+-	miLocalStorage.setItem('lang', lang.value as string);
+-	miLocalStorage.removeItem('locale');
+-	miLocalStorage.removeItem('localeVersion');
+-});
+-
+-watch(fontSize, () => {
+-	if (fontSize.value == null) {
+-		miLocalStorage.removeItem('fontSize');
+-	} else {
+-		miLocalStorage.setItem('fontSize', fontSize.value);
+-	}
+-});
+-
+-watch(useSystemFont, () => {
+-	if (useSystemFont.value) {
+-		miLocalStorage.setItem('useSystemFont', 't');
+-	} else {
+-		miLocalStorage.removeItem('useSystemFont');
+-	}
+-});
+-
+-watch([
+-	hemisphere,
+-	lang,
+-	fontSize,
+-	useSystemFont,
+-	enableInfiniteScroll,
+-	squareAvatars,
+-	showNoteActionsOnlyHover,
+-	showGapBetweenNotesInTimeline,
+-	instanceTicker,
+-	overridedDeviceKind,
+-	mediaListWithOneImageAppearance,
+-	reactionsDisplaySize,
+-	limitWidthOfReaction,
+-	highlightSensitiveMedia,
+-	keepScreenOn,
+-	disableStreamingTimeline,
+-	enableSeasonalScreenEffect,
+-	alwaysConfirmFollow,
+-	confirmWhenRevealingSensitiveMedia,
+-	contextMenu,
+-], async () => {
+-	await reloadAsk({ reason: i18n.ts.reloadToApplySetting, unison: true });
+-});
+-
+-const emojiIndexLangs = ['en-US', 'ja-JP', 'ja-JP_hira'] as const;
+-
+-function getEmojiIndexLangName(targetLang: typeof emojiIndexLangs[number]) {
+-	if (langs.find(x => x[0] === targetLang)) {
+-		return langs.find(x => x[0] === targetLang)![1];
+-	} else {
+-		// 絵文字辞書限定の言語定義
+-		switch (targetLang) {
+-			case 'ja-JP_hira': return 'ひらがな';
+-			default: return targetLang;
+-		}
+-	}
+-}
+-
+-function downloadEmojiIndex(lang: typeof emojiIndexLangs[number]) {
+-	async function main() {
+-		const currentIndexes = defaultStore.state.additionalUnicodeEmojiIndexes;
+-
+-		function download() {
+-			switch (lang) {
+-				case 'en-US': return import('../../unicode-emoji-indexes/en-US.json').then(x => x.default);
+-				case 'ja-JP': return import('../../unicode-emoji-indexes/ja-JP.json').then(x => x.default);
+-				case 'ja-JP_hira': return import('../../unicode-emoji-indexes/ja-JP_hira.json').then(x => x.default);
+-				default: throw new Error('unrecognized lang: ' + lang);
+-			}
+-		}
+-
+-		currentIndexes[lang] = await download();
+-		await defaultStore.set('additionalUnicodeEmojiIndexes', currentIndexes);
+-	}
+-
+-	os.promiseDialog(main());
+-}
+-
+-function removeEmojiIndex(lang: string) {
+-	async function main() {
+-		const currentIndexes = defaultStore.state.additionalUnicodeEmojiIndexes;
+-		delete currentIndexes[lang];
+-		await defaultStore.set('additionalUnicodeEmojiIndexes', currentIndexes);
+-	}
+-
+-	os.promiseDialog(main());
+-}
+-
+-async function setPinnedList() {
+-	const lists = await misskeyApi('users/lists/list');
+-	const { canceled, result: list } = await os.select({
+-		title: i18n.ts.selectList,
+-		items: lists.map(x => ({
+-			value: x, text: x.name,
+-		})),
+-	});
+-	if (canceled) return;
+-
+-	defaultStore.set('pinnedUserLists', [list]);
+-}
+-
+-function removePinnedList() {
+-	defaultStore.set('pinnedUserLists', []);
+-}
+-
+-let smashCount = 0;
+-let smashTimer: number | null = null;
+-
+-function testNotification(): void {
+-	const notification: Misskey.entities.Notification = {
+-		id: Math.random().toString(),
+-		createdAt: new Date().toUTCString(),
+-		isRead: false,
+-		type: 'test',
+-	};
+-
+-	globalEvents.emit('clientNotification', notification);
+-
+-	// セルフ通知破壊 実績関連
+-	smashCount++;
+-	if (smashCount >= 10) {
+-		claimAchievement('smashTestNotificationButton');
+-		smashCount = 0;
+-	}
+-	if (smashTimer) {
+-		clearTimeout(smashTimer);
+-	}
+-	smashTimer = window.setTimeout(() => {
+-		smashCount = 0;
+-	}, 300);
+-}
+-
+-function enableAllDataSaver() {
+-	const g = { ...defaultStore.state.dataSaver };
+-
+-	Object.keys(g).forEach((key) => { g[key] = true; });
+-
+-	dataSaver.value = g;
+-}
+-
+-function disableAllDataSaver() {
+-	const g = { ...defaultStore.state.dataSaver };
+-
+-	Object.keys(g).forEach((key) => { g[key] = false; });
+-
+-	dataSaver.value = g;
+-}
+-
+-watch(dataSaver, (to) => {
+-	defaultStore.set('dataSaver', to);
+-}, {
+-	deep: true,
+-});
+-
+-const headerActions = computed(() => []);
+-
+-const headerTabs = computed(() => []);
+-
+-definePageMetadata(() => ({
+-	title: i18n.ts.general,
+-	icon: 'ti ti-adjustments',
+-}));
+-</script>
+diff --git a/packages/frontend/src/pages/settings/privacy.vue b/packages/frontend/src/pages/settings/privacy.vue
+index 54a5aeb6c1..edc71e5156 100644
+--- a/packages/frontend/src/pages/settings/privacy.vue
++++ b/packages/frontend/src/pages/settings/privacy.vue
+@@ -4,178 +4,234 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<div class="_gaps_m">
+-	<MkSwitch v-model="isLocked" @update:modelValue="save()">{{ i18n.ts.makeFollowManuallyApprove }}<template #caption>{{ i18n.ts.lockedAccountInfo }}</template></MkSwitch>
+-	<MkSwitch v-if="isLocked" v-model="autoAcceptFollowed" @update:modelValue="save()">{{ i18n.ts.autoAcceptFollowed }}</MkSwitch>
+-
+-	<MkSwitch v-model="publicReactions" @update:modelValue="save()">
+-		{{ i18n.ts.makeReactionsPublic }}
+-		<template #caption>{{ i18n.ts.makeReactionsPublicDescription }}</template>
+-	</MkSwitch>
+-
+-	<MkSelect v-model="followingVisibility" @update:modelValue="save()">
+-		<template #label>{{ i18n.ts.followingVisibility }}</template>
+-		<option value="public">{{ i18n.ts._ffVisibility.public }}</option>
+-		<option value="followers">{{ i18n.ts._ffVisibility.followers }}</option>
+-		<option value="private">{{ i18n.ts._ffVisibility.private }}</option>
+-	</MkSelect>
+-
+-	<MkSelect v-model="followersVisibility" @update:modelValue="save()">
+-		<template #label>{{ i18n.ts.followersVisibility }}</template>
+-		<option value="public">{{ i18n.ts._ffVisibility.public }}</option>
+-		<option value="followers">{{ i18n.ts._ffVisibility.followers }}</option>
+-		<option value="private">{{ i18n.ts._ffVisibility.private }}</option>
+-	</MkSelect>
+-
+-	<MkSwitch v-model="hideOnlineStatus" @update:modelValue="save()">
+-		{{ i18n.ts.hideOnlineStatus }}
+-		<template #caption>{{ i18n.ts.hideOnlineStatusDescription }}</template>
+-	</MkSwitch>
+-	<MkSwitch v-model="noCrawle" @update:modelValue="save()">
+-		{{ i18n.ts.noCrawle }}
+-		<template #caption>{{ i18n.ts.noCrawleDescription }}</template>
+-	</MkSwitch>
+-	<MkSwitch v-model="preventAiLearning" @update:modelValue="save()">
+-		{{ i18n.ts.preventAiLearning }}
+-		<template #caption>{{ i18n.ts.preventAiLearningDescription }}</template>
+-	</MkSwitch>
+-	<MkSwitch v-model="isExplorable" @update:modelValue="save()">
+-		{{ i18n.ts.makeExplorable }}
+-		<template #caption>{{ i18n.ts.makeExplorableDescription }}</template>
+-	</MkSwitch>
+-
+-	<FormSection>
+-		<template #label>{{ i18n.ts.lockdown }}<span class="_beta">{{ i18n.ts.beta }}</span></template>
+-
+-		<div class="_gaps_m">
+-			<MkSwitch :modelValue="requireSigninToViewContents" @update:modelValue="update_requireSigninToViewContents">
+-				{{ i18n.ts._accountSettings.requireSigninToViewContents }}
+-				<template #caption>
+-					<div>{{ i18n.ts._accountSettings.requireSigninToViewContentsDescription1 }}</div>
+-					<div><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.ts._accountSettings.requireSigninToViewContentsDescription2 }}</div>
+-					<div v-if="instance.federation !== 'none'"><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.ts._accountSettings.requireSigninToViewContentsDescription3 }}</div>
+-				</template>
++<SearchMarker path="/settings/privacy" :label="i18n.ts.privacy" :keywords="['privacy']" icon="ti ti-lock-open">
++	<div class="_gaps_m">
++		<MkFeatureBanner icon="/client-assets/unlocked_3d.png" color="#aeff00">
++			<SearchText>{{ i18n.ts._settings.privacyBanner }}</SearchText>
++		</MkFeatureBanner>
++
++		<SearchMarker :keywords="['follow', 'lock']">
++			<MkSwitch v-model="isLocked" @update:modelValue="save()">
++				<template #label><SearchLabel>{{ i18n.ts.makeFollowManuallyApprove }}</SearchLabel></template>
++				<template #caption><SearchText>{{ i18n.ts.lockedAccountInfo }}</SearchText></template>
+ 			</MkSwitch>
++		</SearchMarker>
++
++		<MkDisableSection :disabled="!isLocked">
++			<SearchMarker :keywords="['follow', 'auto', 'accept']">
++				<MkSwitch v-model="autoAcceptFollowed" @update:modelValue="save()">
++					<template #label><SearchLabel>{{ i18n.ts.autoAcceptFollowed }}</SearchLabel></template>
++				</MkSwitch>
++			</SearchMarker>
++		</MkDisableSection>
++
++		<SearchMarker :keywords="['reaction', 'public']">
++			<MkSwitch v-model="publicReactions" @update:modelValue="save()">
++				<template #label><SearchLabel>{{ i18n.ts.makeReactionsPublic }}</SearchLabel></template>
++				<template #caption><SearchText>{{ i18n.ts.makeReactionsPublicDescription }}</SearchText></template>
++			</MkSwitch>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['following', 'visibility']">
++			<MkSelect v-model="followingVisibility" :items="followingVisibilityDef" @update:modelValue="save()">
++				<template #label><SearchLabel>{{ i18n.ts.followingVisibility }}</SearchLabel></template>
++			</MkSelect>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['follower', 'visibility']">
++			<MkSelect v-model="followersVisibility" :items="followersVisibilityDef" @update:modelValue="save()">
++				<template #label><SearchLabel>{{ i18n.ts.followersVisibility }}</SearchLabel></template>
++			</MkSelect>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['online', 'status']">
++			<MkSwitch v-model="hideOnlineStatus" @update:modelValue="save()">
++				<template #label><SearchLabel>{{ i18n.ts.hideOnlineStatus }}</SearchLabel></template>
++				<template #caption><SearchText>{{ i18n.ts.hideOnlineStatusDescription }}</SearchText></template>
++			</MkSwitch>
++		</SearchMarker>
+ 
+-			<FormSlot>
+-				<template #label>{{ i18n.ts._accountSettings.makeNotesFollowersOnlyBefore }}</template>
+-
+-				<div class="_gaps_s">
+-					<MkSelect :modelValue="makeNotesFollowersOnlyBefore_type" @update:modelValue="makeNotesFollowersOnlyBefore = $event === 'relative' ? -604800 : $event === 'absolute' ? Math.floor(Date.now() / 1000) : null">
+-						<option :value="null">{{ i18n.ts.none }}</option>
+-						<option value="relative">{{ i18n.ts._accountSettings.notesHavePassedSpecifiedPeriod }}</option>
+-						<option value="absolute">{{ i18n.ts._accountSettings.notesOlderThanSpecifiedDateAndTime }}</option>
+-					</MkSelect>
+-
+-					<MkSelect v-if="makeNotesFollowersOnlyBefore_type === 'relative'" v-model="makeNotesFollowersOnlyBefore">
+-						<option :value="-3600">{{ i18n.ts.oneHour }}</option>
+-						<option :value="-86400">{{ i18n.ts.oneDay }}</option>
+-						<option :value="-259200">{{ i18n.ts.threeDays }}</option>
+-						<option :value="-604800">{{ i18n.ts.oneWeek }}</option>
+-						<option :value="-2592000">{{ i18n.ts.oneMonth }}</option>
+-						<option :value="-7776000">{{ i18n.ts.threeMonths }}</option>
+-						<option :value="-31104000">{{ i18n.ts.oneYear }}</option>
+-					</MkSelect>
+-
+-					<MkInput
+-						v-if="makeNotesFollowersOnlyBefore_type === 'absolute'"
+-						:modelValue="formatDateTimeString(new Date(makeNotesFollowersOnlyBefore * 1000), 'yyyy-MM-dd')"
+-						type="date"
+-						:manualSave="true"
+-						@update:modelValue="makeNotesFollowersOnlyBefore = Math.floor(new Date($event).getTime() / 1000)"
+-					>
+-					</MkInput>
+-				</div>
++		<SearchMarker :keywords="['crawle', 'index', 'search']">
++			<MkSwitch v-model="noCrawle" @update:modelValue="save()">
++				<template #label><SearchLabel>{{ i18n.ts.noCrawle }}</SearchLabel></template>
++				<template #caption><SearchText>{{ i18n.ts.noCrawleDescription }}</SearchText></template>
++			</MkSwitch>
++		</SearchMarker>
+ 
+-				<template #caption>
+-					<div>{{ i18n.ts._accountSettings.makeNotesFollowersOnlyBeforeDescription }}</div>
+-					<div v-if="instance.federation !== 'none'"><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.ts._accountSettings.mayNotEffectForFederatedNotes }}</div>
+-				</template>
+-			</FormSlot>
+-
+-			<FormSlot>
+-				<template #label>{{ i18n.ts._accountSettings.makeNotesHiddenBefore }}</template>
+-
+-				<div class="_gaps_s">
+-					<MkSelect :modelValue="makeNotesHiddenBefore_type" @update:modelValue="makeNotesHiddenBefore = $event === 'relative' ? -604800 : $event === 'absolute' ? Math.floor(Date.now() / 1000) : null">
+-						<option :value="null">{{ i18n.ts.none }}</option>
+-						<option value="relative">{{ i18n.ts._accountSettings.notesHavePassedSpecifiedPeriod }}</option>
+-						<option value="absolute">{{ i18n.ts._accountSettings.notesOlderThanSpecifiedDateAndTime }}</option>
+-					</MkSelect>
+-
+-					<MkSelect v-if="makeNotesHiddenBefore_type === 'relative'" v-model="makeNotesHiddenBefore">
+-						<option :value="-3600">{{ i18n.ts.oneHour }}</option>
+-						<option :value="-86400">{{ i18n.ts.oneDay }}</option>
+-						<option :value="-259200">{{ i18n.ts.threeDays }}</option>
+-						<option :value="-604800">{{ i18n.ts.oneWeek }}</option>
+-						<option :value="-2592000">{{ i18n.ts.oneMonth }}</option>
+-						<option :value="-7776000">{{ i18n.ts.threeMonths }}</option>
+-						<option :value="-31104000">{{ i18n.ts.oneYear }}</option>
+-					</MkSelect>
+-
+-					<MkInput
+-						v-if="makeNotesHiddenBefore_type === 'absolute'"
+-						:modelValue="formatDateTimeString(new Date(makeNotesHiddenBefore * 1000), 'yyyy-MM-dd')"
+-						type="date"
+-						:manualSave="true"
+-						@update:modelValue="makeNotesHiddenBefore = Math.floor(new Date($event).getTime() / 1000)"
+-					>
+-					</MkInput>
+-				</div>
++		<SearchMarker :keywords="['crawle', 'ai']">
++			<MkSwitch v-model="preventAiLearning" @update:modelValue="save()">
++				<template #label><SearchLabel>{{ i18n.ts.preventAiLearning }}</SearchLabel></template>
++				<template #caption><SearchText>{{ i18n.ts.preventAiLearningDescription }}</SearchText></template>
++			</MkSwitch>
++		</SearchMarker>
+ 
+-				<template #caption>
+-					<div>{{ i18n.ts._accountSettings.makeNotesHiddenBeforeDescription }}</div>
+-					<div v-if="instance.federation !== 'none'"><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.ts._accountSettings.mayNotEffectForFederatedNotes }}</div>
+-				</template>
+-			</FormSlot>
+-		</div>
+-	</FormSection>
+-
+-	<FormSection>
+-		<div class="_gaps_m">
+-			<MkSwitch v-model="rememberNoteVisibility" @update:modelValue="save()">{{ i18n.ts.rememberNoteVisibility }}</MkSwitch>
+-			<MkFolder v-if="!rememberNoteVisibility">
+-				<template #label>{{ i18n.ts.defaultNoteVisibility }}</template>
+-				<template v-if="defaultNoteVisibility === 'public'" #suffix>{{ i18n.ts._visibility.public }}</template>
+-				<template v-else-if="defaultNoteVisibility === 'home'" #suffix>{{ i18n.ts._visibility.home }}</template>
+-				<template v-else-if="defaultNoteVisibility === 'followers'" #suffix>{{ i18n.ts._visibility.followers }}</template>
+-				<template v-else-if="defaultNoteVisibility === 'specified'" #suffix>{{ i18n.ts._visibility.specified }}</template>
++		<SearchMarker :keywords="['explore']">
++			<MkSwitch v-model="isExplorable" @update:modelValue="save()">
++				<template #label><SearchLabel>{{ i18n.ts.makeExplorable }}</SearchLabel></template>
++				<template #caption><SearchText>{{ i18n.ts.makeExplorableDescription }}</SearchText></template>
++			</MkSwitch>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['chat']">
++			<FormSection>
++				<template #label><SearchLabel>{{ i18n.ts.directMessage }}</SearchLabel></template>
+ 
+ 				<div class="_gaps_m">
+-					<MkSelect v-model="defaultNoteVisibility">
+-						<option value="public">{{ i18n.ts._visibility.public }}</option>
+-						<option value="home">{{ i18n.ts._visibility.home }}</option>
+-						<option value="followers">{{ i18n.ts._visibility.followers }}</option>
+-						<option value="specified">{{ i18n.ts._visibility.specified }}</option>
+-					</MkSelect>
+-					<MkSwitch v-model="defaultNoteLocalOnly">{{ i18n.ts._visibility.disableFederation }}</MkSwitch>
++					<MkInfo v-if="$i.policies.chatAvailability === 'unavailable'">{{ i18n.ts._chat.chatNotAvailableForThisAccountOrServer }}</MkInfo>
++					<SearchMarker :keywords="['chat']">
++						<MkSelect v-model="chatScope" :items="chatScopeDef" @update:modelValue="save()">
++							<template #label><SearchLabel>{{ i18n.ts._chat.chatAllowedUsers }}</SearchLabel></template>
++							<template #caption>{{ i18n.ts._chat.chatAllowedUsers_note }}</template>
++						</MkSelect>
++					</SearchMarker>
+ 				</div>
+-			</MkFolder>
+-		</div>
+-	</FormSection>
++			</FormSection>
++		</SearchMarker>
++
++		<SearchMarker :keywords="['lockdown']">
++			<FormSection>
++				<template #label><SearchLabel>{{ i18n.ts.lockdown }}</SearchLabel></template>
+ 
+-	<MkSwitch v-model="keepCw" @update:modelValue="save()">{{ i18n.ts.keepCw }}</MkSwitch>
+-</div>
++				<div class="_gaps_m">
++					<SearchMarker :keywords="['login', 'signin']">
++						<MkSwitch :modelValue="requireSigninToViewContents" @update:modelValue="update_requireSigninToViewContents">
++							<template #label><SearchLabel>{{ i18n.ts._accountSettings.requireSigninToViewContents }}</SearchLabel></template>
++							<template #caption>
++								<div>{{ i18n.ts._accountSettings.requireSigninToViewContentsDescription1 }}</div>
++								<div><i class="ti ti-alert-triangle" style="color: var(--MI_THEME-warn);"></i> {{ i18n.ts._accountSettings.requireSigninToViewContentsDescription2 }}</div>
++							</template>
++						</MkSwitch>
++					</SearchMarker>
++
++					<SearchMarker :keywords="['follower']">
++						<FormSlot>
++							<template #label><SearchLabel>{{ i18n.ts._accountSettings.makeNotesFollowersOnlyBefore }}</SearchLabel></template>
++
++							<div class="_gaps_s">
++								<MkSelect
++									v-model="makeNotesFollowersOnlyBefore_type"
++									:items="[
++										{ label: i18n.ts.none, value: null },
++										{ label: i18n.ts._accountSettings.notesHavePassedSpecifiedPeriod, value: 'relative' },
++										{ label: i18n.ts._accountSettings.notesOlderThanSpecifiedDateAndTime, value: 'absolute' },
++									]"
++								>
++								</MkSelect>
++
++								<MkSelect
++									v-if="makeNotesFollowersOnlyBefore_type === 'relative'"
++									v-model="makeNotesFollowersOnlyBefore_selection"
++									:items="[
++										...makeNotesFollowersOnlyBefore_presets,
++										{ label: i18n.ts.custom, value: 'custom' },
++									]"
++								>
++								</MkSelect>
++
++								<MkInput
++									v-if="makeNotesFollowersOnlyBefore_type === 'relative' && makeNotesFollowersOnlyBefore_isCustomMode"
++									v-model="makeNotesFollowersOnlyBefore_customMonths"
++									type="number"
++									:min="1"
++								>
++									<template #suffix>{{ i18n.ts._time.month }}</template>
++								</MkInput>
++
++								<MkInput
++									v-if="makeNotesFollowersOnlyBefore_type === 'absolute' && makeNotesFollowersOnlyBefore != null"
++									:modelValue="formatDateTimeString(new Date(makeNotesFollowersOnlyBefore * 1000), 'yyyy-MM-dd')"
++									type="date"
++									:manualSave="true"
++									@update:modelValue="makeNotesFollowersOnlyBefore = Math.floor(new Date($event).getTime() / 1000)"
++								>
++								</MkInput>
++							</div>
++
++							<template #caption>
++								<div><SearchText>{{ i18n.ts._accountSettings.makeNotesFollowersOnlyBeforeDescription }}</SearchText></div>
++							</template>
++						</FormSlot>
++					</SearchMarker>
++
++					<SearchMarker :keywords="['hidden']">
++						<FormSlot>
++							<template #label><SearchLabel>{{ i18n.ts._accountSettings.makeNotesHiddenBefore }}</SearchLabel></template>
++
++							<div class="_gaps_s">
++								<MkSelect
++									v-model="makeNotesHiddenBefore_type"
++									:items="[
++										{ label: i18n.ts.none, value: null },
++										{ label: i18n.ts._accountSettings.notesHavePassedSpecifiedPeriod, value: 'relative' },
++										{ label: i18n.ts._accountSettings.notesOlderThanSpecifiedDateAndTime, value: 'absolute' },
++									]"
++								>
++								</MkSelect>
++
++								<MkSelect
++									v-if="makeNotesHiddenBefore_type === 'relative'"
++									v-model="makeNotesHiddenBefore_selection"
++									:items="[
++										...makeNotesHiddenBefore_presets,
++										{ label: i18n.ts.custom, value: 'custom' },
++									]"
++								>
++								</MkSelect>
++
++								<MkInput
++									v-if="makeNotesHiddenBefore_type === 'relative' && makeNotesHiddenBefore_isCustomMode"
++									v-model="makeNotesHiddenBefore_customMonths"
++									type="number"
++									:min="1"
++								>
++									<template #suffix>{{ i18n.ts._time.month }}</template>
++								</MkInput>
++
++								<MkInput
++									v-if="makeNotesHiddenBefore_type === 'absolute' && makeNotesHiddenBefore != null"
++									:modelValue="formatDateTimeString(new Date(makeNotesHiddenBefore * 1000), 'yyyy-MM-dd')"
++									type="date"
++									:manualSave="true"
++									@update:modelValue="makeNotesHiddenBefore = Math.floor(new Date($event).getTime() / 1000)"
++								>
++								</MkInput>
++							</div>
++
++							<template #caption>
++								<div><SearchText>{{ i18n.ts._accountSettings.makeNotesHiddenBeforeDescription }}</SearchText></div>
++							</template>
++						</FormSlot>
++					</SearchMarker>
++
++					<MkInfo warn>{{ i18n.ts._accountSettings.mayNotEffectSomeSituations }}</MkInfo>
++				</div>
++			</FormSection>
++		</SearchMarker>
++	</div>
++</SearchMarker>
+ </template>
+ 
+ <script lang="ts" setup>
+ import { ref, computed, watch } from 'vue';
++import type { MkSelectItem } from '@/components/MkSelect.vue';
+ import MkSwitch from '@/components/MkSwitch.vue';
+ import MkSelect from '@/components/MkSelect.vue';
+ import FormSection from '@/components/form/section.vue';
+-import MkFolder from '@/components/MkFolder.vue';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { defaultStore } from '@/store.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ import { i18n } from '@/i18n.js';
+ import { instance } from '@/instance.js';
+-import { signinRequired } from '@/account.js';
+-import { definePageMetadata } from '@/scripts/page-metadata.js';
++import { ensureSignin } from '@/i.js';
++import { definePage } from '@/page.js';
+ import FormSlot from '@/components/form/slot.vue';
+-import { formatDateTimeString } from '@/scripts/format-time-string.js';
++import { formatDateTimeString } from '@/utility/format-time-string.js';
++import { useMkSelect } from '@/composables/use-mkselect.js';
+ import MkInput from '@/components/MkInput.vue';
+ import * as os from '@/os.js';
++import MkDisableSection from '@/components/MkDisableSection.vue';
++import MkInfo from '@/components/MkInfo.vue';
++import MkFeatureBanner from '@/components/MkFeatureBanner.vue';
+ 
+-const $i = signinRequired();
++const $i = ensureSignin();
+ 
+ const isLocked = ref($i.isLocked);
+ const autoAcceptFollowed = ref($i.autoAcceptFollowed);
+@@ -187,32 +243,144 @@ const makeNotesFollowersOnlyBefore = ref($i.makeNotesFollowersOnlyBefore ?? null
+ const makeNotesHiddenBefore = ref($i.makeNotesHiddenBefore ?? null);
+ const hideOnlineStatus = ref($i.hideOnlineStatus);
+ const publicReactions = ref($i.publicReactions);
+-const followingVisibility = ref($i.followingVisibility);
+-const followersVisibility = ref($i.followersVisibility);
+-
+-const defaultNoteVisibility = computed(defaultStore.makeGetterSetter('defaultNoteVisibility'));
+-const defaultNoteLocalOnly = computed(defaultStore.makeGetterSetter('defaultNoteLocalOnly'));
+-const rememberNoteVisibility = computed(defaultStore.makeGetterSetter('rememberNoteVisibility'));
+-const keepCw = computed(defaultStore.makeGetterSetter('keepCw'));
+-
+-const makeNotesFollowersOnlyBefore_type = computed(() => {
+-	if (makeNotesFollowersOnlyBefore.value == null) {
+-		return null;
+-	} else if (makeNotesFollowersOnlyBefore.value >= 0) {
+-		return 'absolute';
+-	} else {
+-		return 'relative';
+-	}
++const {
++	model: followingVisibility,
++	def: followingVisibilityDef,
++} = useMkSelect({
++	items: [
++		{ label: i18n.ts.public, value: 'public' },
++		{ label: i18n.ts.followers, value: 'followers' },
++		{ label: i18n.ts.private, value: 'private' },
++	],
++	initialValue: $i.followingVisibility,
++});
++const {
++	model: followersVisibility,
++	def: followersVisibilityDef,
++} = useMkSelect({
++	items: [
++		{ label: i18n.ts.public, value: 'public' },
++		{ label: i18n.ts.followers, value: 'followers' },
++		{ label: i18n.ts.private, value: 'private' },
++	],
++	initialValue: $i.followersVisibility,
++});
++const {
++	model: chatScope,
++	def: chatScopeDef,
++} = useMkSelect({
++	items: [
++		{ label: i18n.ts._chat._chatAllowedUsers.everyone, value: 'everyone' },
++		{ label: i18n.ts._chat._chatAllowedUsers.followers, value: 'followers' },
++		{ label: i18n.ts._chat._chatAllowedUsers.following, value: 'following' },
++		{ label: i18n.ts._chat._chatAllowedUsers.mutual, value: 'mutual' },
++		{ label: i18n.ts._chat._chatAllowedUsers.none, value: 'none' },
++	],
++	initialValue: $i.chatScope,
+ });
+ 
+-const makeNotesHiddenBefore_type = computed(() => {
+-	if (makeNotesHiddenBefore.value == null) {
+-		return null;
+-	} else if (makeNotesHiddenBefore.value >= 0) {
+-		return 'absolute';
+-	} else {
+-		return 'relative';
+-	}
++const makeNotesFollowersOnlyBefore_type = computed({
++	get: () => {
++		if (makeNotesFollowersOnlyBefore.value == null) {
++			return null;
++		} else if (makeNotesFollowersOnlyBefore.value >= 0) {
++			return 'absolute';
++		} else {
++			return 'relative';
++		}
++	},
++	set(value) {
++		if (value === 'relative') {
++			makeNotesFollowersOnlyBefore.value = -604800;
++		} else if (value === 'absolute') {
++			makeNotesFollowersOnlyBefore.value = Math.floor(Date.now() / 1000);
++		} else {
++			makeNotesFollowersOnlyBefore.value = null;
++		}
++	},
++});
++
++const makeNotesFollowersOnlyBefore_presets = [
++	{ label: i18n.ts.oneHour, value: -3600 },
++	{ label: i18n.ts.oneDay, value: -86400 },
++	{ label: i18n.ts.threeDays, value: -259200 },
++	{ label: i18n.ts.oneWeek, value: -604800 },
++	{ label: i18n.ts.oneMonth, value: -2592000 },
++	{ label: i18n.ts.threeMonths, value: -7776000 },
++	{ label: i18n.ts.oneYear, value: -31104000 },
++] satisfies MkSelectItem[];
++
++const makeNotesFollowersOnlyBefore_isCustomMode = ref(
++	makeNotesFollowersOnlyBefore.value != null &&
++	makeNotesFollowersOnlyBefore.value < 0 &&
++	!makeNotesFollowersOnlyBefore_presets.some((preset) => preset.value === makeNotesFollowersOnlyBefore.value),
++);
++
++const makeNotesFollowersOnlyBefore_selection = computed({
++	get: () => makeNotesFollowersOnlyBefore_isCustomMode.value ? 'custom' : makeNotesFollowersOnlyBefore.value,
++	set(value) {
++		makeNotesFollowersOnlyBefore_isCustomMode.value = value === 'custom';
++		if (value !== 'custom') makeNotesFollowersOnlyBefore.value = value;
++	},
++});
++
++const makeNotesFollowersOnlyBefore_customMonths = computed({
++	get: () => makeNotesFollowersOnlyBefore.value ? Math.abs(makeNotesFollowersOnlyBefore.value) / (30 * 24 * 60 * 60) : null,
++	set(value) {
++		if (value != null && value > 0) makeNotesFollowersOnlyBefore.value = -Math.abs(Math.floor(Number(value))) * 30 * 24 * 60 * 60;
++	},
++});
++
++const makeNotesHiddenBefore_type = computed({
++	get: () => {
++		if (makeNotesHiddenBefore.value == null) {
++			return null;
++		} else if (makeNotesHiddenBefore.value >= 0) {
++			return 'absolute';
++		} else {
++			return 'relative';
++		}
++	},
++	set(value) {
++		if (value === 'relative') {
++			makeNotesHiddenBefore.value = -604800;
++		} else if (value === 'absolute') {
++			makeNotesHiddenBefore.value = Math.floor(Date.now() / 1000);
++		} else {
++			makeNotesHiddenBefore.value = null;
++		}
++	},
++});
++
++const makeNotesHiddenBefore_presets = [
++	{ label: i18n.ts.oneHour, value: -3600 },
++	{ label: i18n.ts.oneDay, value: -86400 },
++	{ label: i18n.ts.threeDays, value: -259200 },
++	{ label: i18n.ts.oneWeek, value: -604800 },
++	{ label: i18n.ts.oneMonth, value: -2592000 },
++	{ label: i18n.ts.threeMonths, value: -7776000 },
++	{ label: i18n.ts.oneYear, value: -31104000 },
++] satisfies MkSelectItem[];
++
++const makeNotesHiddenBefore_isCustomMode = ref(
++	makeNotesHiddenBefore.value != null &&
++	makeNotesHiddenBefore.value < 0 &&
++	!makeNotesHiddenBefore_presets.some((preset) => preset.value === makeNotesHiddenBefore.value),
++);
++
++const makeNotesHiddenBefore_selection = computed({
++	get: () => makeNotesHiddenBefore_isCustomMode.value ? 'custom' : makeNotesHiddenBefore.value,
++	set(value) {
++		makeNotesHiddenBefore_isCustomMode.value = value === 'custom';
++		if (value !== 'custom') makeNotesHiddenBefore.value = value;
++	},
++});
++
++const makeNotesHiddenBefore_customMonths = computed({
++	get: () => makeNotesHiddenBefore.value ? Math.abs(makeNotesHiddenBefore.value) / (30 * 24 * 60 * 60) : null,
++	set(value) {
++		if (value != null && value > 0) makeNotesHiddenBefore.value = -Math.abs(Math.floor(Number(value))) * 30 * 24 * 60 * 60;
++	},
+ });
+ 
+ watch([makeNotesFollowersOnlyBefore, makeNotesHiddenBefore], () => {
+@@ -246,6 +414,7 @@ function save() {
+ 		publicReactions: !!publicReactions.value,
+ 		followingVisibility: followingVisibility.value,
+ 		followersVisibility: followersVisibility.value,
++		chatScope: chatScope.value,
+ 	});
+ }
+ 
+@@ -253,7 +422,7 @@ const headerActions = computed(() => []);
+ 
+ const headerTabs = computed(() => []);
+ 
+-definePageMetadata(() => ({
++definePage(() => ({
+ 	title: i18n.ts.privacy,
+ 	icon: 'ti ti-lock-open',
+ }));
+diff --git a/packages/frontend/src/store.ts b/packages/frontend/src/store.ts
+index e2243e067a..e7cdc98415 100644
+--- a/packages/frontend/src/store.ts
++++ b/packages/frontend/src/store.ts
+@@ -3,145 +3,180 @@
+  * SPDX-License-Identifier: AGPL-3.0-only
+  */
+ 
+-import { markRaw, ref } from 'vue';
++import { markRaw } from 'vue';
+ import * as Misskey from 'misskey-js';
++import { prefersReducedMotion } from '@@/js/config.js';
+ import { hemisphere } from '@@/js/intl-const.js';
+-import lightTheme from '@@/themes/l-light.json5';
+-import darkTheme from '@@/themes/d-green-lime.json5';
+-import type { SoundType } from '@/scripts/sound.js';
+-import type { Ast } from '@syuilo/aiscript';
+-import { DEFAULT_DEVICE_KIND } from '@/scripts/device-kind.js';
+-import type { DeviceKind } from '@/scripts/device-kind.js';
+-import { miLocalStorage } from '@/local-storage.js';
+-import { Storage } from '@/pizzax.js';
++import type { DeviceKind } from '@/utility/device-kind.js';
++import type { TIPS } from '@/tips.js';
++import { Pizzax } from '@/lib/pizzax.js';
++import { DEFAULT_DEVICE_KIND } from '@/utility/device-kind.js';
+ 
+-interface PostFormAction {
+-	title: string,
+-	handler: <T>(form: T, update: (key: unknown, value: unknown) => void) => void;
+-}
+-
+-interface UserAction {
+-	title: string,
+-	handler: (user: Misskey.entities.UserDetailed) => void;
+-}
+-
+-interface NoteAction {
+-	title: string,
+-	handler: (note: Misskey.entities.Note) => void;
+-}
+-
+-interface NoteViewInterruptor {
+-	handler: (note: Misskey.entities.Note) => unknown;
+-}
+-
+-interface NotePostInterruptor {
+-	handler: (note: FIXME) => unknown;
+-}
+-
+-interface PageViewInterruptor {
+-	handler: (page: Misskey.entities.Page) => unknown;
+-}
+-
+-/** サウンド設定 */
+-export type SoundStore = {
+-	type: Exclude<SoundType, '_driveFile_'>;
+-	volume: number;
+-} | {
+-	type: '_driveFile_';
+-
+-	/** ドライブのファイルID */
+-	fileId: string;
+-
+-	/** ファイルURL（こちらが優先される） */
+-	fileUrl: string;
+-
+-	volume: number;
+-};
+-
+-export const postFormActions: PostFormAction[] = [];
+-export const userActions: UserAction[] = [];
+-export const noteActions: NoteAction[] = [];
+-export const noteViewInterruptors: NoteViewInterruptor[] = [];
+-export const notePostInterruptors: NotePostInterruptor[] = [];
+-export const pageViewInterruptors: PageViewInterruptor[] = [];
+-
+-// TODO: それぞれいちいちwhereとかdefaultというキーを付けなきゃいけないの冗長なのでなんとかする(ただ型定義が面倒になりそう)
+-//       あと、現行の定義の仕方なら「whereが何であるかに関わらずキー名の重複不可」という制約を付けられるメリットもあるからそのメリットを引き継ぐ方法も考えないといけない
+-export const defaultStore = markRaw(new Storage('base', {
++/**
++ * 「状態」を管理するストア(not「設定」)
++ */
++export const store = markRaw(new Pizzax('base', {
+ 	accountSetupWizard: {
+ 		where: 'account',
+ 		default: 0,
+ 	},
+-	timelineTutorials: {
++	tips: {
++		where: 'device',
++		default: {} as Partial<Record<typeof TIPS[number], boolean>>, // true = 既読
++	},
++	memo: {
++		where: 'account',
++		default: null as string | null,
++	},
++	reactionAcceptance: {
+ 		where: 'account',
++		default: 'nonSensitiveOnly' as 'likeOnly' | 'likeOnlyForRemote' | 'nonSensitiveOnly' | 'nonSensitiveOnlyForLocalLikeOnlyForRemote' | null,
++	},
++	mutedAds: {
++		where: 'account',
++		default: [] as string[],
++	},
++	visibility: {
++		where: 'deviceAccount',
++		default: 'public' as (typeof Misskey.noteVisibilities)[number],
++	},
++	localOnly: {
++		where: 'deviceAccount',
++		default: false,
++	},
++	showPreview: {
++		where: 'device',
++		default: false,
++	},
++	tl: {
++		where: 'deviceAccount',
+ 		default: {
+-			home: false,
+-			local: false,
+-			social: false,
+-			global: false,
++			src: 'home' as 'home' | 'local' | 'social' | 'global' | `list:${string}`,
++			userList: null as Misskey.entities.UserList | null,
++			filter: {
++				withReplies: true,
++				withRenotes: true,
++				withSensitive: true,
++				onlyFiles: false,
++			},
+ 		},
+ 	},
+-	abusesTutorial: {
+-		where: 'account',
++	darkMode: {
++		where: 'device',
+ 		default: false,
+ 	},
+-	keepCw: {
+-		where: 'account',
++	realtimeMode: {
++		where: 'device',
+ 		default: true,
+ 	},
+-	showFullAcct: {
+-		where: 'account',
++	recentlyUsedEmojis: {
++		where: 'device',
++		default: [] as string[],
++	},
++	recentlyUsedUsers: {
++		where: 'device',
++		default: [] as string[],
++	},
++	menuDisplay: {
++		where: 'device',
++		default: 'sideFull' as 'sideFull' | 'sideIcon'/* | 'top' */,
++	},
++	postFormWithHashtags: {
++		where: 'device',
+ 		default: false,
+ 	},
+-	collapseRenotes: {
+-		where: 'account',
++	postFormHashtags: {
++		where: 'device',
++		default: '',
++	},
++	additionalUnicodeEmojiIndexes: {
++		where: 'device',
++		default: {} as Record<string, Record<string, string[]>>,
++	},
++	pluginTokens: {
++		where: 'deviceAccount',
++		default: {} as Record<string, string>, // plugin id, token
++	},
++	accountTokens: {
++		where: 'device',
++		default: {} as Record<string, string>, // host/userId, token
++	},
++	accountInfos: {
++		where: 'device',
++		default: {} as Record<string, Misskey.entities.MeDetailed>, // host/userId, user
++	},
++
++	enablePreferencesAutoCloudBackup: {
++		where: 'device',
++		default: false,
++	},
++	showPreferencesAutoCloudBackupSuggestion: {
++		where: 'device',
+ 		default: true,
+ 	},
+-	rememberNoteVisibility: {
++	showStoragePersistenceSuggestion: {
++		where: 'device',
++		default: true,
++	},
++
++	//#region TODO: そのうち消す (preferに移行済み)
++	defaultWithReplies: {
+ 		where: 'account',
+ 		default: false,
+ 	},
+-	defaultNoteVisibility: {
++	reactions: {
+ 		where: 'account',
+-		default: 'public' as (typeof Misskey.noteVisibilities)[number],
++		default: ['👍', '❤️', '😆', '🤔', '😮', '🎉', '💢', '😥', '😇', '🍮'],
+ 	},
+-	defaultNoteLocalOnly: {
++	pinnedEmojis: {
+ 		where: 'account',
+-		default: false,
++		default: [],
+ 	},
+-	uploadFolder: {
++	widgets: {
+ 		where: 'account',
+-		default: null as string | null,
++		default: [] as {
++			name: string;
++			id: string;
++			place: string | null;
++			data: Record<string, any>;
++		}[],
++	},
++	overridedDeviceKind: {
++		where: 'device',
++		default: null as DeviceKind | null,
+ 	},
+-	pastedFileName: {
++	defaultSideView: {
++		where: 'device',
++		default: false,
++	},
++	defaultNoteVisibility: {
+ 		where: 'account',
+-		default: 'yyyy-MM-dd HH-mm-ss [{{number}}]',
++		default: 'public' as (typeof Misskey.noteVisibilities)[number],
+ 	},
+-	keepOriginalUploading: {
++	defaultNoteLocalOnly: {
+ 		where: 'account',
+ 		default: false,
+ 	},
+-	memo: {
++	keepCw: {
+ 		where: 'account',
+-		default: null,
++		default: true,
+ 	},
+-	reactions: {
++	collapseRenotes: {
+ 		where: 'account',
+-		default: ['👍', '❤️', '😆', '🤔', '😮', '🎉', '💢', '😥', '😇', '🍮'],
++		default: true,
+ 	},
+-	pinnedEmojis: {
++	rememberNoteVisibility: {
+ 		where: 'account',
+-		default: [],
++		default: false,
+ 	},
+-	reactionAcceptance: {
++	uploadFolder: {
+ 		where: 'account',
+-		default: 'nonSensitiveOnly' as 'likeOnly' | 'likeOnlyForRemote' | 'nonSensitiveOnly' | 'nonSensitiveOnlyForLocalLikeOnlyForRemote' | null,
++		default: null as string | null,
+ 	},
+-	mutedAds: {
++	keepOriginalUploading: {
+ 		where: 'account',
+-		default: [] as string[],
++		default: false,
+ 	},
+-
+ 	menu: {
+ 		where: 'deviceAccount',
+ 		default: [
+@@ -157,18 +192,6 @@ export const defaultStore = markRaw(new Storage('base', {
+ 			'ui',
+ 		],
+ 	},
+-	visibility: {
+-		where: 'deviceAccount',
+-		default: 'public' as (typeof Misskey.noteVisibilities)[number],
+-	},
+-	localOnly: {
+-		where: 'deviceAccount',
+-		default: false,
+-	},
+-	showPreview: {
+-		where: 'device',
+-		default: false,
+-	},
+ 	statusbars: {
+ 		where: 'deviceAccount',
+ 		default: [] as {
+@@ -180,37 +203,10 @@ export const defaultStore = markRaw(new Storage('base', {
+ 			props: Record<string, any>;
+ 		}[],
+ 	},
+-	widgets: {
+-		where: 'account',
+-		default: [] as {
+-			name: string;
+-			id: string;
+-			place: string | null;
+-			data: Record<string, any>;
+-		}[],
+-	},
+-	tl: {
+-		where: 'deviceAccount',
+-		default: {
+-			src: 'home' as 'home' | 'local' | 'social' | 'global' | `list:${string}`,
+-			userList: null as Misskey.entities.UserList | null,
+-			filter: {
+-				withReplies: true,
+-				withRenotes: true,
+-				withSensitive: true,
+-				onlyFiles: false,
+-			},
+-		},
+-	},
+ 	pinnedUserLists: {
+ 		where: 'deviceAccount',
+ 		default: [] as Misskey.entities.UserList[],
+ 	},
+-
+-	overridedDeviceKind: {
+-		where: 'device',
+-		default: null as DeviceKind | null,
+-	},
+ 	serverDisconnectedBehavior: {
+ 		where: 'device',
+ 		default: 'quiet' as 'quiet' | 'reload' | 'dialog',
+@@ -225,11 +221,11 @@ export const defaultStore = markRaw(new Storage('base', {
+ 	},
+ 	animation: {
+ 		where: 'device',
+-		default: !window.matchMedia('(prefers-reduced-motion)').matches,
++		default: !prefersReducedMotion,
+ 	},
+ 	animatedMfm: {
+ 		where: 'device',
+-		default: !window.matchMedia('(prefers-reduced-motion)').matches,
++		default: !prefersReducedMotion,
+ 	},
+ 	advancedMfm: {
+ 		where: 'device',
+@@ -253,11 +249,11 @@ export const defaultStore = markRaw(new Storage('base', {
+ 	},
+ 	disableShowingAnimatedImages: {
+ 		where: 'device',
+-		default: window.matchMedia('(prefers-reduced-motion)').matches,
++		default: prefersReducedMotion,
+ 	},
+ 	emojiStyle: {
+ 		where: 'device',
+-		default: 'twemoji', // twemoji / fluentEmoji / native
++		default: 'twemoji' as 'twemoji' | 'fluentEmoji' | 'native',
+ 	},
+ 	menuStyle: {
+ 		where: 'device',
+@@ -291,10 +287,6 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'device',
+ 		default: false,
+ 	},
+-	darkMode: {
+-		where: 'device',
+-		default: false,
+-	},
+ 	instanceTicker: {
+ 		where: 'device',
+ 		default: 'remote' as 'none' | 'remote' | 'always',
+@@ -315,22 +307,6 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'device',
+ 		default: 'auto' as 'auto' | 'popup' | 'drawer',
+ 	},
+-	recentlyUsedEmojis: {
+-		where: 'device',
+-		default: [] as string[],
+-	},
+-	recentlyUsedUsers: {
+-		where: 'device',
+-		default: [] as string[],
+-	},
+-	defaultSideView: {
+-		where: 'device',
+-		default: false,
+-	},
+-	menuDisplay: {
+-		where: 'device',
+-		default: 'sideFull' as 'sideFull' | 'sideIcon' | 'top',
+-	},
+ 	reportError: {
+ 		where: 'device',
+ 		default: false,
+@@ -343,18 +319,6 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'device',
+ 		default: true,
+ 	},
+-	postFormWithHashtags: {
+-		where: 'device',
+-		default: false,
+-	},
+-	postFormHashtags: {
+-		where: 'device',
+-		default: '',
+-	},
+-	themeInitial: {
+-		where: 'device',
+-		default: true,
+-	},
+ 	numberOfPageCache: {
+ 		where: 'device',
+ 		default: 3,
+@@ -403,22 +367,10 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'device',
+ 		default: true,
+ 	},
+-	additionalUnicodeEmojiIndexes: {
+-		where: 'device',
+-		default: {} as Record<string, Record<string, string[]>>,
+-	},
+ 	keepScreenOn: {
+ 		where: 'device',
+ 		default: false,
+ 	},
+-	defaultWithReplies: {
+-		where: 'account',
+-		default: false,
+-	},
+-	disableStreamingTimeline: {
+-		where: 'device',
+-		default: false,
+-	},
+ 	useGroupedNotifications: {
+ 		where: 'device',
+ 		default: true,
+@@ -430,23 +382,12 @@ export const defaultStore = markRaw(new Storage('base', {
+ 			avatar: false,
+ 			urlPreview: false,
+ 			code: false,
+-		} as Record<string, boolean>,
++		},
+ 	},
+ 	enableSeasonalScreenEffect: {
+ 		where: 'device',
+ 		default: false,
+ 	},
+-	dropAndFusion: {
+-		where: 'device',
+-		default: {
+-			bgmVolume: 0.25,
+-			sfxVolume: 1,
+-		},
+-	},
+-	hemisphere: {
+-		where: 'device',
+-		default: hemisphere as 'N' | 'S',
+-	},
+ 	enableHorizontalSwipe: {
+ 		where: 'device',
+ 		default: true,
+@@ -483,7 +424,10 @@ export const defaultStore = markRaw(new Storage('base', {
+ 		where: 'device',
+ 		default: false,
+ 	},
+-
++	hemisphere: {
++		where: 'device',
++		default: hemisphere as 'N' | 'S',
++	},
+ 	sound_masterVolume: {
+ 		where: 'device',
+ 		default: 0.3,
+@@ -498,128 +442,35 @@ export const defaultStore = markRaw(new Storage('base', {
+ 	},
+ 	sound_note: {
+ 		where: 'device',
+-		default: { type: 'syuilo/n-aec', volume: 1 } as SoundStore,
++		default: { type: 'syuilo/n-aec', volume: 1 },
+ 	},
+ 	sound_noteMy: {
+ 		where: 'device',
+-		default: { type: 'syuilo/n-cea-4va', volume: 1 } as SoundStore,
++		default: { type: 'syuilo/n-cea-4va', volume: 1 },
+ 	},
+ 	sound_notification: {
+ 		where: 'device',
+-		default: { type: 'syuilo/n-ea', volume: 1 } as SoundStore,
++		default: { type: 'syuilo/n-ea', volume: 1 },
+ 	},
+ 	sound_reaction: {
+ 		where: 'device',
+-		default: { type: 'syuilo/bubble2', volume: 1 } as SoundStore,
++		default: { type: 'syuilo/bubble2', volume: 1 },
+ 	},
++	dropAndFusion: {
++		where: 'device',
++		default: {
++			bgmVolume: 0.25,
++			sfxVolume: 1,
++		},
++	},
++	//#endregion
+ }));
+ 
+ // TODO: 他のタブと永続化されたstateを同期
+ 
+ const PREFIX = 'miux:' as const;
+ 
+-export type Plugin = {
+-	id: string;
+-	name: string;
+-	active: boolean;
+-	config?: Record<string, { default: any }>;
+-	configData: Record<string, any>;
+-	token: string;
+-	src: string | null;
+-	version: string;
+-	ast: Ast.Node[];
+-	author?: string;
+-	description?: string;
+-	permissions?: string[];
+-};
+-
+ interface Watcher {
+ 	key: string;
+ 	callback: (value: unknown) => void;
+ }
+-
+-/**
+- * 常にメモリにロードしておく必要がないような設定情報を保管するストレージ(非リアクティブ)
+- */
+-
+-export class ColdDeviceStorage {
+-	public static default = {
+-		lightTheme,
+-		darkTheme,
+-		syncDeviceDarkMode: true,
+-		plugins: [] as Plugin[],
+-	};
+-
+-	public static watchers: Watcher[] = [];
+-
+-	public static get<T extends keyof typeof ColdDeviceStorage.default>(key: T): typeof ColdDeviceStorage.default[T] {
+-		// TODO: indexedDBにする
+-		//       ただしその際はnullチェックではなくキー存在チェックにしないとダメ
+-		//       (indexedDBはnullを保存できるため、ユーザーが意図してnullを格納した可能性がある)
+-		const value = miLocalStorage.getItem(`${PREFIX}${key}`);
+-		if (value == null) {
+-			return ColdDeviceStorage.default[key];
+-		} else {
+-			return JSON.parse(value);
+-		}
+-	}
+-
+-	public static getAll(): Partial<typeof this.default> {
+-		return (Object.keys(this.default) as (keyof typeof this.default)[]).reduce<Partial<typeof this.default>>((acc, key) => {
+-			const value = localStorage.getItem(PREFIX + key);
+-			if (value != null) {
+-				acc[key] = JSON.parse(value);
+-			}
+-			return acc;
+-		}, {});
+-	}
+-
+-	public static set<T extends keyof typeof ColdDeviceStorage.default>(key: T, value: typeof ColdDeviceStorage.default[T]): void {
+-		// 呼び出し側のバグ等で undefined が来ることがある
+-		// undefined を文字列として miLocalStorage に入れると参照する際の JSON.parse でコケて不具合の元になるため無視
+-
+-		if (value === undefined) {
+-			console.error(`attempt to store undefined value for key '${key}'`);
+-			return;
+-		}
+-
+-		miLocalStorage.setItem(`${PREFIX}${key}`, JSON.stringify(value));
+-
+-		for (const watcher of this.watchers) {
+-			if (watcher.key === key) watcher.callback(value);
+-		}
+-	}
+-
+-	public static watch(key, callback) {
+-		this.watchers.push({ key, callback });
+-	}
+-
+-	// TODO: VueのcustomRef使うと良い感じになるかも
+-	public static ref<T extends keyof typeof ColdDeviceStorage.default>(key: T) {
+-		const v = ColdDeviceStorage.get(key);
+-		const r = ref(v);
+-		// TODO: このままではwatcherがリークするので開放する方法を考える
+-		this.watch(key, v => {
+-			r.value = v;
+-		});
+-		return r;
+-	}
+-
+-	/**
+-	 * 特定のキーの、簡易的なgetter/setterを作ります
+-	 * 主にvue場で設定コントロールのmodelとして使う用
+-	 */
+-	public static makeGetterSetter<K extends keyof typeof ColdDeviceStorage.default>(key: K) {
+-		// TODO: VueのcustomRef使うと良い感じになるかも
+-		const valueRef = ColdDeviceStorage.ref(key);
+-		return {
+-			get: () => {
+-				return valueRef.value;
+-			},
+-			set: (value: typeof ColdDeviceStorage.default[K]) => {
+-				const val = value;
+-				ColdDeviceStorage.set(key, val);
+-			},
+-		};
+-	}
+-}
+diff --git a/packages/frontend/src/ui/_common_/common.vue b/packages/frontend/src/ui/_common_/common.vue
+index d145b9b6c6..37c95f2db2 100644
+--- a/packages/frontend/src/ui/_common_/common.vue
++++ b/packages/frontend/src/ui/_common_/common.vue
+@@ -4,6 +4,59 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
++<Transition
++	:enterActiveClass="prefer.s.animation ? $style.transition_menuDrawerBg_enterActive : ''"
++	:leaveActiveClass="prefer.s.animation ? $style.transition_menuDrawerBg_leaveActive : ''"
++	:enterFromClass="prefer.s.animation ? $style.transition_menuDrawerBg_enterFrom : ''"
++	:leaveToClass="prefer.s.animation ? $style.transition_menuDrawerBg_leaveTo : ''"
++>
++	<div
++		v-if="drawerMenuShowing"
++		:class="$style.menuDrawerBg"
++		class="_modalBg"
++		@click="drawerMenuShowing = false"
++		@touchstart.passive="drawerMenuShowing = false"
++	></div>
++</Transition>
++
++<Transition
++	:enterActiveClass="prefer.s.animation ? $style.transition_menuDrawer_enterActive : ''"
++	:leaveActiveClass="prefer.s.animation ? $style.transition_menuDrawer_leaveActive : ''"
++	:enterFromClass="prefer.s.animation ? $style.transition_menuDrawer_enterFrom : ''"
++	:leaveToClass="prefer.s.animation ? $style.transition_menuDrawer_leaveTo : ''"
++>
++	<div v-if="drawerMenuShowing" :class="$style.menuDrawer">
++		<XNavbar style="height: 100%;" :asDrawer="true" :showWidgetButton="false"/>
++	</div>
++</Transition>
++
++<Transition
++	:enterActiveClass="prefer.s.animation ? $style.transition_widgetsDrawerBg_enterActive : ''"
++	:leaveActiveClass="prefer.s.animation ? $style.transition_widgetsDrawerBg_leaveActive : ''"
++	:enterFromClass="prefer.s.animation ? $style.transition_widgetsDrawerBg_enterFrom : ''"
++	:leaveToClass="prefer.s.animation ? $style.transition_widgetsDrawerBg_leaveTo : ''"
++>
++	<div
++		v-if="widgetsShowing"
++		:class="$style.widgetsDrawerBg"
++		class="_modalBg"
++		@click="widgetsShowing = false"
++		@touchstart.passive="widgetsShowing = false"
++	></div>
++</Transition>
++
++<Transition
++	:enterActiveClass="prefer.s.animation ? $style.transition_widgetsDrawer_enterActive : ''"
++	:leaveActiveClass="prefer.s.animation ? $style.transition_widgetsDrawer_leaveActive : ''"
++	:enterFromClass="prefer.s.animation ? $style.transition_widgetsDrawer_enterFrom : ''"
++	:leaveToClass="prefer.s.animation ? $style.transition_widgetsDrawer_leaveTo : ''"
++>
++	<div v-if="widgetsShowing" :class="$style.widgetsDrawer">
++		<button class="_button" :class="$style.widgetsCloseButton" @click="widgetsShowing = false"><i class="ti ti-x"></i></button>
++		<XWidgets/>
++	</div>
++</Transition>
++
+ <component
+ 	:is="popup.component"
+ 	v-for="popup in popups"
+@@ -12,28 +65,27 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	v-on="popup.events"
+ />
+ 
+-<XUpload v-if="uploads.length > 0"/>
+-
+-<TransitionGroup
++<component
++	:is="prefer.s.animation ? TransitionGroup : 'div'"
+ 	tag="div"
+ 	:class="[$style.notifications, {
+-		[$style.notificationsPosition_leftTop]: defaultStore.state.notificationPosition === 'leftTop',
+-		[$style.notificationsPosition_leftBottom]: defaultStore.state.notificationPosition === 'leftBottom',
+-		[$style.notificationsPosition_rightTop]: defaultStore.state.notificationPosition === 'rightTop',
+-		[$style.notificationsPosition_rightBottom]: defaultStore.state.notificationPosition === 'rightBottom',
+-		[$style.notificationsStackAxis_vertical]: defaultStore.state.notificationStackAxis === 'vertical',
+-		[$style.notificationsStackAxis_horizontal]: defaultStore.state.notificationStackAxis === 'horizontal',
++		[$style.notificationsPosition_leftTop]: prefer.s.notificationPosition === 'leftTop',
++		[$style.notificationsPosition_leftBottom]: prefer.s.notificationPosition === 'leftBottom',
++		[$style.notificationsPosition_rightTop]: prefer.s.notificationPosition === 'rightTop',
++		[$style.notificationsPosition_rightBottom]: prefer.s.notificationPosition === 'rightBottom',
++		[$style.notificationsStackAxis_vertical]: prefer.s.notificationStackAxis === 'vertical',
++		[$style.notificationsStackAxis_horizontal]: prefer.s.notificationStackAxis === 'horizontal',
+ 	}]"
+-	:moveClass="defaultStore.state.animation ? $style.transition_notification_move : ''"
+-	:enterActiveClass="defaultStore.state.animation ? $style.transition_notification_enterActive : ''"
+-	:leaveActiveClass="defaultStore.state.animation ? $style.transition_notification_leaveActive : ''"
+-	:enterFromClass="defaultStore.state.animation ? $style.transition_notification_enterFrom : ''"
+-	:leaveToClass="defaultStore.state.animation ? $style.transition_notification_leaveTo : ''"
++	:moveClass="$style.transition_notification_move"
++	:enterActiveClass="$style.transition_notification_enterActive"
++	:leaveActiveClass="$style.transition_notification_leaveActive"
++	:enterFromClass="$style.transition_notification_enterFrom"
++	:leaveToClass="$style.transition_notification_leaveTo"
+ >
+ 	<div v-for="notification in notifications" :key="notification.id" :class="$style.notification">
+ 		<XNotification :notification="notification"/>
+ 	</div>
+-</TransitionGroup>
++</component>
+ 
+ <XStreamIndicator/>
+ 
+@@ -42,35 +94,49 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <div v-if="dev" id="devTicker"><span style="animation: dev-ticker-blink 2s infinite;">DEV BUILD</span></div>
+ 
+ <div v-if="$i && $i.isBot" id="botWarn"><span style="animation: dev-ticker-blink 2s infinite;">{{ i18n.ts.loggedInAsBot }}</span></div>
++
++<div v-if="isSafeMode" id="safemodeWarn">
++	<span style="animation: dev-ticker-blink 2s infinite;">{{ i18n.ts.safeModeEnabled }}</span>&nbsp;
++	<button class="_textButton" style="pointer-events: all;" @click="exitSafeMode">{{ i18n.ts.turnItOff }}</button>
++</div>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { defineAsyncComponent, ref } from 'vue';
++import { defineAsyncComponent, ref, TransitionGroup } from 'vue';
+ import * as Misskey from 'misskey-js';
+ import { swInject } from './sw-inject.js';
+ import XNotification from './notification.vue';
++import { isSafeMode } from '@@/js/config.js';
+ import { popups } from '@/os.js';
+-import { pendingApiRequestsCount } from '@/scripts/misskey-api.js';
+-import { uploads } from '@/scripts/upload.js';
+-import * as sound from '@/scripts/sound.js';
+-import { $i } from '@/account.js';
++import { unisonReload } from '@/utility/unison-reload.js';
++import { miLocalStorage } from '@/local-storage.js';
++import { pendingApiRequestsCount } from '@/utility/misskey-api.js';
++import * as sound from '@/utility/sound.js';
++import { $i } from '@/i.js';
+ import { useStream } from '@/stream.js';
+ import { i18n } from '@/i18n.js';
+-import { defaultStore } from '@/store.js';
++import { prefer } from '@/preferences.js';
+ import { globalEvents } from '@/events.js';
++import { store } from '@/store.js';
++import XNavbar from '@/ui/_common_/navbar.vue';
+ 
+ const XStreamIndicator = defineAsyncComponent(() => import('./stream-indicator.vue'));
+-const XUpload = defineAsyncComponent(() => import('./upload.vue'));
++const XWidgets = defineAsyncComponent(() => import('./widgets.vue'));
++
++const drawerMenuShowing = defineModel<boolean>('drawerMenuShowing');
++const widgetsShowing = defineModel<boolean>('widgetsShowing');
+ 
+ const dev = _DEV_;
+ 
+ const notifications = ref<Misskey.entities.Notification[]>([]);
+ 
+ function onNotification(notification: Misskey.entities.Notification, isClient = false) {
+-	if (document.visibilityState === 'visible') {
++	if (window.document.visibilityState === 'visible') {
+ 		if (!isClient && notification.type !== 'test') {
+ 			// サーバーサイドのテスト通知の際は自動で既読をつけない（テストできないので）
+-			useStream().send('readNotification');
++			if (store.s.realtimeMode) {
++				useStream().send('readNotification');
++			}
+ 		}
+ 
+ 		notifications.value.unshift(notification);
+@@ -86,12 +152,20 @@ function onNotification(notification: Misskey.entities.Notification, isClient =
+ 	sound.playMisskeySfx('notification');
+ }
+ 
++function exitSafeMode() {
++	miLocalStorage.removeItem('isSafeMode');
++	const url = new URL(window.location.href);
++	url.searchParams.delete('safemode');
++	unisonReload(url.toString());
++}
++
+ if ($i) {
+-	const connection = useStream().useChannel('main', null, 'UI');
+-	connection.on('notification', onNotification);
++	if (store.s.realtimeMode) {
++		const connection = useStream().useChannel('main');
++		connection.on('notification', onNotification);
++	}
+ 	globalEvents.on('clientNotification', notification => onNotification(notification, true));
+ 
+-	//#region Listen message from SW
+ 	if ('serviceWorker' in navigator) {
+ 		swInject();
+ 	}
+@@ -99,6 +173,50 @@ if ($i) {
+ </script>
+ 
+ <style lang="scss" module>
++.transition_menuDrawerBg_enterActive,
++.transition_menuDrawerBg_leaveActive {
++	opacity: 1;
++	transition: opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
++}
++.transition_menuDrawerBg_enterFrom,
++.transition_menuDrawerBg_leaveTo {
++	opacity: 0;
++}
++
++.transition_menuDrawer_enterActive,
++.transition_menuDrawer_leaveActive {
++	opacity: 1;
++	transform: translateX(0);
++	transition: transform 300ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
++}
++.transition_menuDrawer_enterFrom,
++.transition_menuDrawer_leaveTo {
++	opacity: 0;
++	transform: translateX(-240px);
++}
++
++.transition_widgetsDrawerBg_enterActive,
++.transition_widgetsDrawerBg_leaveActive {
++	opacity: 1;
++	transition: opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
++}
++.transition_widgetsDrawerBg_enterFrom,
++.transition_widgetsDrawerBg_leaveTo {
++	opacity: 0;
++}
++
++.transition_widgetsDrawer_enterActive,
++.transition_widgetsDrawer_leaveActive {
++	opacity: 1;
++	transform: translateX(0);
++	transition: transform 300ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
++}
++.transition_widgetsDrawer_enterFrom,
++.transition_widgetsDrawer_leaveTo {
++	opacity: 0;
++	transform: translateX(-240px);
++}
++
+ .transition_notification_move,
+ .transition_notification_enterActive,
+ .transition_notification_leaveActive {
+@@ -113,6 +231,48 @@ if ($i) {
+ 	transform: translateX(-250px);
+ }
+ 
++.menuDrawerBg {
++	z-index: 1001;
++}
++
++.menuDrawer {
++	position: fixed;
++	top: 0;
++	left: 0;
++	z-index: 1001;
++	height: 100dvh;
++}
++
++.widgetsDrawerBg {
++	z-index: 1001;
++}
++
++.widgetsDrawer {
++	position: fixed;
++	top: 0;
++	left: 0;
++	z-index: 1001;
++	width: 310px;
++	height: 100dvh;
++	padding: var(--MI-margin) var(--MI-margin) calc(var(--MI-margin) + env(safe-area-inset-bottom, 0px)) !important;
++	box-sizing: border-box;
++	overflow: auto;
++	overscroll-behavior: contain;
++	background: var(--MI_THEME-bg);
++}
++
++.widgetsCloseButton {
++	padding: 8px;
++	display: block;
++	margin: 0 auto;
++}
++
++@media (min-width: 370px) {
++	.widgetsCloseButton {
++		display: none;
++	}
++}
++
+ .notifications {
+ 	position: fixed;
+ 	z-index: 3900000;
+@@ -251,7 +411,7 @@ if ($i) {
+ 	width: 100%;
+ 	height: max-content;
+ 	text-align: center;
+-	z-index: 2147483647;
++	z-index: 2147483646;
+ 	color: #ff0;
+ 	background: rgba(0, 0, 0, 0.5);
+ 	padding: 4px 7px;
+@@ -260,9 +420,14 @@ if ($i) {
+ 	user-select: none;
+ }
+ 
++#safemodeWarn {
++	@extend #botWarn;
++	z-index: 2147483647;
++}
++
+ #devTicker {
+ 	position: fixed;
+-	top: 0;
++	bottom: 0;
+ 	left: 0;
+ 	z-index: 2147483647;
+ 	color: #ff0;
+diff --git a/packages/frontend/src/ui/_common_/navbar-for-mobile.vue b/packages/frontend/src/ui/_common_/navbar-for-mobile.vue
+deleted file mode 100644
+index 44253e93bd..0000000000
+--- a/packages/frontend/src/ui/_common_/navbar-for-mobile.vue
++++ /dev/null
+@@ -1,272 +0,0 @@
+-<!--
+-SPDX-FileCopyrightText: syuilo and misskey-project
+-SPDX-License-Identifier: AGPL-3.0-only
+--->
+-
+-<template>
+-<div :class="$style.root">
+-	<div :class="$style.top">
+-		<div :class="$style.banner" :style="{ backgroundImage: `url(${ instance.bannerUrl })` }"></div>
+-		<button class="_button" :class="$style.instance" @click="openInstanceMenu">
+-			<img :src="instance.iconUrl || instance.faviconUrl || '/favicon.ico'" alt="" :class="$style.instanceIcon"/>
+-		</button>
+-	</div>
+-	<div :class="$style.middle">
+-		<MkA :class="$style.item" :activeClass="$style.active" to="/" exact>
+-			<i :class="$style.itemIcon" class="ti ti-home ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.timeline }}</span>
+-		</MkA>
+-		<template v-for="item in menu">
+-			<div v-if="item === '-'" :class="$style.divider"></div>
+-			<component :is="navbarItemDef[item].to ? 'MkA' : 'button'" v-else-if="navbarItemDef[item] && (navbarItemDef[item].show !== false)" class="_button" :class="[$style.item, { [$style.active]: navbarItemDef[item].active }]" :activeClass="$style.active" :to="navbarItemDef[item].to" v-on="navbarItemDef[item].action ? { click: navbarItemDef[item].action } : {}">
+-				<i class="ti-fw" :class="[$style.itemIcon, navbarItemDef[item].icon]"></i><span :class="$style.itemText">{{ navbarItemDef[item].title }}</span>
+-				<span v-if="navbarItemDef[item].indicated" :class="$style.itemIndicator" class="_blink">
+-					<span v-if="navbarItemDef[item].indicateValue" class="_indicateCounter" :class="$style.itemIndicateValueIcon">{{ navbarItemDef[item].indicateValue }}</span>
+-					<i v-else class="_indicatorCircle"></i>
+-				</span>
+-			</component>
+-		</template>
+-		<div :class="$style.divider"></div>
+-		<MkA v-if="$i.isAdmin || $i.isModerator" :class="$style.item" :activeClass="$style.active" to="/admin">
+-			<i :class="$style.itemIcon" class="ti ti-dashboard ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.controlPanel }}</span>
+-		</MkA>
+-		<button :class="$style.item" class="_button" @click="more">
+-			<i :class="$style.itemIcon" class="ti ti-grid-dots ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.more }}</span>
+-			<span v-if="otherMenuItemIndicated" :class="$style.itemIndicator" class="_blink"><i class="_indicatorCircle"></i></span>
+-		</button>
+-		<MkA :class="$style.item" :activeClass="$style.active" to="/settings">
+-			<i :class="$style.itemIcon" class="ti ti-settings ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.settings }}</span>
+-		</MkA>
+-	</div>
+-	<div :class="$style.bottom">
+-		<button class="_button" :class="$style.post" data-cy-open-post-form @click="os.post">
+-			<i :class="$style.postIcon" class="ti ti-pencil ti-fw"></i><span style="position: relative;">{{ i18n.ts.note }}</span>
+-		</button>
+-		<button class="_button" :class="$style.account" @click="openAccountMenu">
+-			<MkAvatar :user="$i" :class="$style.avatar"/><MkAcct :class="$style.acct" class="_nowrap" :user="$i"/>
+-		</button>
+-	</div>
+-</div>
+-</template>
+-
+-<script lang="ts" setup>
+-import { computed, defineAsyncComponent, toRef } from 'vue';
+-import { openInstanceMenu } from './common.js';
+-import * as os from '@/os.js';
+-import { navbarItemDef } from '@/navbar.js';
+-import { $i, openAccountMenu as openAccountMenu_ } from '@/account.js';
+-import { defaultStore } from '@/store.js';
+-import { i18n } from '@/i18n.js';
+-import { instance } from '@/instance.js';
+-
+-const menu = toRef(defaultStore.state, 'menu');
+-const otherMenuItemIndicated = computed(() => {
+-	for (const def in navbarItemDef) {
+-		if (menu.value.includes(def)) continue;
+-		if (navbarItemDef[def].indicated) return true;
+-	}
+-	return false;
+-});
+-
+-function openAccountMenu(ev: MouseEvent) {
+-	openAccountMenu_({
+-		withExtraOperation: true,
+-	}, ev);
+-}
+-
+-function more() {
+-	const { dispose } = os.popup(defineAsyncComponent(() => import('@/components/MkLaunchPad.vue')), {}, {
+-		closed: () => dispose(),
+-	});
+-}
+-</script>
+-
+-<style lang="scss" module>
+-.root {
+-	--nav-bg-transparent: color(from var(--MI_THEME-navBg) srgb r g b / 0.5);
+-
+-	display: flex;
+-	flex-direction: column;
+-}
+-
+-.top {
+-	position: sticky;
+-	top: 0;
+-	z-index: 1;
+-	padding: 20px 0;
+-	background: var(--nav-bg-transparent);
+-	-webkit-backdrop-filter: var(--MI-blur, blur(8px));
+-	backdrop-filter: var(--MI-blur, blur(8px));
+-}
+-
+-.banner {
+-	position: absolute;
+-	top: 0;
+-	left: 0;
+-	width: 100%;
+-	height: 100%;
+-	background-size: cover;
+-	background-position: center center;
+-	-webkit-mask-image: linear-gradient(0deg, rgba(0,0,0,0) 15%, rgba(0,0,0,0.75) 100%);
+-	mask-image: linear-gradient(0deg, rgba(0,0,0,0) 15%, rgba(0,0,0,0.75) 100%);
+-}
+-
+-.instance {
+-	position: relative;
+-	display: block;
+-	text-align: center;
+-	width: 100%;
+-}
+-
+-.instanceIcon {
+-	display: inline-block;
+-	width: 38px;
+-	aspect-ratio: 1;
+-}
+-
+-.bottom {
+-	position: sticky;
+-	bottom: 0;
+-	padding: 20px 0;
+-	background: var(--nav-bg-transparent);
+-	-webkit-backdrop-filter: var(--MI-blur, blur(8px));
+-	backdrop-filter: var(--MI-blur, blur(8px));
+-}
+-
+-.post {
+-	position: relative;
+-	display: block;
+-	width: 100%;
+-	height: 40px;
+-	color: var(--MI_THEME-fgOnAccent);
+-	font-weight: bold;
+-	text-align: left;
+-
+-	&::before {
+-		content: "";
+-		display: block;
+-		width: calc(100% - 38px);
+-		height: 100%;
+-		margin: auto;
+-		position: absolute;
+-		top: 0;
+-		left: 0;
+-		right: 0;
+-		bottom: 0;
+-		border-radius: 999px;
+-		background: linear-gradient(90deg, var(--MI_THEME-buttonGradateA), var(--MI_THEME-buttonGradateB));
+-	}
+-
+-	&:hover, &.active {
+-		&::before {
+-			background: var(--MI_THEME-accentLighten);
+-		}
+-	}
+-}
+-
+-.postIcon {
+-	position: relative;
+-	margin-left: 30px;
+-	margin-right: 8px;
+-	width: 32px;
+-}
+-
+-.account {
+-	position: relative;
+-	display: flex;
+-	align-items: center;
+-	padding-left: 30px;
+-	width: 100%;
+-	text-align: left;
+-	box-sizing: border-box;
+-	margin-top: 16px;
+-}
+-
+-.avatar {
+-	display: block;
+-	flex-shrink: 0;
+-	position: relative;
+-	width: 32px;
+-	aspect-ratio: 1;
+-	margin-right: 8px;
+-}
+-
+-.acct {
+-	display: block;
+-	flex-shrink: 1;
+-	padding-right: 8px;
+-}
+-
+-.middle {
+-	flex: 1;
+-}
+-
+-.divider {
+-	margin: 16px 16px;
+-	border-top: solid 0.5px var(--MI_THEME-divider);
+-}
+-
+-.item {
+-	position: relative;
+-	display: block;
+-	padding-left: 24px;
+-	line-height: 2.85rem;
+-	text-overflow: ellipsis;
+-	overflow: hidden;
+-	white-space: nowrap;
+-	width: 100%;
+-	text-align: left;
+-	box-sizing: border-box;
+-	color: var(--MI_THEME-navFg);
+-
+-	&:hover {
+-		text-decoration: none;
+-		color: var(--MI_THEME-navHoverFg);
+-	}
+-
+-	&.active {
+-		color: var(--MI_THEME-navActive);
+-	}
+-
+-	&:hover, &.active {
+-		&::before {
+-			content: "";
+-			display: block;
+-			width: calc(100% - 24px);
+-			height: 100%;
+-			margin: auto;
+-			position: absolute;
+-			top: 0;
+-			left: 0;
+-			right: 0;
+-			bottom: 0;
+-			border-radius: 999px;
+-			background: var(--MI_THEME-accentedBg);
+-		}
+-	}
+-}
+-
+-.itemIcon {
+-	position: relative;
+-	width: 32px;
+-	margin-right: 8px;
+-}
+-
+-.itemIndicator {
+-	position: absolute;
+-	top: 0;
+-	left: 20px;
+-	color: var(--MI_THEME-navIndicator);
+-	font-size: 8px;
+-
+-	&:has(.itemIndicateValueIcon) {
+-		animation: none;
+-		left: auto;
+-		right: 20px;
+-	}
+-}
+-
+-.itemText {
+-	position: relative;
+-	font-size: 0.9em;
+-}
+-</style>
+diff --git a/packages/frontend/src/ui/_common_/navbar.vue b/packages/frontend/src/ui/_common_/navbar.vue
+index 9724905e02..d0c183763a 100644
+--- a/packages/frontend/src/ui/_common_/navbar.vue
++++ b/packages/frontend/src/ui/_common_/navbar.vue
+@@ -7,28 +7,34 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <div :class="[$style.root, { [$style.iconOnly]: iconOnly }]">
+ 	<div :class="$style.body">
+ 		<div :class="$style.top">
+-			<div :class="$style.banner" :style="{ backgroundImage: `url(${ instance.bannerUrl })` }"></div>
+ 			<button v-tooltip.noDelay.right="instance.name ?? i18n.ts.instance" class="_button" :class="$style.instance" @click="openInstanceMenu">
+-				<img :src="instance.iconUrl || instance.faviconUrl || '/favicon.ico'" alt="" :class="$style.instanceIcon"/>
++				<img :src="instance.iconUrl || '/favicon.ico'" alt="" :class="$style.instanceIcon" style="view-transition-name: navbar-serverIcon;"/>
++			</button>
++			<button v-if="!iconOnly" v-tooltip.noDelay.right="i18n.ts.realtimeMode" class="_button" :class="[$style.realtimeMode, store.r.realtimeMode.value ? $style.on : null]" @click="toggleRealtimeMode">
++				<i v-if="store.r.realtimeMode.value" class="ti ti-bolt ti-fw"></i>
++				<i v-else class="ti ti-bolt-off ti-fw"></i>
++			</button>
++			<button v-if="!iconOnly && showWidgetButton" v-tooltip.noDelay.right="i18n.ts.widgets" class="_button" :class="[$style.widget]" @click="() => emit('widgetButtonClick')">
++				<i class="ti ti-apps ti-fw"></i>
+ 			</button>
+ 		</div>
+ 		<div :class="$style.middle">
+ 			<MkA v-tooltip.noDelay.right="i18n.ts.timeline" :class="$style.item" :activeClass="$style.active" to="/" exact>
+-				<i :class="$style.itemIcon" class="ti ti-home ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.timeline }}</span>
++				<i :class="$style.itemIcon" class="ti ti-home ti-fw" style="view-transition-name: navbar-homeIcon;"></i><span :class="$style.itemText">{{ i18n.ts.timeline }}</span>
+ 			</MkA>
+-			<template v-for="item in menu">
++			<template v-for="item in prefer.r.menu.value">
+ 				<div v-if="item === '-'" :class="$style.divider"></div>
+ 				<component
+ 					:is="navbarItemDef[item].to ? 'MkA' : 'button'"
+-					v-else-if="navbarItemDef[item] && (navbarItemDef[item].show !== false)"
++					v-else-if="navbarItemDef[item] && (navbarItemDef[item].show == null || navbarItemDef[item].show.value !== false)"
+ 					v-tooltip.noDelay.right="navbarItemDef[item].title"
+ 					class="_button"
+-					:class="[$style.item, { [$style.active]: navbarItemDef[item].active }]"
++					:class="[$style.item]"
+ 					:activeClass="$style.active"
+ 					:to="navbarItemDef[item].to"
+ 					v-on="navbarItemDef[item].action ? { click: navbarItemDef[item].action } : {}"
+ 				>
+-					<i class="ti-fw" :class="[$style.itemIcon, navbarItemDef[item].icon]"></i><span :class="$style.itemText">{{ navbarItemDef[item].title }}</span>
++					<i class="ti-fw" :class="[$style.itemIcon, navbarItemDef[item].icon]" :style="{ viewTransitionName: 'navbar-item-' + item }"></i><span :class="$style.itemText">{{ navbarItemDef[item].title }}</span>
+ 					<span v-if="navbarItemDef[item].indicated" :class="$style.itemIndicator" class="_blink">
+ 						<span v-if="navbarItemDef[item].indicateValue" class="_indicateCounter" :class="$style.itemIndicateValueIcon">{{ navbarItemDef[item].indicateValue }}</span>
+ 						<i v-else class="_indicatorCircle"></i>
+@@ -37,40 +43,63 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			</template>
+ 			<div :class="$style.divider"></div>
+ 			<MkA v-if="$i != null && ($i.isAdmin || $i.isModerator)" v-tooltip.noDelay.right="i18n.ts.controlPanel" :class="$style.item" :activeClass="$style.active" to="/admin">
+-				<i :class="$style.itemIcon" class="ti ti-dashboard ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.controlPanel }}</span>
++				<i :class="$style.itemIcon" class="ti ti-dashboard ti-fw" style="view-transition-name: navbar-controlPanel;"></i><span :class="$style.itemText">{{ i18n.ts.controlPanel }}</span>
+ 			</MkA>
+ 			<button class="_button" :class="$style.item" @click="more">
+-				<i :class="$style.itemIcon" class="ti ti-grid-dots ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.more }}</span>
++				<i :class="$style.itemIcon" class="ti ti-grid-dots ti-fw" style="view-transition-name: navbar-more;"></i><span :class="$style.itemText">{{ i18n.ts.more }}</span>
+ 				<span v-if="otherMenuItemIndicated" :class="$style.itemIndicator" class="_blink"><i class="_indicatorCircle"></i></span>
+ 			</button>
+ 			<MkA v-tooltip.noDelay.right="i18n.ts.settings" :class="$style.item" :activeClass="$style.active" to="/settings">
+-				<i :class="$style.itemIcon" class="ti ti-settings ti-fw"></i><span :class="$style.itemText">{{ i18n.ts.settings }}</span>
++				<i :class="$style.itemIcon" class="ti ti-settings ti-fw" style="view-transition-name: navbar-settings;"></i><span :class="$style.itemText">{{ i18n.ts.settings }}</span>
+ 			</MkA>
+ 		</div>
+ 		<div :class="$style.bottom">
++			<button v-if="iconOnly && showWidgetButton" v-tooltip.noDelay.right="i18n.ts.widgets" class="_button" :class="[$style.widget]" @click="() => emit('widgetButtonClick')">
++				<i class="ti ti-apps ti-fw"></i>
++			</button>
++			<button v-if="iconOnly" v-tooltip.noDelay.right="i18n.ts.realtimeMode" class="_button" :class="[$style.realtimeMode, store.r.realtimeMode.value ? $style.on : null]" @click="toggleRealtimeMode">
++				<i v-if="store.r.realtimeMode.value" class="ti ti-bolt ti-fw"></i>
++				<i v-else class="ti ti-bolt-off ti-fw"></i>
++			</button>
+ 			<button v-tooltip.noDelay.right="i18n.ts.note" class="_button" :class="[$style.post]" data-cy-open-post-form @click="() => { os.post(); }">
+ 				<i class="ti ti-pencil ti-fw" :class="$style.postIcon"></i><span :class="$style.postText">{{ i18n.ts.note }}</span>
+ 			</button>
+ 			<button v-if="$i != null" v-tooltip.noDelay.right="`${i18n.ts.account}: @${$i.username}`" class="_button" :class="[$style.account]" @click="openAccountMenu">
+-				<MkAvatar :user="$i" :class="$style.avatar"/><MkAcct class="_nowrap" :class="$style.acct" :user="$i"/>
++				<MkAvatar :user="$i" :class="$style.avatar" style="view-transition-name: navbar-avatar;"/><MkAcct class="_nowrap" :class="$style.acct" :user="$i"/>
+ 			</button>
+ 		</div>
+ 	</div>
+-	<button v-if="!forceIconOnly" class="_button" :class="$style.toggleButton" @click="toggleIconOnly">
+-		<!--
+-		<svg viewBox="0 0 16 48" :class="$style.toggleButtonShape">
+-			<g transform="matrix(0.333333,0,0,0.222222,0.000895785,13.3333)">
+-				<path d="M23.935,-24C37.223,-24 47.995,-7.842 47.995,12.09C47.995,34.077 47.995,62.07 47.995,84.034C47.995,93.573 45.469,102.721 40.972,109.466C36.475,116.211 30.377,120 24.018,120L23.997,120C10.743,120 -0.003,136.118 -0.003,156C-0.003,156 -0.003,156 -0.003,156L-0.003,-60L-0.003,-59.901C-0.003,-50.379 2.519,-41.248 7.007,-34.515C11.496,-27.782 17.584,-24 23.931,-24C23.932,-24 23.934,-24 23.935,-24Z" style="fill:var(--MI_THEME-navBg);"/>
+-			</g>
+-		</svg>
+-		-->
+-		<svg viewBox="0 0 16 64" :class="$style.toggleButtonShape">
+-			<g transform="matrix(0.333333,0,0,0.222222,0.000895785,21.3333)">
+-				<path d="M47.488,7.995C47.79,10.11 47.943,12.266 47.943,14.429C47.997,26.989 47.997,84 47.997,84C47.997,84 44.018,118.246 23.997,133.5C-0.374,152.07 -0.003,192 -0.003,192L-0.003,-96C-0.003,-96 0.151,-56.216 23.997,-37.5C40.861,-24.265 46.043,-1.243 47.488,7.995Z" style="fill:var(--MI_THEME-navBg);"/>
+-			</g>
+-		</svg>
+-		<i :class="'ti ' + `ti-chevron-${ iconOnly ? 'right' : 'left' }`" style="font-size: 12px; margin-left: -8px;"></i>
+-	</button>
++
++	<!--
++	<svg viewBox="0 0 16 48" :class="$style.subButtonShape">
++		<g transform="matrix(0.333333,0,0,0.222222,0.000895785,13.3333)">
++			<path d="M23.935,-24C37.223,-24 47.995,-7.842 47.995,12.09C47.995,34.077 47.995,62.07 47.995,84.034C47.995,93.573 45.469,102.721 40.972,109.466C36.475,116.211 30.377,120 24.018,120L23.997,120C10.743,120 -0.003,136.118 -0.003,156C-0.003,156 -0.003,156 -0.003,156L-0.003,-60L-0.003,-59.901C-0.003,-50.379 2.519,-41.248 7.007,-34.515C11.496,-27.782 17.584,-24 23.931,-24C23.932,-24 23.934,-24 23.935,-24Z" style="fill:var(--MI_THEME-navBg);"/>
++		</g>
++	</svg>
++	-->
++
++	<div v-if="!forceIconOnly && prefer.r.showNavbarSubButtons.value" :class="$style.subButtons">
++		<div :class="$style.subButton">
++			<svg viewBox="0 0 16 64" :class="$style.subButtonShape">
++				<g transform="matrix(0.333333,0,0,0.222222,0.000895785,21.3333)">
++					<path d="M47.488,7.995C47.79,10.11 47.943,12.266 47.943,14.429C47.997,26.989 47.997,84 47.997,84C47.997,84 44.018,118.246 23.997,133.5C-0.374,152.07 -0.003,192 -0.003,192L-0.003,-96C-0.003,-96 0.151,-56.216 23.997,-37.5C40.861,-24.265 46.043,-1.243 47.488,7.995Z" style="fill:var(--MI_THEME-navBg);"/>
++				</g>
++			</svg>
++			<button class="_button" :class="$style.subButtonClickable" @click="menuEdit"><i :class="$style.subButtonIcon" class="ti ti-settings-2"></i></button>
++		</div>
++		<template v-if="!props.asDrawer">
++			<div :class="$style.subButtonGapFill"></div>
++			<div :class="$style.subButtonGapFillDivider"></div>
++			<div :class="$style.subButton">
++				<svg viewBox="0 0 16 64" :class="$style.subButtonShape">
++					<g transform="matrix(0.333333,0,0,0.222222,0.000895785,21.3333)">
++						<path d="M47.488,7.995C47.79,10.11 47.943,12.266 47.943,14.429C47.997,26.989 47.997,84 47.997,84C47.997,84 44.018,118.246 23.997,133.5C-0.374,152.07 -0.003,192 -0.003,192L-0.003,-96C-0.003,-96 0.151,-56.216 23.997,-37.5C40.861,-24.265 46.043,-1.243 47.488,7.995Z" style="fill:var(--MI_THEME-navBg);"/>
++					</g>
++				</svg>
++				<button class="_button" :class="$style.subButtonClickable" @click="toggleIconOnly"><i v-if="iconOnly" class="ti ti-chevron-right" :class="$style.subButtonIcon"></i><i v-else class="ti ti-chevron-left" :class="$style.subButtonIcon"></i></button>
++			</div>
++		</template>
++	</div>
+ </div>
+ </template>
+ 
+@@ -79,21 +108,34 @@ import { computed, defineAsyncComponent, ref, watch } from 'vue';
+ import { openInstanceMenu } from './common.js';
+ import * as os from '@/os.js';
+ import { navbarItemDef } from '@/navbar.js';
+-import { $i, openAccountMenu as openAccountMenu_ } from '@/account.js';
+-import { defaultStore } from '@/store.js';
++import { store } from '@/store.js';
+ import { i18n } from '@/i18n.js';
+ import { instance } from '@/instance.js';
+-import { getHTMLElementOrNull } from '@/scripts/get-dom-node-or-null.js';
++import { getHTMLElementOrNull } from '@/utility/get-dom-node-or-null.js';
++import { useRouter } from '@/router.js';
++import { prefer } from '@/preferences.js';
++import { getAccountMenu } from '@/accounts.js';
++import { $i } from '@/i.js';
+ 
+-const forceIconOnly = ref(window.innerWidth <= 1279);
++const router = useRouter();
++
++const props = defineProps<{
++	showWidgetButton?: boolean;
++	asDrawer?: boolean;
++}>();
++
++const emit = defineEmits<{
++	(ev: 'widgetButtonClick'): void;
++}>();
++
++const forceIconOnly = ref(!props.asDrawer && window.innerWidth <= 1279);
+ const iconOnly = computed(() => {
+-	return forceIconOnly.value || (defaultStore.reactiveState.menuDisplay.value === 'sideIcon');
++	return !props.asDrawer && (forceIconOnly.value || (store.r.menuDisplay.value === 'sideIcon'));
+ });
+ 
+-const menu = computed(() => defaultStore.state.menu);
+ const otherMenuItemIndicated = computed(() => {
+ 	for (const def in navbarItemDef) {
+-		if (menu.value.includes(def)) continue;
++		if (prefer.r.menu.value.includes(def)) continue;
+ 		if (navbarItemDef[def].indicated) return true;
+ 	}
+ 	return false;
+@@ -105,29 +147,55 @@ function calcViewState() {
+ 
+ window.addEventListener('resize', calcViewState);
+ 
+-watch(defaultStore.reactiveState.menuDisplay, () => {
++watch(store.r.menuDisplay, () => {
+ 	calcViewState();
+ });
+ 
+ function toggleIconOnly() {
+-	defaultStore.set('menuDisplay', iconOnly.value ? 'sideFull' : 'sideIcon');
++	if (window.document.startViewTransition && prefer.s.animation) {
++		window.document.startViewTransition(() => {
++			store.set('menuDisplay', iconOnly.value ? 'sideFull' : 'sideIcon');
++		});
++	} else {
++		store.set('menuDisplay', iconOnly.value ? 'sideFull' : 'sideIcon');
++	}
++}
++
++function toggleRealtimeMode(ev: PointerEvent) {
++	os.popupMenu([{
++		type: 'label',
++		text: i18n.ts.realtimeMode,
++	}, {
++		text: store.s.realtimeMode ? i18n.ts.turnItOff : i18n.ts.turnItOn,
++		icon: store.s.realtimeMode ? 'ti ti-bolt-off' : 'ti ti-bolt',
++		action: () => {
++			store.set('realtimeMode', !store.s.realtimeMode);
++			window.location.reload();
++		},
++	}], ev.currentTarget ?? ev.target);
+ }
+ 
+-function openAccountMenu(ev: MouseEvent) {
+-	openAccountMenu_({
++async function openAccountMenu(ev: PointerEvent) {
++	const menuItems = await getAccountMenu({
+ 		withExtraOperation: true,
+-	}, ev);
++	});
++
++	os.popupMenu(menuItems, ev.currentTarget ?? ev.target);
+ }
+ 
+-function more(ev: MouseEvent) {
++async function more(ev: PointerEvent) {
+ 	const target = getHTMLElementOrNull(ev.currentTarget ?? ev.target);
+ 	if (!target) return;
+-	const { dispose } = os.popup(defineAsyncComponent(() => import('@/components/MkLaunchPad.vue')), {
+-		src: target,
++	const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkLaunchPad.vue').then(x => x.default), {
++		anchorElement: target,
+ 	}, {
+ 		closed: () => dispose(),
+ 	});
+ }
++
++function menuEdit() {
++	router.push('/settings/navbar');
++}
+ </script>
+ 
+ <style lang="scss" module>
+@@ -136,58 +204,201 @@ function more(ev: MouseEvent) {
+ 	--nav-icon-only-width: 80px;
+ 	--nav-bg-transparent: color(from var(--MI_THEME-navBg) srgb r g b / 0.5);
+ 
++	--subButtonWidth: 20px;
++
+ 	flex: 0 0 var(--nav-width);
+ 	width: var(--nav-width);
+ 	box-sizing: border-box;
+ }
+ 
+ .body {
+-	position: fixed;
+-	top: 0;
+-	left: 0;
+-	z-index: 1001;
++	position: relative;
+ 	width: var(--nav-icon-only-width);
+-	height: 100dvh;
++	height: 100%;
+ 	box-sizing: border-box;
+ 	overflow: auto;
+ 	overflow-x: clip;
+ 	overscroll-behavior: contain;
+ 	background: var(--MI_THEME-navBg);
+ 	contain: strict;
++
++	/* 画面が縦に長い、設置している項目数が少ないなどの環境においても確実にbottomを最下部に表示するため */
+ 	display: flex;
+ 	flex-direction: column;
+-	direction: rtl; // スクロールバーを左に表示したいため
++
++	direction: rtl; /* スクロールバーを左に表示したいため */
+ }
+ 
+ .top {
++	flex-shrink: 0;
+ 	direction: ltr;
++
++	/* 疑似progressive blur */
++	&::before {
++		position: absolute;
++		z-index: -1;
++		inset: 0;
++		content: "";
++		backdrop-filter: blur(8px);
++		mask-image: linear-gradient(
++			to top,
++			rgb(0 0 0 / 0%) 0%,
++			rgb(0 0 0 / 4.9%) 7.75%,
++			rgb(0 0 0 / 10.4%) 11.25%,
++			rgb(0 0 0 / 45%) 23.55%,
++			rgb(0 0 0 / 55%) 26.45%,
++			rgb(0 0 0 / 89.6%) 38.75%,
++			rgb(0 0 0 / 95.1%) 42.25%,
++			rgb(0 0 0 / 100%) 50%
++		);
++	}
++
++	&::after {
++		position: absolute;
++		z-index: -1;
++		inset: 0;
++		bottom: 25%;
++		content: "";
++		backdrop-filter: blur(16px);
++		mask-image: linear-gradient(
++			to top,
++			rgb(0 0 0 / 0%) 0%,
++			rgb(0 0 0 / 4.9%) 15.5%,
++			rgb(0 0 0 / 10.4%) 22.5%,
++			rgb(0 0 0 / 45%) 47.1%,
++			rgb(0 0 0 / 55%) 52.9%,
++			rgb(0 0 0 / 89.6%) 77.5%,
++			rgb(0 0 0 / 95.1%) 91.9%,
++			rgb(0 0 0 / 100%) 100%
++		);
++	}
+ }
+ 
+ .middle {
++	flex: 1;
+ 	direction: ltr;
+ }
+ 
+ .bottom {
++	flex-shrink: 0;
+ 	direction: ltr;
++
++	/* 疑似progressive blur */
++	&::before {
++		position: absolute;
++		z-index: -1;
++		inset: -30px 0 0 0;
++		content: "";
++		backdrop-filter: blur(8px);
++		mask-image: linear-gradient(
++			to bottom,
++			rgb(0 0 0 / 0%) 0%,
++			rgb(0 0 0 / 4.9%) 7.75%,
++			rgb(0 0 0 / 10.4%) 11.25%,
++			rgb(0 0 0 / 45%) 23.55%,
++			rgb(0 0 0 / 55%) 26.45%,
++			rgb(0 0 0 / 89.6%) 38.75%,
++			rgb(0 0 0 / 95.1%) 42.25%,
++			rgb(0 0 0 / 100%) 50%
++		);
++		pointer-events: none;
++	}
++
++	&::after {
++		position: absolute;
++		z-index: -1;
++		inset: 0;
++		top: 25%;
++		content: "";
++		backdrop-filter: blur(16px);
++		mask-image: linear-gradient(
++			to bottom,
++			rgb(0 0 0 / 0%) 0%,
++			rgb(0 0 0 / 4.9%) 15.5%,
++			rgb(0 0 0 / 10.4%) 22.5%,
++			rgb(0 0 0 / 45%) 47.1%,
++			rgb(0 0 0 / 55%) 52.9%,
++			rgb(0 0 0 / 89.6%) 77.5%,
++			rgb(0 0 0 / 95.1%) 91.9%,
++			rgb(0 0 0 / 100%) 100%
++		);
++	}
+ }
+ 
+-.toggleButton {
++.subButtons {
+ 	position: fixed;
+-	bottom: 20px;
+ 	left: var(--nav-width);
++	bottom: 80px;
+ 	z-index: 1001;
+-	width: 16px;
+-	height: 64px;
+ 	box-sizing: border-box;
+ }
+ 
+-.toggleButtonShape {
++.subButton {
++	display: block;
++	position: relative;
++	z-index: 1002;
++	width: var(--subButtonWidth);
++	height: 50px;
++	box-sizing: border-box;
++	align-content: center;
++}
++
++.subButtonShape {
+ 	position: absolute;
+ 	z-index: -1;
+ 	top: 0;
++	bottom: 0;
+ 	left: 0;
+-	width: 16px;
++	margin: auto;
++	width: var(--subButtonWidth);
++	height: calc(var(--subButtonWidth) * 4);
++}
++
++.subButtonClickable {
++	position: absolute;
++	display: block;
++	max-width: unset;
++	width: 24px;
++	height: 42px;
++	top: 0;
++	bottom: 0;
++	left: -4px;
++	margin: auto;
++	font-size: 10px;
++
++	&:hover {
++		color: var(--MI_THEME-fgHighlighted);
++
++		.subButtonIcon {
++			opacity: 1;
++		}
++	}
++}
++
++.subButtonIcon {
++	margin-left: -4px;
++	opacity: 0.7;
++}
++
++.subButtonGapFill {
++	position: relative;
++	z-index: 1001;
++	width: var(--subButtonWidth);
+ 	height: 64px;
++	margin-top: -32px;
++	margin-bottom: -32px;
++	pointer-events: none;
++	background: var(--MI_THEME-navBg);
++}
++
++.subButtonGapFillDivider {
++	position: relative;
++	z-index: 1010;
++	margin-left: -2px;
++	width: 14px;
++	height: 1px;
++	background: var(--MI_THEME-divider);
++	pointer-events: none;
+ }
+ 
+ .root:not(.iconOnly) {
+@@ -196,56 +407,48 @@ function more(ev: MouseEvent) {
+ 	}
+ 
+ 	.top {
++		--top-height: 80px;
++
+ 		position: sticky;
+ 		top: 0;
+ 		z-index: 1;
+-		padding: 20px 0;
+-		background: var(--nav-bg-transparent);
+-		-webkit-backdrop-filter: var(--MI-blur, blur(8px));
+-		backdrop-filter: var(--MI-blur, blur(8px));
+-	}
+-
+-	.banner {
+-		position: absolute;
+-		top: 0;
+-		left: 0;
+-		width: 100%;
+-		height: 100%;
+-		background-size: cover;
+-		background-position: center center;
+-		-webkit-mask-image: linear-gradient(0deg, rgba(0,0,0,0) 15%, rgba(0,0,0,0.75) 100%);
+-		mask-image: linear-gradient(0deg, rgba(0,0,0,0) 15%, rgba(0,0,0,0.75) 100%);
++		display: flex;
++		height: var(--top-height);
++		padding-left: 6px;
+ 	}
+ 
+ 	.instance {
+ 		position: relative;
+-		display: block;
+-		text-align: center;
+-		width: 100%;
+-
+-		&:focus-visible {
+-			outline: none;
+-
+-			> .instanceIcon {
+-				outline: 2px solid var(--MI_THEME-focus);
+-				outline-offset: 2px;
+-			}
+-		}
++		width: var(--top-height);
+ 	}
+ 
+ 	.instanceIcon {
+ 		display: inline-block;
+ 		width: 38px;
+ 		aspect-ratio: 1;
++		border-radius: 8px;
++	}
++
++	.realtimeMode {
++		display: inline-block;
++		width: var(--top-height);
++		margin-left: auto;
++
++		&.on {
++			color: var(--MI_THEME-accent);
++		}
++	}
++
++	.widget {
++		display: inline-block;
++		width: var(--top-height);
++		margin-left: auto;
+ 	}
+ 
+ 	.bottom {
+ 		position: sticky;
+ 		bottom: 0;
+ 		padding-top: 20px;
+-		background: var(--nav-bg-transparent);
+-		-webkit-backdrop-filter: var(--MI-blur, blur(8px));
+-		backdrop-filter: var(--MI-blur, blur(8px));
+ 	}
+ 
+ 	.post {
+@@ -283,7 +486,7 @@ function more(ev: MouseEvent) {
+ 
+ 		&:hover, &.active {
+ 			&::before {
+-				background: var(--MI_THEME-accentLighten);
++				background: hsl(from var(--MI_THEME-accent) h s calc(l + 10));
+ 			}
+ 		}
+ 	}
+@@ -333,10 +536,6 @@ function more(ev: MouseEvent) {
+ 		padding-right: 8px;
+ 	}
+ 
+-	.middle {
+-		flex: 1;
+-	}
+-
+ 	.divider {
+ 		margin: 16px 16px;
+ 		border-top: solid 0.5px var(--MI_THEME-divider);
+@@ -357,7 +556,7 @@ function more(ev: MouseEvent) {
+ 
+ 		&:hover {
+ 			text-decoration: none;
+-			color: var(--MI_THEME-navHoverFg);
++			color: light-dark(hsl(from var(--MI_THEME-navFg) h s calc(l - 17)), hsl(from var(--MI_THEME-navFg) h s calc(l + 17)));
+ 		}
+ 
+ 		&.active {
+@@ -419,7 +618,7 @@ function more(ev: MouseEvent) {
+ 		font-size: 0.9em;
+ 	}
+ 
+-	.toggleButton {
++	.subButtons {
+ 		left: var(--nav-width);
+ 	}
+ }
+@@ -437,9 +636,6 @@ function more(ev: MouseEvent) {
+ 		top: 0;
+ 		z-index: 1;
+ 		padding: 20px 0;
+-		background: var(--nav-bg-transparent);
+-		-webkit-backdrop-filter: var(--MI-blur, blur(8px));
+-		backdrop-filter: var(--MI-blur, blur(8px));
+ 	}
+ 
+ 	.instance {
+@@ -461,15 +657,33 @@ function more(ev: MouseEvent) {
+ 		display: inline-block;
+ 		width: 30px;
+ 		aspect-ratio: 1;
++		border-radius: 8px;
+ 	}
+ 
+ 	.bottom {
+ 		position: sticky;
+ 		bottom: 0;
+ 		padding-top: 20px;
+-		background: var(--nav-bg-transparent);
+-		-webkit-backdrop-filter: var(--MI-blur, blur(8px));
+-		backdrop-filter: var(--MI-blur, blur(8px));
++	}
++
++	.widget {
++		display: block;
++		position: relative;
++		width: 100%;
++		height: 52px;
++		text-align: center;
++	}
++
++	.realtimeMode {
++		display: block;
++		position: relative;
++		width: 100%;
++		height: 52px;
++		text-align: center;
++
++		&.on {
++			color: var(--MI_THEME-accent);
++		}
+ 	}
+ 
+ 	.post {
+@@ -505,7 +719,7 @@ function more(ev: MouseEvent) {
+ 
+ 		&:hover, &.active {
+ 			&::before {
+-				background: var(--MI_THEME-accentLighten);
++				background: hsl(from var(--MI_THEME-accent) h s calc(l + 10));
+ 			}
+ 		}
+ 	}
+@@ -545,10 +759,6 @@ function more(ev: MouseEvent) {
+ 		display: none;
+ 	}
+ 
+-	.middle {
+-		flex: 1;
+-	}
+-
+ 	.divider {
+ 		margin: 8px auto;
+ 		width: calc(100% - 32px);
+@@ -558,7 +768,7 @@ function more(ev: MouseEvent) {
+ 	.item {
+ 		display: block;
+ 		position: relative;
+-		padding: 18px 0;
++		padding: 16px 0;
+ 		width: 100%;
+ 		text-align: center;
+ 
+@@ -623,7 +833,7 @@ function more(ev: MouseEvent) {
+ 		}
+ 	}
+ 
+-	.toggleButton {
++	.subButtons {
+ 		left: var(--nav-icon-only-width);
+ 	}
+ }
+diff --git a/packages/frontend/src/ui/classic.header.vue b/packages/frontend/src/ui/classic.header.vue
+deleted file mode 100644
+index f4633314ae..0000000000
+--- a/packages/frontend/src/ui/classic.header.vue
++++ /dev/null
+@@ -1,211 +0,0 @@
+-<!--
+-SPDX-FileCopyrightText: syuilo and misskey-project
+-SPDX-License-Identifier: AGPL-3.0-only
+--->
+-
+-<template>
+-<div class="azykntjl">
+-	<div class="body">
+-		<div class="left">
+-			<button v-click-anime class="item _button instance" @click="openInstanceMenu">
+-				<img :src="instance.iconUrl ?? instance.faviconUrl ?? '/favicon.ico'" class="_ghost"/>
+-			</button>
+-			<MkA v-click-anime v-tooltip="i18n.ts.timeline" class="item index" activeClass="active" to="/" exact>
+-				<i class="ti ti-home ti-fw"></i>
+-			</MkA>
+-			<template v-for="item in menu">
+-				<div v-if="item === '-'" class="divider"></div>
+-				<component :is="navbarItemDef[item].to ? 'MkA' : 'button'" v-else-if="navbarItemDef[item] && (navbarItemDef[item].show !== false)" v-click-anime v-tooltip="navbarItemDef[item].title" class="item _button" :class="item" activeClass="active" :to="navbarItemDef[item].to" v-on="navbarItemDef[item].action ? { click: navbarItemDef[item].action } : {}">
+-					<i class="ti-fw" :class="navbarItemDef[item].icon"></i>
+-					<span v-if="navbarItemDef[item].indicated" class="indicator _blink"><i class="_indicatorCircle"></i></span>
+-				</component>
+-			</template>
+-			<div class="divider"></div>
+-			<MkA v-if="$i.isAdmin || $i.isModerator" v-click-anime v-tooltip="i18n.ts.controlPanel" class="item" activeClass="active" to="/admin" :behavior="settingsWindowed ? 'window' : null">
+-				<i class="ti ti-dashboard ti-fw"></i>
+-			</MkA>
+-			<button v-click-anime class="item _button" @click="more">
+-				<i class="ti ti-dots ti-fw"></i>
+-				<span v-if="otherNavItemIndicated" class="indicator _blink"><i class="_indicatorCircle"></i></span>
+-			</button>
+-		</div>
+-		<div class="right">
+-			<MkA v-click-anime v-tooltip="i18n.ts.settings" class="item" activeClass="active" to="/settings" :behavior="settingsWindowed ? 'window' : null">
+-				<i class="ti ti-settings ti-fw"></i>
+-			</MkA>
+-			<button v-click-anime class="item _button account" @click="openAccountMenu">
+-				<MkAvatar :user="$i" class="avatar"/><MkAcct class="acct" :user="$i"/>
+-			</button>
+-			<div class="post" @click="os.post()">
+-				<MkButton class="button" gradate full rounded>
+-					<i class="ti ti-pencil ti-fw"></i>
+-				</MkButton>
+-			</div>
+-		</div>
+-	</div>
+-</div>
+-</template>
+-
+-<script lang="ts" setup>
+-import { computed, defineAsyncComponent, onMounted, ref } from 'vue';
+-import { openInstanceMenu } from './_common_/common.js';
+-import * as os from '@/os.js';
+-import { navbarItemDef } from '@/navbar.js';
+-import { openAccountMenu as openAccountMenu_, $i } from '@/account.js';
+-import MkButton from '@/components/MkButton.vue';
+-import { defaultStore } from '@/store.js';
+-import { instance } from '@/instance.js';
+-import { i18n } from '@/i18n.js';
+-
+-const WINDOW_THRESHOLD = 1400;
+-
+-const settingsWindowed = ref(window.innerWidth > WINDOW_THRESHOLD);
+-const menu = ref(defaultStore.state.menu);
+-// const menuDisplay = computed(defaultStore.makeGetterSetter('menuDisplay'));
+-const otherNavItemIndicated = computed<boolean>(() => {
+-	for (const def in navbarItemDef) {
+-		if (menu.value.includes(def)) continue;
+-		if (navbarItemDef[def].indicated) return true;
+-	}
+-	return false;
+-});
+-
+-function more(ev: MouseEvent) {
+-	const { dispose } = os.popup(defineAsyncComponent(() => import('@/components/MkLaunchPad.vue')), {
+-		src: ev.currentTarget ?? ev.target,
+-		anchor: { x: 'center', y: 'bottom' },
+-	}, {
+-		closed: () => dispose(),
+-	});
+-}
+-
+-function openAccountMenu(ev: MouseEvent) {
+-	openAccountMenu_({
+-		withExtraOperation: true,
+-	}, ev);
+-}
+-
+-onMounted(() => {
+-	window.addEventListener('resize', () => {
+-		settingsWindowed.value = (window.innerWidth >= WINDOW_THRESHOLD);
+-	}, { passive: true });
+-});
+-
+-</script>
+-
+-<style lang="scss" scoped>
+-.azykntjl {
+-	$height: 60px;
+-	$avatar-size: 32px;
+-	$avatar-margin: 8px;
+-
+-	position: sticky;
+-	top: 0;
+-	z-index: 1000;
+-	width: 100%;
+-	height: $height;
+-	background-color: var(--MI_THEME-bg);
+-
+-	> .body {
+-		max-width: 1380px;
+-		margin: 0 auto;
+-		display: flex;
+-
+-		> .right,
+-		> .left {
+-
+-			> .item {
+-				position: relative;
+-				font-size: 0.9em;
+-				display: inline-block;
+-				padding: 0 12px;
+-				line-height: $height;
+-
+-				> i,
+-				> .avatar {
+-					margin-right: 0;
+-				}
+-
+-				> i {
+-					left: 10px;
+-				}
+-
+-				> .avatar {
+-					width: $avatar-size;
+-					height: $avatar-size;
+-					vertical-align: middle;
+-				}
+-
+-				> .indicator {
+-					position: absolute;
+-					top: 0;
+-					left: 0;
+-					color: var(--MI_THEME-navIndicator);
+-					font-size: 8px;
+-				}
+-
+-				&:hover {
+-					text-decoration: none;
+-					color: var(--MI_THEME-navHoverFg);
+-				}
+-
+-				&.active {
+-					color: var(--MI_THEME-navActive);
+-				}
+-			}
+-
+-			> .divider {
+-				display: inline-block;
+-				height: 16px;
+-				margin: 0 10px;
+-				border-right: solid 0.5px var(--MI_THEME-divider);
+-			}
+-
+-			> .instance {
+-				display: inline-block;
+-				position: relative;
+-				width: 56px;
+-				height: 100%;
+-				vertical-align: bottom;
+-
+-				> img {
+-					display: inline-block;
+-					width: 24px;
+-					position: absolute;
+-					top: 0;
+-					right: 0;
+-					bottom: 0;
+-					left: 0;
+-					margin: auto;
+-				}
+-			}
+-
+-			> .post {
+-				display: inline-block;
+-
+-				> .button {
+-					width: 40px;
+-					height: 40px;
+-					padding: 0;
+-					min-width: 0;
+-				}
+-			}
+-
+-			> .account {
+-				display: inline-flex;
+-				align-items: center;
+-				vertical-align: top;
+-				margin-right: 8px;
+-
+-				> .acct {
+-					margin-left: 8px;
+-				}
+-			}
+-		}
+-
+-		> .right {
+-			margin-left: auto;
+-		}
+-	}
+-}
+-</style>
+diff --git a/packages/frontend/src/ui/classic.sidebar.vue b/packages/frontend/src/ui/classic.sidebar.vue
+deleted file mode 100644
+index 5acef0bef8..0000000000
+--- a/packages/frontend/src/ui/classic.sidebar.vue
++++ /dev/null
+@@ -1,243 +0,0 @@
+-<!--
+-SPDX-FileCopyrightText: syuilo and misskey-project
+-SPDX-License-Identifier: AGPL-3.0-only
+--->
+-
+-<template>
+-<div class="npcljfve" :class="{ iconOnly }">
+-	<button v-click-anime class="item _button account" @click="openAccountMenu">
+-		<MkAvatar :user="$i" class="avatar"/><MkAcct class="text" :user="$i"/>
+-	</button>
+-	<div class="post" data-cy-open-post-form @click="os.post">
+-		<MkButton class="button" gradate full rounded>
+-			<i class="ti ti-pencil ti-fw"></i><span v-if="!iconOnly" class="text">{{ i18n.ts.note }}</span>
+-		</MkButton>
+-	</div>
+-	<div class="divider"></div>
+-	<MkA v-click-anime class="item index" activeClass="active" to="/" exact>
+-		<i class="ti ti-home ti-fw"></i><span class="text">{{ i18n.ts.timeline }}</span>
+-	</MkA>
+-	<template v-for="item in menu">
+-		<div v-if="item === '-'" class="divider"></div>
+-		<component :is="navbarItemDef[item].to ? 'MkA' : 'button'" v-else-if="navbarItemDef[item] && (navbarItemDef[item].show !== false)" v-click-anime class="item _button" :class="item" activeClass="active" :to="navbarItemDef[item].to" v-on="navbarItemDef[item].action ? { click: navbarItemDef[item].action } : {}">
+-			<i class="ti-fw" :class="navbarItemDef[item].icon"></i><span class="text">{{ navbarItemDef[item].title }}</span>
+-			<span v-if="navbarItemDef[item].indicated" class="indicator _blink">
+-				<span v-if="navbarItemDef[item].indicateValue" class="_indicateCounter itemIndicateValueIcon">{{ navbarItemDef[item].indicateValue }}</span>
+-				<i v-else class="_indicatorCircle"></i>
+-			</span>
+-		</component>
+-	</template>
+-	<div class="divider"></div>
+-	<MkA v-if="$i.isAdmin || $i.isModerator" v-click-anime class="item" activeClass="active" to="/admin" :behavior="settingsWindowed ? 'window' : null">
+-		<i class="ti ti-dashboard ti-fw"></i><span class="text">{{ i18n.ts.controlPanel }}</span>
+-	</MkA>
+-	<button v-click-anime class="item _button" @click="more">
+-		<i class="ti ti-dots ti-fw"></i><span class="text">{{ i18n.ts.more }}</span>
+-		<span v-if="otherNavItemIndicated" class="indicator _blink"><i class="_indicatorCircle"></i></span>
+-	</button>
+-	<MkA v-click-anime class="item" activeClass="active" to="/settings" :behavior="settingsWindowed ? 'window' : null">
+-		<i class="ti ti-settings ti-fw"></i><span class="text">{{ i18n.ts.settings }}</span>
+-	</MkA>
+-	<div class="divider"></div>
+-	<div class="about">
+-		<button v-click-anime class="item _button" @click="openInstanceMenu">
+-			<img :src="instance.iconUrl ?? instance.faviconUrl ?? '/favicon.ico'" class="_ghost"/>
+-		</button>
+-	</div>
+-	<!--<MisskeyLogo class="misskey"/>-->
+-</div>
+-</template>
+-
+-<script lang="ts" setup>
+-import { defineAsyncComponent, computed, watch, ref, shallowRef } from 'vue';
+-import { openInstanceMenu } from './_common_/common.js';
+-// import { host } from '@@/js/config.js';
+-import * as os from '@/os.js';
+-import { navbarItemDef } from '@/navbar.js';
+-import { openAccountMenu as openAccountMenu_, $i } from '@/account.js';
+-import MkButton from '@/components/MkButton.vue';
+-// import { StickySidebar } from '@/scripts/sticky-sidebar.js';
+-// import { mainRouter } from '@/router.js';
+-//import MisskeyLogo from '@assets/client/misskey.svg';
+-import { defaultStore } from '@/store.js';
+-import { instance } from '@/instance.js';
+-import { i18n } from '@/i18n.js';
+-
+-const WINDOW_THRESHOLD = 1400;
+-
+-const menu = ref(defaultStore.state.menu);
+-const menuDisplay = computed(defaultStore.makeGetterSetter('menuDisplay'));
+-const otherNavItemIndicated = computed<boolean>(() => {
+-	for (const def in navbarItemDef) {
+-		if (menu.value.includes(def)) continue;
+-		if (navbarItemDef[def].indicated) return true;
+-	}
+-	return false;
+-});
+-const el = shallowRef<HTMLElement>();
+-// let accounts = $ref([]);
+-// let connection = $ref(null);
+-const iconOnly = ref(false);
+-const settingsWindowed = ref(false);
+-
+-function calcViewState() {
+-	iconOnly.value = (window.innerWidth <= WINDOW_THRESHOLD) || (menuDisplay.value === 'sideIcon');
+-	settingsWindowed.value = (window.innerWidth > WINDOW_THRESHOLD);
+-}
+-
+-function more(ev: MouseEvent) {
+-	const { dispose } = os.popup(defineAsyncComponent(() => import('@/components/MkLaunchPad.vue')), {
+-		src: ev.currentTarget ?? ev.target,
+-	}, {
+-		closed: () => dispose(),
+-	});
+-}
+-
+-function openAccountMenu(ev: MouseEvent) {
+-	openAccountMenu_({
+-		withExtraOperation: true,
+-	}, ev);
+-}
+-
+-watch(defaultStore.reactiveState.menuDisplay, () => {
+-	calcViewState();
+-});
+-
+-</script>
+-
+-<style lang="scss" scoped>
+-.npcljfve {
+-	$ui-font-size: 1em; // TODO: どこかに集約したい
+-	$nav-icon-only-width: 78px; // TODO: どこかに集約したい
+-	$avatar-size: 32px;
+-	$avatar-margin: 8px;
+-
+-	padding: 0 16px;
+-	box-sizing: border-box;
+-	width: 260px;
+-
+-	&.iconOnly {
+-		flex: 0 0 $nav-icon-only-width;
+-		width: $nav-icon-only-width !important;
+-
+-		> .divider {
+-			margin: 8px auto;
+-			width: calc(100% - 32px);
+-		}
+-
+-		> .post {
+-			> .button {
+-				width: 46px;
+-				height: 46px;
+-				padding: 0;
+-			}
+-		}
+-
+-		> .item {
+-			padding-left: 0;
+-			width: 100%;
+-			text-align: center;
+-			font-size: $ui-font-size * 1.1;
+-			line-height: 3.7rem;
+-
+-			> i,
+-			> .avatar {
+-				margin-right: 0;
+-			}
+-
+-			> i {
+-				left: 10px;
+-			}
+-
+-			> .text {
+-				display: none;
+-			}
+-		}
+-	}
+-
+-	> .divider {
+-		margin: 10px 0;
+-		border-top: solid 0.5px var(--MI_THEME-divider);
+-	}
+-
+-	> .post {
+-		position: sticky;
+-		top: 0;
+-		z-index: 1;
+-		padding: 16px 0;
+-		background: var(--MI_THEME-bg);
+-
+-		> .button {
+-			min-width: 0;
+-		}
+-	}
+-
+-	> .about {
+-		fill: currentColor;
+-		padding: 8px 0 16px 0;
+-		text-align: center;
+-
+-		> .item {
+-			display: block;
+-			width: 32px;
+-			margin: 0 auto;
+-
+-			img {
+-				display: block;
+-				width: 100%;
+-			}
+-		}
+-	}
+-
+-	> .item {
+-		position: relative;
+-		display: block;
+-		font-size: $ui-font-size;
+-		line-height: 2.6rem;
+-		text-overflow: ellipsis;
+-		overflow: hidden;
+-		white-space: nowrap;
+-		width: 100%;
+-		text-align: left;
+-		box-sizing: border-box;
+-
+-		> i {
+-			width: 32px;
+-		}
+-
+-		> i,
+-		> .avatar {
+-			margin-right: $avatar-margin;
+-		}
+-
+-		> .avatar {
+-			width: $avatar-size;
+-			height: $avatar-size;
+-			vertical-align: middle;
+-		}
+-
+-		> .indicator {
+-			position: absolute;
+-			top: 0;
+-			left: 0;
+-			color: var(--MI_THEME-navIndicator);
+-			font-size: 8px;
+-
+-			&:has(.itemIndicateValueIcon) {
+-				animation: none;
+-				left: auto;
+-				right: 20px;
+-			}
+-		}
+-
+-		&:hover {
+-			text-decoration: none;
+-			color: var(--MI_THEME-navHoverFg);
+-		}
+-
+-		&.active {
+-			color: var(--MI_THEME-navActive);
+-		}
+-	}
+-}
+-</style>
+diff --git a/packages/frontend/src/ui/deck.vue b/packages/frontend/src/ui/deck.vue
+index 8e99c457ad..0bafa1074c 100644
+--- a/packages/frontend/src/ui/deck.vue
++++ b/packages/frontend/src/ui/deck.vue
+@@ -4,110 +4,102 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<div :class="[$style.root, { [$style.rootIsMobile]: isMobile }]">
+-	<XSidebar v-if="!isMobile"/>
+-
+-	<div :class="$style.main">
+-		<XAnnouncements v-if="$i"/>
+-		<XStatusBars/>
+-		<div ref="columnsEl" :class="[$style.sections, { [$style.center]: deckStore.reactiveState.columnAlign.value === 'center', [$style.snapScroll]: snapScroll }]" @contextmenu.self.prevent="onContextmenu" @wheel.self="onWheel">
+-			<!-- sectionを利用しているのは、deck.vue側でcolumnに対してfirst-of-typeを効かせるため -->
+-			<section
+-				v-for="ids in layout"
+-				:class="$style.section"
+-				:style="columns.filter(c => ids.includes(c.id)).some(c => c.flexible) ? { flex: 1, minWidth: '350px' } : { width: Math.max(...columns.filter(c => ids.includes(c.id)).map(c => c.width)) + 'px' }"
+-				@wheel.self="onWheel"
+-			>
+-				<component
+-					:is="columnComponents[columns.find(c => c.id === id)!.type] ?? XTlColumn"
+-					v-for="id in ids"
+-					:ref="id"
+-					:key="id"
+-					:class="$style.column"
+-					:column="columns.find(c => c.id === id)!"
+-					:isStacked="ids.length > 1"
+-					@headerWheel="onWheel"
+-				/>
+-			</section>
+-			<div v-if="layout.length === 0" class="_panel" :class="$style.onboarding">
+-				<div>{{ i18n.ts._deck.introduction }}</div>
+-				<MkButton primary style="margin: 1em auto;" @click="addColumn">{{ i18n.ts._deck.addColumn }}</MkButton>
+-				<div>{{ i18n.ts._deck.introduction2 }}</div>
++<div :class="[$style.root]">
++	<XTitlebar v-if="prefer.r.showTitlebar.value" style="flex-shrink: 0;"/>
++
++	<div :class="$style.nonTitlebarArea">
++		<XSidebar v-if="!isMobile && prefer.r['deck.navbarPosition'].value === 'left'"/>
++
++		<div :class="[$style.main, { [$style.withWallpaper]: withWallpaper, [$style.withSidebarAndTitlebar]: !isMobile && prefer.r['deck.navbarPosition'].value === 'left' && prefer.r.showTitlebar.value }]" :style="{ backgroundImage: prefer.s['deck.wallpaper'] != null ? `url(${ prefer.s['deck.wallpaper'] })` : '' }">
++			<XNavbarH v-if="!isMobile && prefer.r['deck.navbarPosition'].value === 'top'" :acrylic="withWallpaper"/>
++
++			<XReloadSuggestion v-if="shouldSuggestReload"/>
++			<XPreferenceRestore v-if="shouldSuggestRestoreBackup"/>
++			<XAnnouncements v-if="$i"/>
++			<XStatusBars/>
++			<div :class="$style.columnsWrapper">
++				<!-- passive: https://bugs.webkit.org/show_bug.cgi?id=281300 -->
++				<div ref="columnsEl" :class="[$style.columns, { [$style.center]: prefer.r['deck.columnAlign'].value === 'center', [$style.snapScroll]: snapScroll }]" @contextmenu.self.prevent="onContextmenu" @wheel.passive.self="onWheel">
++					<!-- sectionを利用しているのは、deck.vue側でcolumnに対してfirst-of-typeを効かせるため -->
++					<section
++						v-for="ids in layout"
++						:class="$style.section"
++						:style="columns.filter(c => ids.includes(c.id)).some(c => c.flexible) ? { flex: 1, minWidth: '350px' } : { width: Math.max(...columns.filter(c => ids.includes(c.id)).map(c => c.width)) + 'px' }"
++						@wheel.passive.self="onWheel"
++					>
++						<component
++							:is="columnComponents[columns.find(c => c.id === id)!.type] ?? XTlColumn"
++							v-for="id in ids"
++							:ref="id"
++							:key="id"
++							:class="{ '_shadow': withWallpaper }"
++							:column="columns.find(c => c.id === id)!"
++							:isStacked="ids.length > 1"
++							@headerWheel="onWheel"
++						/>
++					</section>
++					<div v-if="layout.length === 0" class="_panel _gaps" :class="$style.onboarding">
++						<div>{{ i18n.ts._deck.introduction }}</div>
++						<div>{{ i18n.ts._deck.introduction2 }}</div>
++						<MkInfo v-if="!store.r.tips.value.deck" closable @close="closeTip('deck')">
++							<button class="_textButton" @click="showTour">{{ i18n.ts._deck.showHowToUse }}</button>
++						</MkInfo>
++					</div>
++				</div>
++
++				<div v-if="prefer.r['deck.menuPosition'].value === 'right'" :class="$style.sideMenu">
++					<div :class="$style.sideMenuTop">
++						<button ref="swicthProfileButtonEl" v-tooltip.noDelay.left="`${i18n.ts._deck.profile}: ${prefer.s['deck.profile']}`" :class="$style.sideMenuButton" class="_button" @click="switchProfileMenu"><i class="ti ti-caret-down"></i></button>
++						<button v-tooltip.noDelay.left="i18n.ts._deck.deleteProfile" :class="$style.sideMenuButton" class="_button" @click="deleteProfile"><i class="ti ti-trash"></i></button>
++					</div>
++					<div :class="$style.sideMenuMiddle">
++						<button ref="addColumnButtonEl" v-tooltip.noDelay.left="i18n.ts._deck.addColumn" :class="$style.sideMenuButton" class="_button" @click="addColumn"><i class="ti ti-plus"></i></button>
++					</div>
++					<div :class="$style.sideMenuBottom">
++						<button ref="settingsButtonEl" v-tooltip.noDelay.left="i18n.ts.settings" :class="$style.sideMenuButton" class="_button" @click="showSettings"><i class="ti ti-settings-2"></i></button>
++					</div>
++				</div>
+ 			</div>
+-			<div :class="$style.sideMenu">
+-				<div :class="$style.sideMenuTop">
+-					<button v-tooltip.noDelay.left="`${i18n.ts._deck.profile}: ${deckStore.state.profile}`" :class="$style.sideMenuButton" class="_button" @click="changeProfile"><i class="ti ti-caret-down"></i></button>
+-					<button v-tooltip.noDelay.left="i18n.ts._deck.deleteProfile" :class="$style.sideMenuButton" class="_button" @click="deleteProfile"><i class="ti ti-trash"></i></button>
++
++			<div v-if="prefer.r['deck.menuPosition'].value === 'bottom'" :class="$style.bottomMenu">
++				<div :class="$style.bottomMenuLeft">
++					<button ref="swicthProfileButtonEl" v-tooltip.noDelay.top="`${i18n.ts._deck.profile}: ${prefer.s['deck.profile']}`" :class="$style.bottomMenuButton" class="_button" @click="switchProfileMenu"><i class="ti ti-caret-down"></i></button>
++					<button v-tooltip.noDelay.top="i18n.ts._deck.deleteProfile" :class="$style.bottomMenuButton" class="_button" @click="deleteProfile"><i class="ti ti-trash"></i></button>
+ 				</div>
+-				<div :class="$style.sideMenuMiddle">
+-					<button v-tooltip.noDelay.left="i18n.ts._deck.addColumn" :class="$style.sideMenuButton" class="_button" @click="addColumn"><i class="ti ti-plus"></i></button>
++				<div :class="$style.bottomMenuMiddle">
++					<button ref="addColumnButtonEl" v-tooltip.noDelay.top="i18n.ts._deck.addColumn" :class="$style.bottomMenuButton" class="_button" @click="addColumn"><i class="ti ti-plus"></i></button>
+ 				</div>
+-				<div :class="$style.sideMenuBottom">
+-					<button v-tooltip.noDelay.left="i18n.ts.settings" :class="$style.sideMenuButton" class="_button" @click="showSettings"><i class="ti ti-settings"></i></button>
++				<div :class="$style.bottomMenuRight">
++					<button ref="settingsButtonEl" v-tooltip.noDelay.top="i18n.ts.settings" :class="$style.bottomMenuButton" class="_button" @click="showSettings"><i class="ti ti-settings-2"></i></button>
+ 				</div>
+ 			</div>
+-		</div>
+-	</div>
+ 
+-	<div v-if="isMobile" :class="$style.nav">
+-		<button :class="$style.navButton" class="_button" @click="drawerMenuShowing = true"><i :class="$style.navButtonIcon" class="ti ti-menu-2"></i><span v-if="menuIndicated" :class="$style.navButtonIndicator" class="_blink"><i class="_indicatorCircle"></i></span></button>
+-		<button :class="$style.navButton" class="_button" @click="mainRouter.push('/')"><i :class="$style.navButtonIcon" class="ti ti-home"></i></button>
+-		<button :class="$style.navButton" class="_button" @click="mainRouter.push('/my/notifications')">
+-			<i :class="$style.navButtonIcon" class="ti ti-bell"></i>
+-			<span v-if="$i?.hasUnreadNotification" :class="$style.navButtonIndicator" class="_blink">
+-				<span class="_indicateCounter" :class="$style.itemIndicateValueIcon">{{ $i.unreadNotificationsCount > 99 ? '99+' : $i.unreadNotificationsCount }}</span>
+-			</span>
+-		</button>
+-		<button :class="$style.postButton" class="_button" @click="os.post()"><i :class="$style.navButtonIcon" class="ti ti-pencil"></i></button>
+-	</div>
++			<XNavbarH v-if="!isMobile && prefer.r['deck.navbarPosition'].value === 'bottom'" :acrylic="withWallpaper"/>
+ 
+-	<Transition
+-		:enterActiveClass="defaultStore.state.animation ? $style.transition_menuDrawerBg_enterActive : ''"
+-		:leaveActiveClass="defaultStore.state.animation ? $style.transition_menuDrawerBg_leaveActive : ''"
+-		:enterFromClass="defaultStore.state.animation ? $style.transition_menuDrawerBg_enterFrom : ''"
+-		:leaveToClass="defaultStore.state.animation ? $style.transition_menuDrawerBg_leaveTo : ''"
+-	>
+-		<div
+-			v-if="drawerMenuShowing"
+-			:class="$style.menuBg"
+-			class="_modalBg"
+-			@click="drawerMenuShowing = false"
+-			@touchstart.passive="drawerMenuShowing = false"
+-		></div>
+-	</Transition>
+-
+-	<Transition
+-		:enterActiveClass="defaultStore.state.animation ? $style.transition_menuDrawer_enterActive : ''"
+-		:leaveActiveClass="defaultStore.state.animation ? $style.transition_menuDrawer_leaveActive : ''"
+-		:enterFromClass="defaultStore.state.animation ? $style.transition_menuDrawer_enterFrom : ''"
+-		:leaveToClass="defaultStore.state.animation ? $style.transition_menuDrawer_leaveTo : ''"
+-	>
+-		<div v-if="drawerMenuShowing" :class="$style.menu">
+-			<XDrawerMenu/>
++			<XMobileFooterMenu v-if="isMobile" v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
+ 		</div>
+-	</Transition>
++	</div>
+ 
+-	<XCommon/>
++	<XCommon v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
+ </div>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, defineAsyncComponent, ref, watch, shallowRef } from 'vue';
+-import { v4 as uuid } from 'uuid';
++import { defineAsyncComponent, ref, useTemplateRef } from 'vue';
+ import XCommon from './_common_/common.vue';
+-import { deckStore, columnTypes, addColumn as addColumnToStore, forceSaveDeck, loadDeck, getProfiles, deleteProfile as deleteProfile_ } from './deck/deck-store.js';
+-import type { ColumnType } from './deck/deck-store.js';
+-import type { MenuItem } from '@/types/menu.js';
++import { genId } from '@/utility/id.js';
+ import XSidebar from '@/ui/_common_/navbar.vue';
+-import XDrawerMenu from '@/ui/_common_/navbar-for-mobile.vue';
+-import MkButton from '@/components/MkButton.vue';
++import XNavbarH from '@/ui/_common_/navbar-h.vue';
++import XMobileFooterMenu from '@/ui/_common_/mobile-footer-menu.vue';
++import XTitlebar from '@/ui/_common_/titlebar.vue';
++import XPreferenceRestore from '@/ui/_common_/PreferenceRestore.vue';
++import XReloadSuggestion from '@/ui/_common_/ReloadSuggestion.vue';
+ import * as os from '@/os.js';
+-import { navbarItemDef } from '@/navbar.js';
+-import { $i } from '@/account.js';
++import { $i } from '@/i.js';
+ import { i18n } from '@/i18n.js';
+-import { unisonReload } from '@/scripts/unison-reload.js';
+-import { deviceKind } from '@/scripts/device-kind.js';
+-import { defaultStore } from '@/store.js';
++import { deviceKind } from '@/utility/device-kind.js';
++import { prefer } from '@/preferences.js';
++import { store } from '@/store.js';
+ import XMainColumn from '@/ui/deck/main-column.vue';
+ import XTlColumn from '@/ui/deck/tl-column.vue';
+ import XAntennaColumn from '@/ui/deck/antenna-column.vue';
+@@ -118,7 +110,15 @@ import XWidgetsColumn from '@/ui/deck/widgets-column.vue';
+ import XMentionsColumn from '@/ui/deck/mentions-column.vue';
+ import XDirectColumn from '@/ui/deck/direct-column.vue';
+ import XRoleTimelineColumn from '@/ui/deck/role-timeline-column.vue';
+-import { mainRouter } from '@/router/main.js';
++import XChatColumn from '@/ui/deck/chat-column.vue';
++import MkInfo from '@/components/MkInfo.vue';
++import { mainRouter } from '@/router.js';
++import { columns, layout, columnTypes, switchProfileMenu, addColumn as addColumnToStore, deleteProfile as deleteProfile_ } from '@/deck.js';
++import { shouldSuggestRestoreBackup } from '@/preferences/utility.js';
++import { shouldSuggestReload } from '@/utility/reload-suggest.js';
++import { startTour } from '@/utility/tour.js';
++import { closeTip } from '@/tips.js';
++
+ const XStatusBars = defineAsyncComponent(() => import('@/ui/_common_/statusbars.vue'));
+ const XAnnouncements = defineAsyncComponent(() => import('@/ui/_common_/announcements.vue'));
+ 
+@@ -133,12 +133,13 @@ const columnComponents = {
+ 	mentions: XMentionsColumn,
+ 	direct: XDirectColumn,
+ 	roleTimeline: XRoleTimelineColumn,
++	chat: XChatColumn,
+ };
+ 
+ mainRouter.navHook = (path, flag): boolean => {
+ 	if (flag === 'forcePage') return false;
+-	const noMainColumn = !deckStore.state.columns.some(x => x.type === 'main');
+-	if (deckStore.state.navWindow || noMainColumn) {
++	const noMainColumn = !columns.value.some(x => x.type === 'main');
++	if (prefer.s['deck.navWindow'] || noMainColumn) {
+ 		os.pageWindow(path);
+ 		return true;
+ 	}
+@@ -150,8 +151,12 @@ window.addEventListener('resize', () => {
+ 	isMobile.value = window.innerWidth <= 500;
+ });
+ 
+-const snapScroll = deviceKind === 'smartphone' || deviceKind === 'tablet';
++// ポインターイベント非対応用に初期値はUAから出す
++const snapScroll = ref(deviceKind === 'smartphone' || deviceKind === 'tablet');
++const withWallpaper = prefer.s['deck.wallpaper'] != null;
+ const drawerMenuShowing = ref(false);
++const widgetsShowing = ref(false);
++const gap = prefer.r['deck.columnGap'];
+ 
+ /*
+ const route = 'TODO';
+@@ -160,177 +165,115 @@ watch(route, () => {
+ });
+ */
+ 
+-const columns = deckStore.reactiveState.columns;
+-const layout = deckStore.reactiveState.layout;
+-const menuIndicated = computed(() => {
+-	if ($i == null) return false;
+-	for (const def in navbarItemDef) {
+-		if (navbarItemDef[def].indicated) return true;
+-	}
+-	return false;
+-});
+-
+ function showSettings() {
+ 	os.pageWindow('/settings/deck');
+ }
+ 
+-const columnsEl = shallowRef<HTMLElement>();
++const columnsEl = useTemplateRef('columnsEl');
++const addColumnButtonEl = useTemplateRef('addColumnButtonEl');
++const settingsButtonEl = useTemplateRef('settingsButtonEl');
++const swicthProfileButtonEl = useTemplateRef('swicthProfileButtonEl');
+ 
+-const addColumn = async (ev) => {
++async function addColumn(ev: PointerEvent) {
+ 	const { canceled, result: column } = await os.select({
+ 		title: i18n.ts._deck.addColumn,
+-		items: columnTypes.map(column => ({
+-			value: column, text: i18n.ts._deck._columns[column],
++		items: columnTypes.filter(column => column !== 'chat' || $i == null || $i.policies.chatAvailability !== 'unavailable').map(column => ({
++			value: column, label: i18n.ts._deck._columns[column],
+ 		})),
+ 	});
+ 	if (canceled || column == null) return;
+ 
+ 	addColumnToStore({
+ 		type: column,
+-		id: uuid(),
++		id: genId(),
+ 		name: null,
+ 		width: 330,
+ 		soundSetting: { type: null, volume: 1 },
+ 	});
+-};
++}
+ 
+-const onContextmenu = (ev) => {
++function onContextmenu(ev: PointerEvent) {
+ 	os.contextMenu([{
+ 		text: i18n.ts._deck.addColumn,
+ 		action: addColumn,
+ 	}], ev);
+-};
++}
++
++// タッチでスクロールしてるときはスナップスクロールを有効にする
++function pointerEvent(ev: PointerEvent) {
++	snapScroll.value = ev.pointerType === 'touch';
++}
++
++window.document.addEventListener('pointerdown', pointerEvent, { passive: true });
+ 
+ function onWheel(ev: WheelEvent) {
++	// WheelEvent はマウスからしか発火しないのでスナップスクロールは無効化する
++	snapScroll.value = false;
+ 	if (ev.deltaX === 0 && columnsEl.value != null) {
+ 		columnsEl.value.scrollLeft += ev.deltaY;
+ 	}
+ }
+ 
+-document.documentElement.style.overflowY = 'hidden';
+-document.documentElement.style.scrollBehavior = 'auto';
+-
+-loadDeck();
+-
+-function changeProfile(ev: MouseEvent) {
+-	let items: MenuItem[] = [{
+-		text: deckStore.state.profile,
+-		active: true,
+-		action: () => {},
+-	}];
+-	getProfiles().then(profiles => {
+-		items.push(...(profiles.filter(k => k !== deckStore.state.profile).map(k => ({
+-			text: k,
+-			action: () => {
+-				deckStore.set('profile', k);
+-				unisonReload();
+-			},
+-		}))), { type: 'divider' as const }, {
+-			text: i18n.ts._deck.newProfile,
+-			icon: 'ti ti-plus',
+-			action: async () => {
+-				const { canceled, result: name } = await os.inputText({
+-					title: i18n.ts._deck.profile,
+-					minLength: 1,
+-				});
+-
+-				if (canceled || name == null) return;
+-
+-				os.promiseDialog((async () => {
+-					await deckStore.set('profile', name);
+-					await forceSaveDeck();
+-				})(), () => {
+-					unisonReload();
+-				});
+-			},
+-		});
+-	}).then(() => {
+-		os.popupMenu(items, ev.currentTarget ?? ev.target);
+-	});
+-}
+-
+ async function deleteProfile() {
++	if (prefer.s['deck.profile'] == null) return;
++
+ 	const { canceled } = await os.confirm({
+ 		type: 'warning',
+-		text: i18n.tsx.deleteAreYouSure({ x: deckStore.state.profile }),
++		text: i18n.tsx.deleteAreYouSure({ x: prefer.s['deck.profile'] }),
+ 	});
+ 	if (canceled) return;
+ 
+-	os.promiseDialog((async () => {
+-		if (deckStore.state.profile === 'default') {
+-			await deckStore.set('columns', []);
+-			await deckStore.set('layout', []);
+-			await forceSaveDeck();
+-		} else {
+-			await deleteProfile_(deckStore.state.profile);
+-		}
+-		await deckStore.set('profile', 'default');
+-	})(), () => {
+-		unisonReload();
+-	});
+-}
+-</script>
++	await deleteProfile_(prefer.s['deck.profile']);
+ 
+-<style>
+-html,
+-body {
+-	width: 100%;
+-	height: 100%;
+-	overflow: clip;
+-	position: fixed;
+-	top: 0;
+-	left: 0;
+-	overscroll-behavior: none;
++	os.success();
+ }
+ 
+-#misskey_app {
+-	width: 100%;
+-	height: 100%;
+-	overflow: clip;
+-	position: absolute;
+-	top: 0;
+-	left: 0;
+-}
+-</style>
++function showTour() {
++	if (addColumnButtonEl.value == null ||
++		settingsButtonEl.value == null ||
++		swicthProfileButtonEl.value == null) {
++		return;
++	}
+ 
+-<style lang="scss" module>
+-.transition_menuDrawerBg_enterActive,
+-.transition_menuDrawerBg_leaveActive {
+-	opacity: 1;
+-	transition: opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
+-}
+-.transition_menuDrawerBg_enterFrom,
+-.transition_menuDrawerBg_leaveTo {
+-	opacity: 0;
++	startTour([{
++		element: addColumnButtonEl.value,
++		title: i18n.ts._deck._howToUse.addColumn_title,
++		description: i18n.ts._deck._howToUse.addColumn_description,
++	}, {
++		element: settingsButtonEl.value,
++		title: i18n.ts._deck._howToUse.settings_title,
++		description: i18n.ts._deck._howToUse.settings_description,
++	}, {
++		element: swicthProfileButtonEl.value,
++		title: i18n.ts._deck._howToUse.switchProfile_title,
++		description: i18n.ts._deck._howToUse.switchProfile_description,
++	}]).then(() => {
++		closeTip('deck');
++	});
+ }
+ 
+-.transition_menuDrawer_enterActive,
+-.transition_menuDrawer_leaveActive {
+-	opacity: 1;
+-	transform: translateX(0);
+-	transition: transform 300ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
+-}
+-.transition_menuDrawer_enterFrom,
+-.transition_menuDrawer_leaveTo {
+-	opacity: 0;
+-	transform: translateX(-240px);
+-}
++window.document.documentElement.style.overflowY = 'hidden';
++window.document.documentElement.style.scrollBehavior = 'auto';
++</script>
+ 
++<style lang="scss" module>
+ .root {
+-	$nav-hide-threshold: 650px; // TODO: どこかに集約したい
+-
+ 	--MI-margin: var(--MI-marginHalf);
+ 
+-	--columnGap: 6px;
++	--columnGap: v-bind("gap + 'px'");
+ 
+ 	display: flex;
++	flex-direction: column;
+ 	height: 100dvh;
+ 	box-sizing: border-box;
+ 	flex: 1;
++	background: var(--MI_THEME-navBg);
+ }
+ 
+-.rootIsMobile {
+-	padding-bottom: 100px;
++.nonTitlebarArea {
++	display: flex;
++	flex: 1;
++	min-height: 0;
+ }
+ 
+ .main {
+@@ -338,15 +281,34 @@ body {
+ 	min-width: 0;
+ 	display: flex;
+ 	flex-direction: column;
++
++	&:not(.withWallpaper) {
++		background: var(--MI_THEME-deckBg);
++	}
++
++	&.withSidebarAndTitlebar {
++		border-radius: 12px 0 0 0;
++		overflow: clip;
++	}
++}
++
++.columnsWrapper {
++	flex: 1;
++	display: flex;
++	flex-direction: row;
++
++	// これがないと狭い画面でマージンが広いデッキを表示したときにナビゲーションフッターが画面の外に追いやられて操作不能になる場合がある
++	min-height: 0;
+ }
+ 
+-.sections {
++.columns {
+ 	flex: 1;
+ 	display: flex;
+ 	overflow-x: auto;
+ 	overflow-y: clip;
+ 	overscroll-behavior: contain;
+-	background: var(--MI_THEME-deckBg);
++	padding: var(--columnGap);
++	gap: var(--columnGap);
+ 
+ 	&.center {
+ 		> .section:first-of-type {
+@@ -366,15 +328,10 @@ body {
+ .section {
+ 	display: flex;
+ 	flex-direction: column;
+-	scroll-snap-align: start;
+ 	flex-shrink: 0;
+-	padding-top: var(--columnGap);
+-	padding-bottom: var(--columnGap);
+-	padding-left: var(--columnGap);
+-
+-	> .column:not(:last-of-type) {
+-		margin-bottom: var(--columnGap);
+-	}
++	gap: var(--columnGap);
++	scroll-snap-align: start;
++	scroll-margin-left: var(--columnGap);
+ }
+ 
+ .onboarding {
+@@ -413,90 +370,30 @@ body {
+ 	margin-top: auto;
+ }
+ 
+-.menuBg {
+-	z-index: 1001;
+-}
+-
+-.menu {
+-	position: fixed;
+-	top: 0;
+-	left: 0;
+-	z-index: 1001;
+-	height: 100dvh;
+-	width: 240px;
+-	box-sizing: border-box;
+-	contain: strict;
+-	overflow: auto;
+-	overscroll-behavior: contain;
+-	background: var(--MI_THEME-navBg);
+-}
+-
+-.nav {
+-	position: fixed;
+-	z-index: 1000;
+-	bottom: 0;
+-	left: 0;
+-	padding: 12px 12px max(12px, env(safe-area-inset-bottom, 0px)) 12px;
+-	display: grid;
+-	grid-template-columns: 1fr 1fr 1fr 1fr;
+-	grid-gap: 8px;
+-	width: 100%;
+-	box-sizing: border-box;
+-	-webkit-backdrop-filter: var(--MI-blur, blur(32px));
+-	backdrop-filter: var(--MI-blur, blur(32px));
+-	background-color: var(--MI_THEME-header);
+-	border-top: solid 0.5px var(--MI_THEME-divider);
++.bottomMenu {
++	flex-shrink: 0;
++	display: flex;
++	flex-direction: row;
++	justify-content: center;
++	height: 32px;
+ }
+ 
+-.navButton {
+-	position: relative;
+-	padding: 0;
++.bottomMenuButton {
++	display: inline-block;
++	height: 100%;
+ 	aspect-ratio: 1;
+-	width: 100%;
+-	max-width: 60px;
+-	margin: auto;
+-	border-radius: 100%;
+-	background: var(--MI_THEME-panel);
+-	color: var(--MI_THEME-fg);
+-
+-	&:hover {
+-		background: var(--MI_THEME-panelHighlight);
+-	}
+-
+-	&:active {
+-		background: hsl(from var(--MI_THEME-panel) h s calc(l - 2));
+-	}
+ }
+ 
+-.postButton {
+-	composes: navButton;
+-	background: linear-gradient(90deg, var(--MI_THEME-buttonGradateA), var(--MI_THEME-buttonGradateB));
+-	color: var(--MI_THEME-fgOnAccent);
+-
+-	&:hover {
+-		background: linear-gradient(90deg, hsl(from var(--MI_THEME-accent) h s calc(l + 5)), hsl(from var(--MI_THEME-accent) h s calc(l + 5)));
+-	}
+-
+-	&:active {
+-		background: linear-gradient(90deg, hsl(from var(--MI_THEME-accent) h s calc(l + 5)), hsl(from var(--MI_THEME-accent) h s calc(l + 5)));
+-	}
++.bottomMenuLeft {
++	margin-right: auto;
+ }
+ 
+-.navButtonIcon {
+-	font-size: 18px;
+-	vertical-align: middle;
++.bottomMenuMiddle {
++	margin-left: auto;
++	margin-right: auto;
+ }
+ 
+-.navButtonIndicator {
+-	position: absolute;
+-	top: 0;
+-	left: 0;
+-	color: var(--MI_THEME-indicator);
+-	font-size: 16px;
+-
+-	&:has(.itemIndicateValueIcon) {
+-		animation: none;
+-		font-size: 12px;
+-	}
++.bottomMenuRight {
++	margin-left: auto;
+ }
+ </style>
+diff --git a/packages/frontend/src/ui/universal.vue b/packages/frontend/src/ui/universal.vue
+index 9fff5efe51..95582edea1 100644
+--- a/packages/frontend/src/ui/universal.vue
++++ b/packages/frontend/src/ui/universal.vue
+@@ -4,119 +4,57 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<div :class="$style.root">
+-	<XSidebar v-if="!isMobile" :class="$style.sidebar"/>
++<div :class="[$style.root, { '_forceShrinkSpacer': deviceKind === 'smartphone' }]">
++	<XTitlebar v-if="prefer.r.showTitlebar.value" style="flex-shrink: 0;"/>
+ 
+-	<MkStickyContainer ref="contents" :class="$style.contents" style="container-type: inline-size;" @contextmenu.stop="onContextmenu">
+-		<template #header>
++	<div :class="$style.nonTitlebarArea">
++		<XSidebar v-if="!isMobile" :class="$style.sidebar" :showWidgetButton="!showWidgetsSide" @widgetButtonClick="widgetsShowing = true"/>
++
++		<div :class="[$style.contents, !isMobile && prefer.r.showTitlebar.value ? $style.withSidebarAndTitlebar : null]" @contextmenu.stop="onContextmenu">
+ 			<div>
++				<XReloadSuggestion v-if="shouldSuggestReload"/>
++				<XPreferenceRestore v-if="shouldSuggestRestoreBackup"/>
+ 				<XAnnouncements v-if="$i"/>
+ 				<XStatusBars :class="$style.statusbars"/>
+ 			</div>
+-		</template>
+-		<RouterView/>
+-		<div :class="$style.spacer"></div>
+-	</MkStickyContainer>
+-
+-	<div v-if="isDesktop && !pageMetadata?.needWideArea" :class="$style.widgets">
+-		<XWidgets/>
+-	</div>
+-
+-	<button v-if="!isDesktop && !pageMetadata?.needWideArea && !isMobile" :class="$style.widgetButton" class="_button" @click="widgetsShowing = true"><i class="ti ti-apps"></i></button>
+-
+-	<div v-if="isMobile" ref="navFooter" :class="$style.nav">
+-		<button :class="$style.navButton" class="_button" @click="drawerMenuShowing = true"><i :class="$style.navButtonIcon" class="ti ti-menu-2"></i><span v-if="menuIndicated" :class="$style.navButtonIndicator" class="_blink"><i class="_indicatorCircle"></i></span></button>
+-		<button :class="$style.navButton" class="_button" @click="isRoot ? top() : mainRouter.push('/')"><i :class="$style.navButtonIcon" class="ti ti-home"></i></button>
+-		<button :class="$style.navButton" class="_button" @click="mainRouter.push('/my/notifications')">
+-			<i :class="$style.navButtonIcon" class="ti ti-bell"></i>
+-			<span v-if="$i?.hasUnreadNotification" :class="$style.navButtonIndicator" class="_blink">
+-				<span class="_indicateCounter" :class="$style.itemIndicateValueIcon">{{ $i.unreadNotificationsCount > 99 ? '99+' : $i.unreadNotificationsCount }}</span>
+-			</span>
+-		</button>
+-		<button :class="$style.navButton" class="_button" @click="widgetsShowing = true"><i :class="$style.navButtonIcon" class="ti ti-apps"></i></button>
+-		<button :class="$style.postButton" class="_button" @click="os.post()"><i :class="$style.navButtonIcon" class="ti ti-pencil"></i></button>
+-	</div>
+-
+-	<Transition
+-		:enterActiveClass="defaultStore.state.animation ? $style.transition_menuDrawerBg_enterActive : ''"
+-		:leaveActiveClass="defaultStore.state.animation ? $style.transition_menuDrawerBg_leaveActive : ''"
+-		:enterFromClass="defaultStore.state.animation ? $style.transition_menuDrawerBg_enterFrom : ''"
+-		:leaveToClass="defaultStore.state.animation ? $style.transition_menuDrawerBg_leaveTo : ''"
+-	>
+-		<div
+-			v-if="drawerMenuShowing"
+-			:class="$style.menuDrawerBg"
+-			class="_modalBg"
+-			@click="drawerMenuShowing = false"
+-			@touchstart.passive="drawerMenuShowing = false"
+-		></div>
+-	</Transition>
+-
+-	<Transition
+-		:enterActiveClass="defaultStore.state.animation ? $style.transition_menuDrawer_enterActive : ''"
+-		:leaveActiveClass="defaultStore.state.animation ? $style.transition_menuDrawer_leaveActive : ''"
+-		:enterFromClass="defaultStore.state.animation ? $style.transition_menuDrawer_enterFrom : ''"
+-		:leaveToClass="defaultStore.state.animation ? $style.transition_menuDrawer_leaveTo : ''"
+-	>
+-		<div v-if="drawerMenuShowing" :class="$style.menuDrawer">
+-			<XDrawerMenu/>
++			<StackingRouterView v-if="prefer.s['experimental.stackingRouterView']" :class="$style.content"/>
++			<RouterView v-else :class="$style.content"/>
++			<XMobileFooterMenu v-if="isMobile" ref="navFooter" v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
+ 		</div>
+-	</Transition>
+-
+-	<Transition
+-		:enterActiveClass="defaultStore.state.animation ? $style.transition_widgetsDrawerBg_enterActive : ''"
+-		:leaveActiveClass="defaultStore.state.animation ? $style.transition_widgetsDrawerBg_leaveActive : ''"
+-		:enterFromClass="defaultStore.state.animation ? $style.transition_widgetsDrawerBg_enterFrom : ''"
+-		:leaveToClass="defaultStore.state.animation ? $style.transition_widgetsDrawerBg_leaveTo : ''"
+-	>
+-		<div
+-			v-if="widgetsShowing"
+-			:class="$style.widgetsDrawerBg"
+-			class="_modalBg"
+-			@click="widgetsShowing = false"
+-			@touchstart.passive="widgetsShowing = false"
+-		></div>
+-	</Transition>
+ 
+-	<Transition
+-		:enterActiveClass="defaultStore.state.animation ? $style.transition_widgetsDrawer_enterActive : ''"
+-		:leaveActiveClass="defaultStore.state.animation ? $style.transition_widgetsDrawer_leaveActive : ''"
+-		:enterFromClass="defaultStore.state.animation ? $style.transition_widgetsDrawer_enterFrom : ''"
+-		:leaveToClass="defaultStore.state.animation ? $style.transition_widgetsDrawer_leaveTo : ''"
+-	>
+-		<div v-if="widgetsShowing" :class="$style.widgetsDrawer">
+-			<button class="_button" :class="$style.widgetsCloseButton" @click="widgetsShowing = false"><i class="ti ti-x"></i></button>
++		<div v-if="showWidgetsSide && !pageMetadata?.needWideArea" :class="$style.widgets">
+ 			<XWidgets/>
+ 		</div>
+-	</Transition>
++	</div>
+ 
+-	<XCommon/>
++	<XCommon v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
+ </div>
+ </template>
+ 
+ <script lang="ts" setup>
+-import { defineAsyncComponent, provide, onMounted, computed, ref, watch, shallowRef } from 'vue';
+-import type { Ref } from 'vue';
++import { defineAsyncComponent, provide, onMounted, computed, ref } from 'vue';
+ import { instanceName } from '@@/js/config.js';
+-import { CURRENT_STICKY_BOTTOM } from '@@/js/const.js';
+ import { isLink } from '@@/js/is-link.js';
+ import XCommon from './_common_/common.vue';
+-import type MkStickyContainer from '@/components/global/MkStickyContainer.vue';
+-import XDrawerMenu from '@/ui/_common_/navbar-for-mobile.vue';
++import type { PageMetadata } from '@/page.js';
++import XMobileFooterMenu from '@/ui/_common_/mobile-footer-menu.vue';
++import XPreferenceRestore from '@/ui/_common_/PreferenceRestore.vue';
++import XReloadSuggestion from '@/ui/_common_/ReloadSuggestion.vue';
++import XTitlebar from '@/ui/_common_/titlebar.vue';
++import XSidebar from '@/ui/_common_/navbar.vue';
+ import * as os from '@/os.js';
+-import { defaultStore } from '@/store.js';
+-import { navbarItemDef } from '@/navbar.js';
+ import { i18n } from '@/i18n.js';
+-import { $i } from '@/account.js';
+-import { provideMetadataReceiver, provideReactiveMetadata } from '@/scripts/page-metadata.js';
+-import type { PageMetadata } from '@/scripts/page-metadata.js';
+-import { deviceKind } from '@/scripts/device-kind.js';
++import { $i } from '@/i.js';
++import { provideMetadataReceiver, provideReactiveMetadata } from '@/page.js';
++import { deviceKind } from '@/utility/device-kind.js';
+ import { miLocalStorage } from '@/local-storage.js';
+-import { useScrollPositionManager } from '@/nirax.js';
+-import { mainRouter } from '@/router/main.js';
++import { mainRouter } from '@/router.js';
++import { prefer } from '@/preferences.js';
++import { shouldSuggestRestoreBackup } from '@/preferences/utility.js';
++import { DI } from '@/di.js';
++import { shouldSuggestReload } from '@/utility/reload-suggest.js';
+ 
+-const XWidgets = defineAsyncComponent(() => import('./universal.widgets.vue'));
+-const XSidebar = defineAsyncComponent(() => import('@/ui/_common_/navbar.vue'));
++const XWidgets = defineAsyncComponent(() => import('./_common_/widgets.vue'));
+ const XStatusBars = defineAsyncComponent(() => import('@/ui/_common_/statusbars.vue'));
+ const XAnnouncements = defineAsyncComponent(() => import('@/ui/_common_/announcements.vue'));
+ 
+@@ -126,7 +64,8 @@ const DESKTOP_THRESHOLD = 1100;
+ const MOBILE_THRESHOLD = 500;
+ 
+ // デスクトップでウィンドウを狭くしたときモバイルUIが表示されて欲しいことはあるので deviceKind === 'desktop' の判定は行わない
+-const isDesktop = ref(window.innerWidth >= DESKTOP_THRESHOLD);
++const showWidgetsSide = window.innerWidth >= DESKTOP_THRESHOLD;
++
+ const isMobile = ref(deviceKind === 'smartphone' || window.innerWidth <= MOBILE_THRESHOLD);
+ window.addEventListener('resize', () => {
+ 	isMobile.value = deviceKind === 'smartphone' || window.innerWidth <= MOBILE_THRESHOLD;
+@@ -134,31 +73,21 @@ window.addEventListener('resize', () => {
+ 
+ const pageMetadata = ref<null | PageMetadata>(null);
+ const widgetsShowing = ref(false);
+-const navFooter = shallowRef<HTMLElement>();
+-const contents = shallowRef<InstanceType<typeof MkStickyContainer>>();
+ 
+-provide('router', mainRouter);
++provide(DI.router, mainRouter);
+ provideMetadataReceiver((metadataGetter) => {
+ 	const info = metadataGetter();
+ 	pageMetadata.value = info;
+ 	if (pageMetadata.value) {
+ 		if (isRoot.value && pageMetadata.value.title === instanceName) {
+-			document.title = pageMetadata.value.title;
++			window.document.title = pageMetadata.value.title;
+ 		} else {
+-			document.title = `${pageMetadata.value.title} | ${instanceName}`;
++			window.document.title = `${pageMetadata.value.title} | ${instanceName}`;
+ 		}
+ 	}
+ });
+ provideReactiveMetadata(pageMetadata);
+ 
+-const menuIndicated = computed(() => {
+-	for (const def in navbarItemDef) {
+-		if (def === 'notifications') continue; // 通知は下にボタンとして表示されてるから
+-		if (navbarItemDef[def].indicated) return true;
+-	}
+-	return false;
+-});
+-
+ const drawerMenuShowing = ref(false);
+ 
+ mainRouter.on('change', () => {
+@@ -170,38 +99,15 @@ if (window.innerWidth > 1024) {
+ 	if (tempUI) {
+ 		miLocalStorage.setItem('ui', tempUI);
+ 		miLocalStorage.removeItem('ui_temp');
+-		location.reload();
++		window.location.reload();
+ 	}
+ }
+ 
+-defaultStore.loaded.then(() => {
+-	if (defaultStore.state.widgets.length === 0) {
+-		defaultStore.set('widgets', [{
+-			name: 'calendar',
+-			id: 'a', place: 'right', data: {},
+-		}, {
+-			name: 'notifications',
+-			id: 'b', place: 'right', data: {},
+-		}, {
+-			name: 'trends',
+-			id: 'c', place: 'right', data: {},
+-		}]);
+-	}
+-});
+-
+-onMounted(() => {
+-	if (!isDesktop.value) {
+-		window.addEventListener('resize', () => {
+-			if (window.innerWidth >= DESKTOP_THRESHOLD) isDesktop.value = true;
+-		}, { passive: true });
+-	}
+-});
+-
+-const onContextmenu = (ev) => {
+-	if (isLink(ev.target)) return;
+-	if (['INPUT', 'TEXTAREA', 'IMG', 'VIDEO', 'CANVAS'].includes(ev.target.tagName) || ev.target.attributes['contenteditable']) return;
++function onContextmenu(ev: PointerEvent) {
++	if (isLink(ev.target as HTMLElement)) return;
++	if (['INPUT', 'TEXTAREA', 'IMG', 'VIDEO', 'CANVAS'].includes((ev.target as HTMLElement).tagName) || (ev.target as HTMLElement).attributes.getNamedItem('contenteditable') != null) return;
+ 	if (window.getSelection()?.toString() !== '') return;
+-	const path = mainRouter.getCurrentPath();
++	const path = mainRouter.getCurrentFullPath();
+ 	os.contextMenu([{
+ 		type: 'label',
+ 		text: path,
+@@ -212,111 +118,25 @@ const onContextmenu = (ev) => {
+ 			os.pageWindow(path);
+ 		},
+ 	}], ev);
+-};
+-
+-function top() {
+-	contents.value.rootEl.scrollTo({
+-		top: 0,
+-		behavior: 'smooth',
+-	});
+ }
+-
+-const navFooterHeight = ref(0);
+-provide<Ref<number>>(CURRENT_STICKY_BOTTOM, navFooterHeight);
+-
+-watch(navFooter, () => {
+-	if (navFooter.value) {
+-		navFooterHeight.value = navFooter.value.offsetHeight;
+-		document.body.style.setProperty('--MI-stickyBottom', `${navFooterHeight.value}px`);
+-		document.body.style.setProperty('--MI-minBottomSpacing', 'var(--MI-minBottomSpacingMobile)');
+-	} else {
+-		navFooterHeight.value = 0;
+-		document.body.style.setProperty('--MI-stickyBottom', '0px');
+-		document.body.style.setProperty('--MI-minBottomSpacing', '0px');
+-	}
+-}, {
+-	immediate: true,
+-});
+-
+-useScrollPositionManager(() => contents.value.rootEl, mainRouter);
+ </script>
+ 
+-<style>
+-html,
+-body {
+-	width: 100%;
+-	height: 100%;
+-	overflow: clip;
+-	position: fixed;
+-	top: 0;
+-	left: 0;
+-	overscroll-behavior: none;
+-}
+-
+-#misskey_app {
+-	width: 100%;
+-	height: 100%;
+-	overflow: clip;
+-	position: absolute;
+-	top: 0;
+-	left: 0;
+-}
+-</style>
+-
+ <style lang="scss" module>
+-$ui-font-size: 1em; // TODO: どこかに集約したい
+ $widgets-hide-threshold: 1090px;
+ 
+-.transition_menuDrawerBg_enterActive,
+-.transition_menuDrawerBg_leaveActive {
+-	opacity: 1;
+-	transition: opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
+-}
+-.transition_menuDrawerBg_enterFrom,
+-.transition_menuDrawerBg_leaveTo {
+-	opacity: 0;
+-}
+-
+-.transition_menuDrawer_enterActive,
+-.transition_menuDrawer_leaveActive {
+-	opacity: 1;
+-	transform: translateX(0);
+-	transition: transform 300ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
+-}
+-.transition_menuDrawer_enterFrom,
+-.transition_menuDrawer_leaveTo {
+-	opacity: 0;
+-	transform: translateX(-240px);
+-}
+-
+-.transition_widgetsDrawerBg_enterActive,
+-.transition_widgetsDrawerBg_leaveActive {
+-	opacity: 1;
+-	transition: opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
+-}
+-.transition_widgetsDrawerBg_enterFrom,
+-.transition_widgetsDrawerBg_leaveTo {
+-	opacity: 0;
+-}
+-
+-.transition_widgetsDrawer_enterActive,
+-.transition_widgetsDrawer_leaveActive {
+-	opacity: 1;
+-	transform: translateX(0);
+-	transition: transform 300ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
+-}
+-.transition_widgetsDrawer_enterFrom,
+-.transition_widgetsDrawer_leaveTo {
+-	opacity: 0;
+-	transform: translateX(240px);
+-}
+-
+ .root {
+ 	height: 100dvh;
+ 	overflow: clip;
+ 	contain: strict;
+-	box-sizing: border-box;
+ 	display: flex;
++	flex-direction: column;
++	background: var(--MI_THEME-navBg);
++}
++
++.nonTitlebarArea {
++	display: flex;
++	flex: 1;
++	min-height: 0;
+ }
+ 
+ .sidebar {
+@@ -324,167 +144,41 @@ $widgets-hide-threshold: 1090px;
+ }
+ 
+ .contents {
++	display: flex;
++	flex-direction: column;
+ 	flex: 1;
+ 	height: 100%;
+ 	min-width: 0;
+-	overflow: auto;
+-	overflow-y: scroll;
+-	overscroll-behavior: contain;
+-	background: var(--MI_THEME-bg);
+-}
+ 
+-.widgets {
+-	width: 350px;
+-	height: 100%;
+-	box-sizing: border-box;
+-	overflow: auto;
+-	padding: var(--MI-margin) var(--MI-margin) calc(var(--MI-margin) + env(safe-area-inset-bottom, 0px));
+-	border-left: solid 0.5px var(--MI_THEME-divider);
+-	background: var(--MI_THEME-bg);
+-
+-	@media (max-width: $widgets-hide-threshold) {
+-		display: none;
++	&.withSidebarAndTitlebar {
++		background: var(--MI_THEME-navBg);
++		border-radius: 12px 0 0 0;
++		overflow: clip;
+ 	}
+ }
+ 
+-.widgetButton {
+-	display: block;
+-	position: fixed;
+-	z-index: 1000;
+-	bottom: 32px;
+-	right: 32px;
+-	width: 64px;
+-	height: 64px;
+-	border-radius: 100%;
+-	box-shadow: 0 3px 5px -1px rgba(0, 0, 0, 0.2), 0 6px 10px 0 rgba(0, 0, 0, 0.14), 0 1px 18px 0 rgba(0, 0, 0, 0.12);
+-	font-size: 22px;
+-	background: var(--MI_THEME-panel);
++.content {
++	flex: 1;
++	min-height: 0;
+ }
+ 
+-.widgetsDrawerBg {
+-	z-index: 1001;
++.statusbars {
++	position: sticky;
++	top: 0;
++	left: 0;
+ }
+ 
+-.widgetsDrawer {
+-	position: fixed;
+-	top: 0;
+-	right: 0;
+-	z-index: 1001;
+-	width: 310px;
+-	height: 100dvh;
+-	padding: var(--MI-margin) var(--MI-margin) calc(var(--MI-margin) + env(safe-area-inset-bottom, 0px)) !important;
++.widgets {
++	width: 350px;
++	height: 100%;
+ 	box-sizing: border-box;
+ 	overflow: auto;
+-	overscroll-behavior: contain;
++	padding: var(--MI-margin) var(--MI-margin) calc(var(--MI-margin) + env(safe-area-inset-bottom, 0px));
++	border-left: solid 0.5px var(--MI_THEME-divider);
+ 	background: var(--MI_THEME-bg);
+-}
+-
+-.widgetsCloseButton {
+-	padding: 8px;
+-	display: block;
+-	margin: 0 auto;
+-}
+ 
+-@media (min-width: 370px) {
+-	.widgetsCloseButton {
++	@media (max-width: $widgets-hide-threshold) {
+ 		display: none;
+ 	}
+ }
+-
+-.nav {
+-	position: fixed;
+-	z-index: 1000;
+-	bottom: 0;
+-	left: 0;
+-	padding: 12px 12px max(12px, env(safe-area-inset-bottom, 0px)) 12px;
+-	display: grid;
+-	grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+-	grid-gap: 8px;
+-	width: 100%;
+-	box-sizing: border-box;
+-	-webkit-backdrop-filter: var(--MI-blur, blur(24px));
+-	backdrop-filter: var(--MI-blur, blur(24px));
+-	background-color: var(--MI_THEME-header);
+-	border-top: solid 0.5px var(--MI_THEME-divider);
+-}
+-
+-.navButton {
+-	position: relative;
+-	padding: 0;
+-	aspect-ratio: 1;
+-	width: 100%;
+-	max-width: 60px;
+-	margin: auto;
+-	border-radius: 100%;
+-	background: var(--MI_THEME-panel);
+-	color: var(--MI_THEME-fg);
+-
+-	&:hover {
+-		background: var(--MI_THEME-panelHighlight);
+-	}
+-
+-	&:active {
+-		background: hsl(from var(--MI_THEME-panel) h s calc(l - 2));
+-	}
+-}
+-
+-.postButton {
+-	composes: navButton;
+-	background: linear-gradient(90deg, var(--MI_THEME-buttonGradateA), var(--MI_THEME-buttonGradateB));
+-	color: var(--MI_THEME-fgOnAccent);
+-
+-	&:hover {
+-		background: linear-gradient(90deg, hsl(from var(--MI_THEME-accent) h s calc(l + 5)), hsl(from var(--MI_THEME-accent) h s calc(l + 5)));
+-	}
+-
+-	&:active {
+-		background: linear-gradient(90deg, hsl(from var(--MI_THEME-accent) h s calc(l + 5)), hsl(from var(--MI_THEME-accent) h s calc(l + 5)));
+-	}
+-}
+-
+-.navButtonIcon {
+-	font-size: 18px;
+-	vertical-align: middle;
+-}
+-
+-.navButtonIndicator {
+-	position: absolute;
+-	top: 0;
+-	left: 0;
+-	color: var(--MI_THEME-indicator);
+-	font-size: 16px;
+-
+-	&:has(.itemIndicateValueIcon) {
+-		animation: none;
+-		font-size: 12px;
+-	}
+-}
+-
+-.menuDrawerBg {
+-	z-index: 1001;
+-}
+-
+-.menuDrawer {
+-	position: fixed;
+-	top: 0;
+-	left: 0;
+-	z-index: 1001;
+-	height: 100dvh;
+-	width: 240px;
+-	box-sizing: border-box;
+-	contain: strict;
+-	overflow: auto;
+-	overscroll-behavior: contain;
+-	background: var(--MI_THEME-navBg);
+-}
+-
+-.statusbars {
+-	position: sticky;
+-	top: 0;
+-	left: 0;
+-}
+-
+-.spacer {
+-	height: calc(var(--MI-minBottomSpacing));
+-}
+ </style>

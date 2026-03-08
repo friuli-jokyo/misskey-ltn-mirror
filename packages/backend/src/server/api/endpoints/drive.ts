@@ -59,28 +59,28 @@ export const paramDef = {
 	required: [],
 } as const;
 
-@Injectable()
-export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
-	constructor(
-		private driveFileEntityService: DriveFileEntityService,
-		private roleService: RoleService,
-	) {
-		super(meta, paramDef, async (ps, me) => {
-			// Calculate drive usage
-			const [usage, policies] = await Promise.all([
-				this.driveFileEntityService.calcDriveUsageOf(me.id),
-				this.roleService.getUserPolicies(me.id),
-			]);
+	@Injectable()
+	export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
+		constructor(
+			private driveFileEntityService: DriveFileEntityService,
+			private roleService: RoleService,
+		) {
+			super(meta, paramDef, async (ps, me) => {
+				// Calculate drive usage
+				const [usage, policies] = await Promise.all([
+					this.driveFileEntityService.calcDriveUsageOf(me.id),
+					this.roleService.getUserPolicies(me.id),
+				]);
 
-			return {
-				capacity: 1024 * 1024 * policies.driveCapacityMb,
-				uploadBandwidths: await Promise.all(policies.driveUploadBandwidthDurationHrCapacityMbPairs.map(async ([duration, capacity]) => ({
-					duration: duration * 36e5,
-					capacity: capacity * 1024 * 1024,
-					usage: await this.driveFileEntityService.calcDriveBandwidthOf(me.id, duration),
-				}))),
-				usage,
-			};
-		});
+				return {
+					capacity: 1024 * 1024 * policies.driveCapacityMb,
+					uploadBandwidths: await Promise.all(policies.driveUploadBandwidthDurationHrCapacityMbPairs.map(async ([duration, capacity]) => ({
+						duration: duration * 36e5,
+						capacity: capacity * 1024 * 1024,
+						usage: await this.driveFileEntityService.calcDriveBandwidthOf(me.id, duration),
+					}))),
+					usage,
+				};
+			});
+		}
 	}
-}

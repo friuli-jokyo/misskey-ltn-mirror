@@ -100,9 +100,7 @@ export class NotePiningService {
 			anonymousChannelUsername: IsNull(),
 		});
 
-		if (note == null) {
-			throw new IdentifiableError('b302d4cf-c050-400a-bbb3-be208681f40c', 'No such note.');
-		}
+		if (note == null) throw new IdentifiableError('b302d4cf-c050-400a-bbb3-be208681f40c', 'No such note.');
 
 		this.userNotePiningsRepository.delete({
 			userId: user.id,

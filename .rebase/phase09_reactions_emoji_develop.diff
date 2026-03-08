@@ -1,0 +1,1910 @@
+diff --git a/packages/backend/src/core/entities/EmojiEntityService.ts b/packages/backend/src/core/entities/EmojiEntityService.ts
+index 490d3f2511..309de3b08f 100644
+--- a/packages/backend/src/core/entities/EmojiEntityService.ts
++++ b/packages/backend/src/core/entities/EmojiEntityService.ts
+@@ -41,7 +41,7 @@ export class EmojiEntityService {
+ 
+ 	@bindThis
+ 	public packSimpleMany(
+-		emojis: any[],
++		emojis: (MiEmoji['id'] | MiEmoji)[],
+ 	) {
+ 		return Promise.all(emojis.map(x => this.packSimple(x)));
+ 	}
+@@ -69,7 +69,7 @@ export class EmojiEntityService {
+ 
+ 	@bindThis
+ 	public packDetailedMany(
+-		emojis: any[],
++		emojis: (MiEmoji['id'] | MiEmoji)[],
+ 	): Promise<Packed<'EmojiDetailed'>[]> {
+ 		return Promise.all(emojis.map(x => this.packDetailed(x)));
+ 	}
+diff --git a/packages/backend/src/models/Emoji.ts b/packages/backend/src/models/Emoji.ts
+index d62b6e9f6f..8dff8fd153 100644
+--- a/packages/backend/src/models/Emoji.ts
++++ b/packages/backend/src/models/Emoji.ts
+@@ -8,6 +8,7 @@ import { id } from './util/id.js';
+ 
+ @Entity('emoji')
+ @Index(['name', 'host'], { unique: true })
++@Index('IDX_EMOJI_ROLE_IDS', { synchronize: false }) // GIN for roleIdsThatCanBeUsedThisEmojiAsReaction in production
+ export class MiEmoji {
+ 	@PrimaryColumn(id())
+ 	public id: string;
+@@ -32,6 +33,7 @@ export class MiEmoji {
+ 	@Column('varchar', {
+ 		length: 128, nullable: true,
+ 	})
++	@Index('IDX_EMOJI_CATEGORY')
+ 	public category: string | null;
+ 
+ 	@Column('varchar', {
+diff --git a/packages/backend/src/queue/processors/ImportCustomEmojisProcessorService.ts b/packages/backend/src/queue/processors/ImportCustomEmojisProcessorService.ts
+index 725e1c8ba2..95fe0a2c6a 100644
+--- a/packages/backend/src/queue/processors/ImportCustomEmojisProcessorService.ts
++++ b/packages/backend/src/queue/processors/ImportCustomEmojisProcessorService.ts
+@@ -6,6 +6,7 @@
+ import * as fs from 'node:fs';
+ import { Inject, Injectable } from '@nestjs/common';
+ import { ZipReader } from 'slacc';
++import { IsNull } from 'typeorm';
+ import { DI } from '@/di-symbols.js';
+ import type { EmojisRepository, DriveFilesRepository } from '@/models/_.js';
+ import type Logger from '@/logger.js';
+@@ -86,6 +87,7 @@ export class ImportCustomEmojisProcessorService {
+ 				const emojiPath = outputPath + '/' + record.fileName;
+ 				await this.emojisRepository.delete({
+ 					name: emojiInfo.name,
++					host: IsNull(),
+ 				});
+ 
+ 				try {
+diff --git a/packages/backend/src/server/api/endpoints/admin/emoji/add.ts b/packages/backend/src/server/api/endpoints/admin/emoji/add.ts
+index 53256565f6..3852146177 100644
+--- a/packages/backend/src/server/api/endpoints/admin/emoji/add.ts
++++ b/packages/backend/src/server/api/endpoints/admin/emoji/add.ts
+@@ -16,7 +16,7 @@ export const meta = {
+ 	tags: ['admin'],
+ 
+ 	requireCredential: true,
+-	requireRolePolicy: 'canManageCustomEmojis',
++	requiredRolePolicy: 'canManageCustomEmojis',
+ 	kind: 'write:admin:emoji',
+ 
+ 	errors: {
+diff --git a/packages/backend/src/server/api/endpoints/admin/emoji/update.ts b/packages/backend/src/server/api/endpoints/admin/emoji/update.ts
+index e3aaa051c1..e20bc21f6b 100644
+--- a/packages/backend/src/server/api/endpoints/admin/emoji/update.ts
++++ b/packages/backend/src/server/api/endpoints/admin/emoji/update.ts
+@@ -14,7 +14,7 @@ export const meta = {
+ 	tags: ['admin'],
+ 
+ 	requireCredential: true,
+-	requireRolePolicy: 'canManageCustomEmojis',
++	requiredRolePolicy: 'canManageCustomEmojis',
+ 	kind: 'write:admin:emoji',
+ 
+ 	errors: {
+@@ -37,29 +37,45 @@ export const meta = {
+ } as const;
+ 
+ export const paramDef = {
+-	type: 'object',
+-	properties: {
+-		id: { type: 'string', format: 'misskey:id' },
+-		name: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
+-		fileId: { type: 'string', format: 'misskey:id' },
+-		category: {
+-			type: 'string',
+-			nullable: true,
+-			description: 'Use `null` to reset the category.',
++	allOf: [
++		{
++			anyOf: [
++				{
++					type: 'object',
++					properties: {
++						id: { type: 'string', format: 'misskey:id' },
++					},
++					required: ['id'],
++				},
++				{
++					type: 'object',
++					properties: {
++						name: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
++					},
++					required: ['name'],
++				},
++			],
++		},
++		{
++			type: 'object',
++			properties: {
++				fileId: { type: 'string', format: 'misskey:id' },
++				category: {
++					type: 'string',
++					nullable: true,
++					description: 'Use `null` to reset the category.',
++				},
++				aliases: { type: 'array', items: {
++					type: 'string',
++				} },
++				license: { type: 'string', nullable: true },
++				isSensitive: { type: 'boolean' },
++				localOnly: { type: 'boolean' },
++				roleIdsThatCanBeUsedThisEmojiAsReaction: { type: 'array', items: {
++					type: 'string',
++				} },
++			},
+ 		},
+-		aliases: { type: 'array', items: {
+-			type: 'string',
+-		} },
+-		license: { type: 'string', nullable: true },
+-		isSensitive: { type: 'boolean' },
+-		localOnly: { type: 'boolean' },
+-		roleIdsThatCanBeUsedThisEmojiAsReaction: { type: 'array', items: {
+-			type: 'string',
+-		} },
+-	},
+-	anyOf: [
+-		{ required: ['id'] },
+-		{ required: ['name'] },
+ 	],
+ } as const;
+ 
+@@ -78,10 +94,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				if (driveFile == null) throw new ApiError(meta.errors.noSuchFile);
+ 			}
+ 
+-			// JSON schemeのanyOfの型変換がうまくいっていないらしい
+-			const required = { id: ps.id, name: ps.name } as
+-				| { id: MiEmoji['id']; name?: string }
+-				| { id?: MiEmoji['id']; name: string };
++			const required = 'id' in ps
++				? { id: ps.id, name: 'name' in ps ? ps.name as string : undefined }
++				: { name: ps.name };
+ 
+ 			const error = await this.customEmojiService.update({
+ 				...required,
+@@ -102,7 +117,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				case 'SAME_NAME_EMOJI_EXISTS': throw new ApiError(meta.errors.sameNameEmojiExists);
+ 			}
+ 			// 網羅性チェック
+-			const mustBeNever: never = error;
++			const _mustBeNever: never = error;
+ 		});
+ 	}
+ }
+diff --git a/packages/frontend/src/components/MkAvatars.vue b/packages/frontend/src/components/MkAvatars.vue
+index 8236d0ddb9..4bd6c62a5f 100644
+--- a/packages/frontend/src/components/MkAvatars.vue
++++ b/packages/frontend/src/components/MkAvatars.vue
+@@ -15,7 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { onMounted, ref } from 'vue';
+ import * as Misskey from 'misskey-js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ 
+ const props = withDefaults(defineProps<{
+ 	userIds: string[];
+@@ -29,6 +29,6 @@ const users = ref<Misskey.entities.UserLite[]>([]);
+ onMounted(async () => {
+ 	users.value = await misskeyApi('users/show', {
+ 		userIds: props.userIds,
+-	}) as unknown as Misskey.entities.UserLite[];
++	});
+ });
+ </script>
+diff --git a/packages/frontend/src/components/MkClipPreview.vue b/packages/frontend/src/components/MkClipPreview.vue
+index 5b09ec90dd..2154c08ab3 100644
+--- a/packages/frontend/src/components/MkClipPreview.vue
++++ b/packages/frontend/src/components/MkClipPreview.vue
+@@ -26,7 +26,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ import * as Misskey from 'misskey-js';
+ import { computed } from 'vue';
+ import { i18n } from '@/i18n.js';
+-import { $i } from '@/account.js';
++import { $i } from '@/i.js';
+ import number from '@/filters/number.js';
+ 
+ const props = withDefaults(defineProps<{
+diff --git a/packages/frontend/src/components/MkGalleryPostPreview.vue b/packages/frontend/src/components/MkGalleryPostPreview.vue
+index 22f8355acf..e6fae285b3 100644
+--- a/packages/frontend/src/components/MkGalleryPostPreview.vue
++++ b/packages/frontend/src/components/MkGalleryPostPreview.vue
+@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <MkA :to="`/gallery/${post.id}`" class="ttasepnz _panel" tabindex="-1" @pointerenter="enterHover" @pointerleave="leaveHover">
+ 	<div class="thumbnail">
+ 		<Transition>
+-			<ImgWithBlurhash
++			<MkImgWithBlurhash
+ 				class="img layered"
+ 				:transition="safe ? null : {
+ 					duration: 500,
+@@ -34,15 +34,15 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import * as Misskey from 'misskey-js';
+ import { computed, ref } from 'vue';
+-import ImgWithBlurhash from '@/components/MkImgWithBlurhash.vue';
+-import { defaultStore } from '@/store.js';
++import MkImgWithBlurhash from '@/components/MkImgWithBlurhash.vue';
++import { prefer } from '@/preferences.js';
+ 
+ const props = defineProps<{
+ 	post: Misskey.entities.GalleryPost;
+ }>();
+ 
+ const hover = ref(false);
+-const safe = computed(() => defaultStore.state.nsfw === 'ignore' || defaultStore.state.nsfw === 'respect' && !props.post.isSensitive);
++const safe = computed(() => prefer.s.nsfw === 'ignore' || prefer.s.nsfw === 'respect' && !props.post.isSensitive);
+ const show = computed(() => safe.value || hover.value);
+ 
+ function enterHover(): void {
+diff --git a/packages/frontend/src/components/MkInviteCode.vue b/packages/frontend/src/components/MkInviteCode.vue
+index 1a71f6574f..ab797459cc 100644
+--- a/packages/frontend/src/components/MkInviteCode.vue
++++ b/packages/frontend/src/components/MkInviteCode.vue
+@@ -22,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		<div :class="$style.items">
+ 			<div>
+ 				<div :class="$style.label">{{ i18n.ts.invitationCode }}</div>
+-				<div>{{ invite.code }}</div>
++				<div class="_selectableAtomic">{{ invite.code }}</div>
+ 			</div>
+ 			<div v-if="moderator">
+ 				<div :class="$style.label">{{ i18n.ts.inviteCodeCreator }}</div>
+@@ -64,7 +64,7 @@ import { computed } from 'vue';
+ import * as Misskey from 'misskey-js';
+ import MkFolder from '@/components/MkFolder.vue';
+ import MkButton from '@/components/MkButton.vue';
+-import { copyToClipboard } from '@/scripts/copy-to-clipboard.js';
++import { copyToClipboard } from '@/utility/copy-to-clipboard.js';
+ import { i18n } from '@/i18n.js';
+ import * as os from '@/os.js';
+ 
+@@ -90,7 +90,6 @@ function deleteCode() {
+ 
+ function copyInviteCode() {
+ 	copyToClipboard(props.invite.code);
+-	os.success();
+ }
+ </script>
+ 
+diff --git a/packages/frontend/src/components/MkMenu.vue b/packages/frontend/src/components/MkMenu.vue
+index d484c1b338..b618dab6b2 100644
+--- a/packages/frontend/src/components/MkMenu.vue
++++ b/packages/frontend/src/components/MkMenu.vue
+@@ -11,6 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		[$style.center]: align === 'center',
+ 		[$style.big]: big,
+ 		[$style.asDrawer]: asDrawer,
++		[$style.widthSpecified]: width != null,
+ 	}"
+ 	@focusin.passive.stop="() => {}"
+ >
+@@ -29,12 +30,19 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	>
+ 		<template v-for="item in (items2 ?? [])">
+ 			<div v-if="item.type === 'divider'" role="separator" tabindex="-1" :class="$style.divider"></div>
+-			<span v-else-if="item.type === 'label'" role="menuitem" tabindex="-1" :class="[$style.label, $style.item]">
+-				<span style="opacity: 0.7;">{{ item.text }}</span>
+-			</span>
++
++			<div v-else-if="item.type === 'label'" role="menuitem" tabindex="-1" :class="[$style.label]">
++				<span>{{ item.text }}</span>
++			</div>
++
+ 			<span v-else-if="item.type === 'pending'" role="menuitem" tabindex="0" :class="[$style.pending, $style.item]">
+ 				<span><MkEllipsis/></span>
+ 			</span>
++
++			<div v-else-if="item.type === 'component'" role="menuitem" tabindex="-1">
++				<component :is="item.component" v-bind="item.props"/>
++			</div>
++
+ 			<MkA
+ 				v-else-if="item.type === 'link'"
+ 				role="menuitem"
+@@ -48,10 +56,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<i v-if="item.icon" class="ti-fw" :class="[$style.icon, item.icon]"></i>
+ 				<MkAvatar v-if="item.avatar" :user="item.avatar" :class="$style.avatar"/>
+ 				<div :class="$style.item_content">
+-					<span :class="$style.item_content_text">{{ item.text }}</span>
++					<div :class="$style.item_content_text">
++						<div :class="$style.item_content_text_title">{{ item.text }}</div>
++						<div v-if="item.caption" :class="$style.item_content_text_caption">{{ item.caption }}</div>
++					</div>
+ 					<span v-if="item.indicate" :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
+ 				</div>
+ 			</MkA>
++
+ 			<a
+ 				v-else-if="item.type === 'a'"
+ 				role="menuitem"
+@@ -67,10 +79,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			>
+ 				<i v-if="item.icon" class="ti-fw" :class="[$style.icon, item.icon]"></i>
+ 				<div :class="$style.item_content">
+-					<span :class="$style.item_content_text">{{ item.text }}</span>
++					<div :class="$style.item_content_text">
++						<div :class="$style.item_content_text_title">{{ item.text }}</div>
++						<div v-if="item.caption" :class="$style.item_content_text_caption">{{ item.caption }}</div>
++					</div>
+ 					<span v-if="item.indicate" :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
+ 				</div>
+ 			</a>
++
+ 			<button
+ 				v-else-if="item.type === 'user'"
+ 				role="menuitem"
+@@ -85,6 +101,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<span :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
+ 				</div>
+ 			</button>
++
+ 			<button
+ 				v-else-if="item.type === 'switch'"
+ 				role="menuitemcheckbox"
+@@ -98,10 +115,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<i v-if="item.icon" class="ti-fw" :class="[$style.icon, item.icon]"></i>
+ 				<MkSwitchButton v-else :class="$style.switchButton" :checked="item.ref" :disabled="item.disabled" @toggle="switchItem(item)"/>
+ 				<div :class="$style.item_content">
+-					<span :class="[$style.item_content_text, { [$style.switchText]: !item.icon }]">{{ item.text }}</span>
++					<div :class="[$style.item_content_text, { [$style.switchText]: !item.icon }]">
++						<div :class="$style.item_content_text_title">{{ item.text }}</div>
++						<div v-if="item.caption" :class="$style.item_content_text_caption">{{ item.caption }}</div>
++					</div>
+ 					<MkSwitchButton v-if="item.icon" :class="[$style.switchButton, $style.caret]" :checked="item.ref" :disabled="item.disabled" @toggle="switchItem(item)"/>
+ 				</div>
+ 			</button>
++
+ 			<button
+ 				v-else-if="item.type === 'radio'"
+ 				role="menuitem"
+@@ -114,10 +135,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			>
+ 				<i v-if="item.icon" class="ti-fw" :class="[$style.icon, item.icon]" style="pointer-events: none;"></i>
+ 				<div :class="$style.item_content">
+-					<span :class="$style.item_content_text" style="pointer-events: none;">{{ item.text }}</span>
++					<div :class="$style.item_content_text" style="pointer-events: none;">
++						<div :class="$style.item_content_text_title">{{ item.text }}</div>
++						<div v-if="item.caption" :class="$style.item_content_text_caption">{{ item.caption }}</div>
++					</div>
+ 					<span :class="$style.caret" style="pointer-events: none;"><i class="ti ti-chevron-right ti-fw"></i></span>
+ 				</div>
+ 			</button>
++
+ 			<button
+ 				v-else-if="item.type === 'radioOption'"
+ 				role="menuitemradio"
+@@ -131,9 +156,13 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<span :class="[$style.radioIcon, { [$style.radioChecked]: unref(item.active) }]"></span>
+ 				</div>
+ 				<div :class="$style.item_content">
+-					<span :class="$style.item_content_text">{{ item.text }}</span>
++					<div :class="$style.item_content_text">
++						<div :class="$style.item_content_text_title">{{ item.text }}</div>
++						<div v-if="item.caption" :class="$style.item_content_text_caption">{{ item.caption }}</div>
++					</div>
+ 				</div>
+ 			</button>
++
+ 			<button
+ 				v-else-if="item.type === 'parent'"
+ 				role="menuitem"
+@@ -145,12 +174,17 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			>
+ 				<i v-if="item.icon" class="ti-fw" :class="[$style.icon, item.icon]" style="pointer-events: none;"></i>
+ 				<div :class="$style.item_content">
+-					<span :class="$style.item_content_text" style="pointer-events: none;">{{ item.text }}</span>
++					<div :class="$style.item_content_text" style="pointer-events: none;">
++						<div :class="$style.item_content_text_title">{{ item.text }}</div>
++						<div v-if="item.caption" :class="$style.item_content_text_caption">{{ item.caption }}</div>
++					</div>
+ 					<span :class="$style.caret" style="pointer-events: none;"><i class="ti ti-chevron-right ti-fw"></i></span>
+ 				</div>
+ 			</button>
++
+ 			<button
+-				v-else role="menuitem"
++				v-else
++				role="menuitem"
+ 				tabindex="0"
+ 				:class="['_button', $style.item, { [$style.danger]: item.danger, [$style.active]: unref(item.active) }]"
+ 				@click.prevent="unref(item.active) ? close(false) : clicked(item.action, $event)"
+@@ -160,31 +194,35 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<i v-if="item.icon" class="ti-fw" :class="[$style.icon, item.icon]"></i>
+ 				<MkAvatar v-if="item.avatar" :user="item.avatar" :class="$style.avatar"/>
+ 				<div :class="$style.item_content">
+-					<span :class="$style.item_content_text">{{ item.text }}</span>
++					<div :class="$style.item_content_text">
++						<div :class="$style.item_content_text_title">{{ item.text }}</div>
++						<div v-if="item.caption" :class="$style.item_content_text_caption">{{ item.caption }}</div>
++					</div>
+ 					<span v-if="item.indicate" :class="$style.indicator" class="_blink"><i class="_indicatorCircle"></i></span>
+ 				</div>
+ 			</button>
+ 		</template>
++
+ 		<span v-if="items2 == null || items2.length === 0" tabindex="-1" :class="[$style.none, $style.item]">
+ 			<span>{{ i18n.ts.none }}</span>
+ 		</span>
+ 	</div>
+ 	<div v-if="childMenu">
+-		<XChild ref="child" :items="childMenu" :targetElement="childTarget!" :rootElement="itemsEl!" @actioned="childActioned" @closed="closeChild"/>
++		<XChild ref="child" :items="childMenu" :anchorElement="childTarget!" :rootElement="itemsEl!" @actioned="childActioned" @closed="closeChild"/>
+ 	</div>
+ </div>
+ </template>
+ 
+ <script lang="ts">
+-import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, unref, watch } from 'vue';
+-import MkSwitchButton from '@/components/MkSwitch.button.vue';
++import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, unref, watch, shallowRef } from 'vue';
+ import type { MenuItem, InnerMenuItem, MenuPending, MenuAction, MenuSwitch, MenuRadio, MenuRadioOption, MenuParent } from '@/types/menu.js';
++import type { Keymap } from '@/utility/hotkey.js';
++import MkSwitchButton from '@/components/MkSwitch.button.vue';
+ import * as os from '@/os.js';
+ import { i18n } from '@/i18n.js';
+-import { isTouchUsing } from '@/scripts/touch.js';
+-import type { Keymap } from '@/scripts/hotkey.js';
+-import { isFocusable } from '@/scripts/focus.js';
+-import { getNodeOrNull } from '@/scripts/get-dom-node-or-null.js';
++import { isTouchUsing } from '@/utility/touch.js';
++import { isFocusable } from '@/utility/focus.js';
++import { getNodeOrNull } from '@/utility/get-dom-node-or-null.js';
+ 
+ const childrenCache = new WeakMap<MenuParent, MenuItem[]>();
+ </script>
+@@ -209,11 +247,11 @@ const big = isTouchUsing;
+ 
+ const isNestingMenu = inject<boolean>('isNestingMenu', false);
+ 
+-const itemsEl = shallowRef<HTMLElement>();
++const itemsEl = useTemplateRef('itemsEl');
+ 
+ const items2 = ref<InnerMenuItem[]>();
+ 
+-const child = shallowRef<InstanceType<typeof XChild>>();
++const child = useTemplateRef('child');
+ 
+ const keymap = {
+ 	'up|k|shift+tab': {
+@@ -254,7 +292,7 @@ watch(() => props.items, () => {
+ });
+ 
+ const childMenu = ref<MenuItem[] | null>();
+-const childTarget = shallowRef<HTMLElement | null>();
++const childTarget = shallowRef<HTMLElement>();
+ 
+ function closeChild() {
+ 	childMenu.value = null;
+@@ -278,16 +316,27 @@ function onItemMouseLeave() {
+ 	if (childCloseTimer) window.clearTimeout(childCloseTimer);
+ }
+ 
+-async function showRadioOptions(item: MenuRadio, ev: Event) {
++async function showRadioOptions(item: MenuRadio, ev: MouseEvent | PointerEvent | KeyboardEvent) {
+ 	const children: MenuItem[] = Object.keys(item.options).map<MenuRadioOption>(key => {
+ 		const value = item.options[key];
+ 		return {
+ 			type: 'radioOption',
+ 			text: key,
+ 			action: () => {
+-				item.ref = value;
++				if ('value' in item.ref) {
++					item.ref.value = value;
++				} else {
++					// @ts-expect-error リアクティビティは保たれる
++					item.ref = value;
++				}
+ 			},
+-			active: computed(() => item.ref === value),
++			active: computed(() => {
++				if ('value' in item.ref) {
++					return item.ref.value === value;
++				} else {
++					return item.ref === value;
++				}
++			}),
+ 		};
+ 	});
+ 
+@@ -303,7 +352,7 @@ async function showRadioOptions(item: MenuRadio, ev: Event) {
+ 	}
+ }
+ 
+-async function showChildren(item: MenuParent, ev: Event) {
++async function showChildren(item: MenuParent, ev: MouseEvent | PointerEvent | KeyboardEvent) {
+ 	ev.stopPropagation();
+ 
+ 	const children: MenuItem[] = await (async () => {
+@@ -333,7 +382,7 @@ async function showChildren(item: MenuParent, ev: Event) {
+ 	}
+ }
+ 
+-function clicked(fn: MenuAction, ev: MouseEvent, doClose = true) {
++function clicked(fn: MenuAction, ev: PointerEvent, doClose = true) {
+ 	fn(ev);
+ 
+ 	if (!doClose) return;
+@@ -355,10 +404,10 @@ function switchItem(item: MenuSwitch & { ref: any }) {
+ 
+ function focusUp() {
+ 	if (disposed) return;
+-	if (!itemsEl.value?.contains(document.activeElement)) return;
++	if (!itemsEl.value?.contains(window.document.activeElement)) return;
+ 
+ 	const focusableElements = Array.from(itemsEl.value.children).filter(isFocusable);
+-	const activeIndex = focusableElements.findIndex(el => el === document.activeElement);
++	const activeIndex = focusableElements.findIndex(el => el === window.document.activeElement);
+ 	const targetIndex = (activeIndex !== -1 && activeIndex !== 0) ? (activeIndex - 1) : (focusableElements.length - 1);
+ 	const targetElement = focusableElements.at(targetIndex) ?? itemsEl.value;
+ 
+@@ -367,10 +416,10 @@ function focusUp() {
+ 
+ function focusDown() {
+ 	if (disposed) return;
+-	if (!itemsEl.value?.contains(document.activeElement)) return;
++	if (!itemsEl.value?.contains(window.document.activeElement)) return;
+ 
+ 	const focusableElements = Array.from(itemsEl.value.children).filter(isFocusable);
+-	const activeIndex = focusableElements.findIndex(el => el === document.activeElement);
++	const activeIndex = focusableElements.findIndex(el => el === window.document.activeElement);
+ 	const targetIndex = (activeIndex !== -1 && activeIndex !== (focusableElements.length - 1)) ? (activeIndex + 1) : 0;
+ 	const targetElement = focusableElements.at(targetIndex) ?? itemsEl.value;
+ 
+@@ -397,9 +446,9 @@ const onGlobalMousedown = (ev: MouseEvent) => {
+ 
+ const setupHandlers = () => {
+ 	if (!isNestingMenu) {
+-		document.addEventListener('focusin', onGlobalFocusin, { passive: true });
++		window.document.addEventListener('focusin', onGlobalFocusin, { passive: true });
+ 	}
+-	document.addEventListener('mousedown', onGlobalMousedown, { passive: true });
++	window.document.addEventListener('mousedown', onGlobalMousedown, { passive: true });
+ };
+ 
+ let disposed = false;
+@@ -407,9 +456,9 @@ let disposed = false;
+ const disposeHandlers = () => {
+ 	disposed = true;
+ 	if (!isNestingMenu) {
+-		document.removeEventListener('focusin', onGlobalFocusin);
++		window.document.removeEventListener('focusin', onGlobalFocusin);
+ 	}
+-	document.removeEventListener('mousedown', onGlobalMousedown);
++	window.document.removeEventListener('mousedown', onGlobalMousedown);
+ };
+ 
+ onMounted(() => {
+@@ -435,6 +484,12 @@ onBeforeUnmount(() => {
+ 		}
+ 	}
+ 
++	&:not(.asDrawer):not(.widthSpecified) {
++		> .menu {
++			max-width: 400px;
++		}
++	}
++
+ 	&.big:not(.asDrawer) {
+ 		> .menu {
+ 			min-width: 230px;
+@@ -558,11 +613,11 @@ onBeforeUnmount(() => {
+ 	}
+ 
+ 	&.danger {
+-		--menuFg: #ff2a2a;
++		--menuFg: var(--MI_THEME-error);
+ 		--menuHoverFg: #fff;
+-		--menuHoverBg: #ff4242;
++		--menuHoverBg: var(--MI_THEME-error);
+ 		--menuActiveFg: #fff;
+-		--menuActiveBg: #d42e2e;
++		--menuActiveBg: hsl(from var(--MI_THEME-error) h s calc(l - 10));
+ 	}
+ 
+ 	&.radio {
+@@ -575,12 +630,6 @@ onBeforeUnmount(() => {
+ 		--menuActiveBg: var(--MI_THEME-accentedBg);
+ 	}
+ 
+-	&.label {
+-		pointer-events: none;
+-		font-size: 0.7em;
+-		padding-bottom: 4px;
+-	}
+-
+ 	&.pending {
+ 		pointer-events: none;
+ 		opacity: 0.7;
+@@ -604,10 +653,19 @@ onBeforeUnmount(() => {
+ 
+ .item_content_text {
+ 	max-width: calc(100vw - 4rem);
++}
++
++.item_content_text_title {
+ 	text-overflow: ellipsis;
+ 	overflow: hidden;
+ }
+ 
++.item_content_text_caption {
++	text-wrap: auto;
++	font-size: 85%;
++	opacity: 0.7;
++}
++
+ .switchButton {
+ 	margin-left: -2px;
+ 	--height: 1.35em;
+@@ -641,6 +699,19 @@ onBeforeUnmount(() => {
+ 	font-size: 12px;
+ }
+ 
++.label {
++	position: relative;
++	padding: 6px 16px;
++	box-sizing: border-box;
++	white-space: nowrap;
++	font-size: 0.7em;
++	text-align: left;
++	overflow: hidden;
++	text-overflow: ellipsis;
++	opacity: 0.7;
++	pointer-events: none;
++}
++
+ .divider {
+ 	margin: 8px 0;
+ 	border-top: solid 0.5px var(--MI_THEME-divider);
+diff --git a/packages/frontend/src/components/MkNotification.vue b/packages/frontend/src/components/MkNotification.vue
+index 80cb9a45bb..6c70358c2c 100644
+--- a/packages/frontend/src/components/MkNotification.vue
++++ b/packages/frontend/src/components/MkNotification.vue
+@@ -7,11 +7,10 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <div :class="$style.root">
+ 	<div :class="$style.head">
+ 		<MkAvatar v-if="['pollEnded', 'note'].includes(notification.type) && 'note' in notification" :class="$style.icon" :user="notification.note.user" link preview/>
+-		<MkAvatar v-else-if="['roleAssigned', 'achievementEarned', 'exportCompleted', 'login', 'createToken'].includes(notification.type)" :class="$style.icon" :user="$i" link preview/>
++		<MkAvatar v-else-if="['roleAssigned', 'achievementEarned', 'exportCompleted', 'login', 'createToken', 'scheduledNotePosted', 'scheduledNotePostFailed'].includes(notification.type)" :class="$style.icon" :user="$i" link preview/>
+ 		<div v-else-if="notification.type === 'reaction:grouped' && notification.note.reactionAcceptance === 'likeOnly'" :class="[$style.icon, $style.icon_reactionGroupHeart]"><i class="ti ti-heart" style="line-height: 1;"></i></div>
+ 		<div v-else-if="notification.type === 'reaction:grouped'" :class="[$style.icon, $style.icon_reactionGroup]"><i class="ti ti-plus" style="line-height: 1;"></i></div>
+ 		<div v-else-if="notification.type === 'renote:grouped'" :class="[$style.icon, $style.icon_renoteGroup]"><i class="ti ti-repeat" style="line-height: 1;"></i></div>
+-		<img v-else-if="notification.type === 'test'" :class="$style.icon" :src="infoImageUrl"/>
+ 		<MkAvatar v-else-if="'user' in notification" :class="$style.icon" :user="notification.user" link preview/>
+ 		<img v-else-if="'icon' in notification && notification.icon != null" :class="[$style.icon, $style.icon_app]" :src="notification.icon" alt=""/>
+ 		<div
+@@ -24,10 +23,13 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				[$style.t_mention]: notification.type === 'mention',
+ 				[$style.t_quote]: notification.type === 'quote',
+ 				[$style.t_pollEnded]: notification.type === 'pollEnded',
++				[$style.t_scheduledNotePosted]: notification.type === 'scheduledNotePosted',
++				[$style.t_scheduledNotePostFailed]: notification.type === 'scheduledNotePostFailed',
+ 				[$style.t_achievementEarned]: notification.type === 'achievementEarned',
+ 				[$style.t_exportCompleted]: notification.type === 'exportCompleted',
+ 				[$style.t_login]: notification.type === 'login',
+ 				[$style.t_createToken]: notification.type === 'createToken',
++				[$style.t_chatRoomInvitationReceived]: notification.type === 'chatRoomInvitationReceived',
+ 				[$style.t_roleAssigned]: notification.type === 'roleAssigned' && notification.role.iconUrl == null,
+ 			}]"
+ 		>
+@@ -39,10 +41,13 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<i v-else-if="notification.type === 'mention'" class="ti ti-at"></i>
+ 			<i v-else-if="notification.type === 'quote'" class="ti ti-quote"></i>
+ 			<i v-else-if="notification.type === 'pollEnded'" class="ti ti-chart-arrows"></i>
++			<i v-else-if="notification.type === 'scheduledNotePosted'" class="ti ti-send"></i>
++			<i v-else-if="notification.type === 'scheduledNotePostFailed'" class="ti ti-alert-triangle"></i>
+ 			<i v-else-if="notification.type === 'achievementEarned'" class="ti ti-medal"></i>
+ 			<i v-else-if="notification.type === 'exportCompleted'" class="ti ti-archive"></i>
+ 			<i v-else-if="notification.type === 'login'" class="ti ti-login-2"></i>
+ 			<i v-else-if="notification.type === 'createToken'" class="ti ti-key"></i>
++			<i v-else-if="notification.type === 'chatRoomInvitationReceived'" class="ti ti-messages"></i>
+ 			<template v-else-if="notification.type === 'roleAssigned'">
+ 				<img v-if="notification.role.iconUrl" style="height: 1.3em; vertical-align: -22%;" :src="notification.role.iconUrl" alt=""/>
+ 				<i v-else class="ti ti-badges"></i>
+@@ -59,8 +64,11 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<div :class="$style.tail">
+ 		<header :class="$style.header">
+ 			<span v-if="notification.type === 'pollEnded'">{{ i18n.ts._notification.pollEnded }}</span>
++			<span v-else-if="notification.type === 'scheduledNotePosted'">{{ i18n.ts._notification.scheduledNotePosted }}</span>
++			<span v-else-if="notification.type === 'scheduledNotePostFailed'">{{ i18n.ts._notification.scheduledNotePostFailed }}</span>
+ 			<span v-else-if="notification.type === 'note'">{{ i18n.ts._notification.newNote }}: <MkUserName :user="notification.note.user"/></span>
+ 			<span v-else-if="notification.type === 'roleAssigned'">{{ i18n.ts._notification.roleAssigned }}</span>
++			<span v-else-if="notification.type === 'chatRoomInvitationReceived'">{{ i18n.ts._notification.chatRoomInvitationReceived }}</span>
+ 			<span v-else-if="notification.type === 'achievementEarned'">{{ i18n.ts._notification.achievementEarned }}</span>
+ 			<span v-else-if="notification.type === 'login'">{{ i18n.ts._notification.login }}</span>
+ 			<span v-else-if="notification.type === 'createToken'">{{ i18n.ts._notification.createToken }}</span>
+@@ -101,11 +109,19 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<Mfm :text="getNoteSummary(notification.note)" :plain="true" :nowrap="true" :author="notification.note.user"/>
+ 				<i class="ti ti-quote" :class="$style.quote"></i>
+ 			</MkA>
++			<MkA v-else-if="notification.type === 'scheduledNotePosted'" :class="$style.text" :to="notePage(notification.note)" :title="getNoteSummary(notification.note)">
++				<i class="ti ti-quote" :class="$style.quote"></i>
++				<Mfm :text="getNoteSummary(notification.note)" :plain="true" :nowrap="true" :author="notification.note.user"/>
++				<i class="ti ti-quote" :class="$style.quote"></i>
++			</MkA>
+ 			<div v-else-if="notification.type === 'roleAssigned'" :class="$style.text">
+ 				{{ notification.role.name }}
+ 			</div>
++			<div v-else-if="notification.type === 'chatRoomInvitationReceived'" :class="$style.text">
++				{{ notification.invitation.room.name }}
++			</div>
+ 			<MkA v-else-if="notification.type === 'achievementEarned'" :class="$style.text" to="/my/achievements">
+-				{{ i18n.ts._achievements._types['_' + notification.achievement].title }}
++				{{ i18n.ts._achievements._types[`_${notification.achievement}`].title }}
+ 			</MkA>
+ 			<MkA v-else-if="notification.type === 'exportCompleted'" :class="$style.text" :to="`/my/drive/file/${notification.fileId}`">
+ 				{{ i18n.ts.showFile }}
+@@ -120,15 +136,15 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<div :class="$style.text" style="opacity: 0.6;">{{ i18n.ts.followRequestAccepted }}</div>
+ 				<div v-if="notification.message" :class="$style.text" style="opacity: 0.6; font-style: oblique;">
+ 					<i class="ti ti-quote" :class="$style.quote"></i>
+-					<span>{{ notification.message }}</span>
++					<Mfm :text="notification.message" :author="notification.user" :plain="true" :nowrap="true"/>
+ 					<i class="ti ti-quote" :class="$style.quote"></i>
+ 				</div>
+ 			</template>
+ 			<template v-else-if="notification.type === 'receiveFollowRequest'">
+ 				<span :class="$style.text" style="opacity: 0.6;">{{ i18n.ts.receiveFollowRequest }}</span>
+ 				<div v-if="full && !followRequestDone" :class="$style.followRequestCommands">
+-					<MkButton :class="$style.followRequestCommandButton" rounded primary @click="acceptFollowRequest()"><i class="ti ti-check"/> {{ i18n.ts.accept }}</MkButton>
+-					<MkButton :class="$style.followRequestCommandButton" rounded danger @click="rejectFollowRequest()"><i class="ti ti-x"/> {{ i18n.ts.reject }}</MkButton>
++					<MkButton :class="$style.followRequestCommandButton" rounded primary @click="acceptFollowRequest()"><i class="ti ti-check"></i> {{ i18n.ts.accept }}</MkButton>
++					<MkButton :class="$style.followRequestCommandButton" rounded danger @click="rejectFollowRequest()"><i class="ti ti-x"></i> {{ i18n.ts.reject }}</MkButton>
+ 				</div>
+ 			</template>
+ 			<span v-else-if="notification.type === 'test'" :class="$style.text">{{ i18n.ts._notification.notificationWillBeDisplayedLikeThis }}</span>
+@@ -164,15 +180,14 @@ import { ref } from 'vue';
+ import * as Misskey from 'misskey-js';
+ import MkReactionIcon from '@/components/MkReactionIcon.vue';
+ import MkButton from '@/components/MkButton.vue';
+-import { getNoteSummary } from '@/scripts/get-note-summary.js';
++import { getNoteSummary } from '@/utility/get-note-summary.js';
+ import { notePage } from '@/filters/note.js';
+ import { userPage } from '@/filters/user.js';
+ import { i18n } from '@/i18n.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
+-import { signinRequired } from '@/account.js';
+-import { infoImageUrl } from '@/instance.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
++import { ensureSignin } from '@/i.js';
+ 
+-const $i = signinRequired();
++const $i = ensureSignin();
+ 
+ const props = withDefaults(defineProps<{
+ 	notification: Misskey.entities.Notification;
+@@ -290,6 +305,7 @@ function getActualReactedUsersCount(notification: Misskey.entities.Notification)
+ 	right: -2px;
+ 	width: 20px;
+ 	height: 20px;
++	line-height: 20px;
+ 	box-sizing: border-box;
+ 	border-radius: 100%;
+ 	background: var(--MI_THEME-panel);
+@@ -304,67 +320,71 @@ function getActualReactedUsersCount(notification: Misskey.entities.Notification)
+ }
+ 
+ .t_follow, .t_followRequestAccepted, .t_receiveFollowRequest {
+-	padding: 3px;
+ 	background: var(--eventFollow);
+ 	pointer-events: none;
+ }
+ 
+ .t_renote {
+-	padding: 3px;
+ 	background: var(--eventRenote);
+ 	pointer-events: none;
+ }
+ 
+ .t_quote {
+-	padding: 3px;
+ 	background: var(--eventRenote);
+ 	pointer-events: none;
+ }
+ 
+ .t_reply {
+-	padding: 3px;
+ 	background: var(--eventReply);
+ 	pointer-events: none;
+ }
+ 
+ .t_mention {
+-	padding: 3px;
+ 	background: var(--eventOther);
+ 	pointer-events: none;
+ }
+ 
+ .t_pollEnded {
+-	padding: 3px;
++	background: var(--eventOther);
++	pointer-events: none;
++}
++
++.t_scheduledNotePosted {
++	background: var(--eventOther);
++	pointer-events: none;
++}
++
++.t_scheduledNotePostFailed {
+ 	background: var(--eventOther);
+ 	pointer-events: none;
+ }
+ 
+ .t_achievementEarned {
+-	padding: 3px;
+ 	background: var(--eventAchievement);
+ 	pointer-events: none;
+ }
+ 
+ .t_exportCompleted {
+-	padding: 3px;
+ 	background: var(--eventOther);
+ 	pointer-events: none;
+ }
+ 
+ .t_roleAssigned {
+-	padding: 3px;
+ 	background: var(--eventOther);
+ 	pointer-events: none;
+ }
+ 
+ .t_login {
+-	padding: 3px;
+ 	background: var(--eventLogin);
+ 	pointer-events: none;
+ }
+ 
+ .t_createToken {
+-	padding: 3px;
++	background: var(--eventOther);
++	pointer-events: none;
++}
++
++.t_chatRoomInvitationReceived {
+ 	background: var(--eventOther);
+ 	pointer-events: none;
+ }
+diff --git a/packages/frontend/src/components/MkReactionsViewer.details.vue b/packages/frontend/src/components/MkReactionsViewer.details.vue
+index d24e0b15bf..1c785f0fd1 100644
+--- a/packages/frontend/src/components/MkReactionsViewer.details.vue
++++ b/packages/frontend/src/components/MkReactionsViewer.details.vue
+@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<MkTooltip ref="tooltip" :showing="showing" :targetElement="targetElement" :maxWidth="340" @closed="emit('closed')">
++<MkTooltip ref="tooltip" :showing="showing" :anchorElement="anchorElement" :maxWidth="340" @closed="emit('closed')">
+ 	<div :class="$style.root">
+ 		<div :class="$style.reaction">
+ 			<MkReactionIcon :reaction="reaction" :class="$style.reactionIcon" :noStyle="true"/>
+@@ -33,7 +33,7 @@ defineProps<{
+ 	reaction: string;
+ 	users: Misskey.entities.UserLite[];
+ 	count: number;
+-	targetElement: HTMLElement;
++	anchorElement: HTMLElement;
+ }>();
+ 
+ const emit = defineEmits<{
+diff --git a/packages/frontend/src/components/MkReactionsViewer.vue b/packages/frontend/src/components/MkReactionsViewer.vue
+index 63b202f9f3..67fd570b41 100644
+--- a/packages/frontend/src/components/MkReactionsViewer.vue
++++ b/packages/frontend/src/components/MkReactionsViewer.vue
+@@ -4,65 +4,90 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<TransitionGroup
+-	:enterActiveClass="defaultStore.state.animation ? $style.transition_x_enterActive : ''"
+-	:leaveActiveClass="defaultStore.state.animation ? $style.transition_x_leaveActive : ''"
+-	:enterFromClass="defaultStore.state.animation ? $style.transition_x_enterFrom : ''"
+-	:leaveToClass="defaultStore.state.animation ? $style.transition_x_leaveTo : ''"
+-	:moveClass="defaultStore.state.animation ? $style.transition_x_move : ''"
++<component
++	:is="prefer.s.animation ? TransitionGroup : 'div'"
++	:enterActiveClass="$style.transition_x_enterActive"
++	:leaveActiveClass="$style.transition_x_leaveActive"
++	:enterFromClass="$style.transition_x_enterFrom"
++	:leaveToClass="$style.transition_x_leaveTo"
++	:moveClass="$style.transition_x_move"
+ 	tag="div" :class="$style.root"
+ >
+-	<XReaction v-for="[reaction, count] in reactions" :key="reaction" :reaction="reaction" :count="count" :isInitial="initialReactions.has(reaction)" :note="note" @reactionToggled="onMockToggleReaction"/>
+-	<slot v-if="hasMoreReactions" name="more"/>
+-</TransitionGroup>
++	<XReaction
++		v-for="[reaction, count] in _reactions"
++		:key="reaction"
++		:reaction="reaction"
++		:reactionEmojis="props.reactionEmojis"
++		:count="count"
++		:isInitial="initialReactions.has(reaction)"
++		:noteId="props.noteId"
++		:myReaction="props.myReaction"
++		@reactionToggled="onMockToggleReaction"
++	/>
++	<slot v-if="hasMoreReactions" name="more"></slot>
++</component>
+ </template>
+ 
+ <script lang="ts" setup>
+ import * as Misskey from 'misskey-js';
+ import { inject, watch, ref } from 'vue';
++import { TransitionGroup } from 'vue';
++import { isSupportedEmoji } from '@@/js/emojilist.js';
+ import XReaction from '@/components/MkReactionsViewer.reaction.vue';
+-import { defaultStore } from '@/store.js';
++import { $i } from '@/i.js';
++import { prefer } from '@/preferences.js';
++import { customEmojisMap } from '@/custom-emojis.js';
++import { DI } from '@/di.js';
+ 
+ const props = withDefaults(defineProps<{
+-	note: Misskey.entities.Note;
++	noteId: Misskey.entities.Note['id'];
++	reactions: Misskey.entities.Note['reactions'];
++	reactionEmojis: Misskey.entities.Note['reactionEmojis'];
++	myReaction: Misskey.entities.Note['myReaction'];
+ 	maxNumber?: number;
+ }>(), {
+ 	maxNumber: Infinity,
+ });
+ 
+-const mock = inject<boolean>('mock', false);
++const mock = inject(DI.mock, false);
+ 
+ const emit = defineEmits<{
+ 	(ev: 'mockUpdateMyReaction', emoji: string, delta: number): void;
+ }>();
+ 
+-const initialReactions = new Set(Object.keys(props.note.reactions));
++const initialReactions = new Set(Object.keys(props.reactions));
+ 
+-const reactions = ref<[string, number][]>([]);
++const _reactions = ref<[string, number][]>([]);
+ const hasMoreReactions = ref(false);
+ 
+-if (props.note.myReaction && !Object.keys(reactions.value).includes(props.note.myReaction)) {
+-	reactions.value[props.note.myReaction] = props.note.reactions[props.note.myReaction];
++if (props.myReaction != null && !(props.myReaction in props.reactions)) {
++	_reactions.value.push([props.myReaction, props.reactions[props.myReaction]]);
+ }
+ 
+ function onMockToggleReaction(emoji: string, count: number) {
+ 	if (!mock) return;
+ 
+-	const i = reactions.value.findIndex((item) => item[0] === emoji);
++	const i = _reactions.value.findIndex((item) => item[0] === emoji);
+ 	if (i < 0) return;
+ 
+-	emit('mockUpdateMyReaction', emoji, (count - reactions.value[i][1]));
++	emit('mockUpdateMyReaction', emoji, (count - _reactions.value[i][1]));
+ }
+ 
+-watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumber]) => {
++function canReact(reaction: string) {
++	if (!$i) return false;
++	// TODO: CheckPermissions
++	return !reaction.match(/@\w/) && (customEmojisMap.has(reaction) || isSupportedEmoji(reaction));
++}
++
++watch([() => props.reactions, () => props.maxNumber], ([newSource, maxNumber]) => {
+ 	let newReactions: [string, number][] = [];
+ 	hasMoreReactions.value = Object.keys(newSource).length > maxNumber;
+ 
+-	for (let i = 0; i < reactions.value.length; i++) {
+-		const reaction = reactions.value[i][0];
++	for (let i = 0; i < _reactions.value.length; i++) {
++		const reaction = _reactions.value[i][0];
+ 		if (reaction in newSource && newSource[reaction] !== 0) {
+-			reactions.value[i][1] = newSource[reaction];
+-			newReactions.push(reactions.value[i]);
++			_reactions.value[i][1] = newSource[reaction];
++			newReactions.push(_reactions.value[i]);
+ 		}
+ 	}
+ 
+@@ -70,17 +95,25 @@ watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumbe
+ 	newReactions = [
+ 		...newReactions,
+ 		...Object.entries(newSource)
+-			.sort(([, a], [, b]) => b - a)
++			.sort(([emojiA, countA], [emojiB, countB]) => {
++				if (prefer.s.showAvailableReactionsFirstInNote) {
++					if (!canReact(emojiA) && canReact(emojiB)) return 1;
++					if (canReact(emojiA) && !canReact(emojiB)) return -1;
++					return countB - countA;
++				} else {
++					return countB - countA;
++				}
++			})
+ 			.filter(([y], i) => i < maxNumber && !newReactionsNames.includes(y)),
+ 	];
+ 
+ 	newReactions = newReactions.slice(0, props.maxNumber);
+ 
+-	if (props.note.myReaction && !newReactions.map(([x]) => x).includes(props.note.myReaction)) {
+-		newReactions.push([props.note.myReaction, newSource[props.note.myReaction]]);
++	if (props.myReaction && !newReactions.map(([x]) => x).includes(props.myReaction)) {
++		newReactions.push([props.myReaction, newSource[props.myReaction]]);
+ 	}
+ 
+-	reactions.value = newReactions;
++	_reactions.value = newReactions;
+ }, { immediate: true, deep: true });
+ </script>
+ 
+@@ -103,7 +136,7 @@ watch([() => props.note.reactions, () => props.maxNumber], ([newSource, maxNumbe
+ 	display: flex;
+ 	flex-wrap: wrap;
+ 	align-items: center;
+-	margin: 4px -2px 0 -2px;
++	gap: 4px;
+ 
+ 	&:empty {
+ 		display: none;
+diff --git a/packages/frontend/src/components/MkUserCardMini.vue b/packages/frontend/src/components/MkUserCardMini.vue
+index 7a2e878931..1fd43bd6e4 100644
+--- a/packages/frontend/src/components/MkUserCardMini.vue
++++ b/packages/frontend/src/components/MkUserCardMini.vue
+@@ -8,7 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<MkAvatar :class="$style.avatar" :user="user" indicator/>
+ 	<div :class="$style.body">
+ 		<span :class="$style.name"><MkUserName :user="user"/></span>
+-		<span :class="$style.sub"><span class="_monospace">@{{ acct(user) }}</span></span>
++		<span :class="$style.sub"><slot name="sub"><span class="_monospace">@{{ acct(user) }}</span></slot></span>
+ 	</div>
+ 	<MkMiniChart v-if="chartValues" :class="$style.chart" :src="chartValues"/>
+ </div>
+@@ -18,7 +18,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ import * as Misskey from 'misskey-js';
+ import { onMounted, ref } from 'vue';
+ import MkMiniChart from '@/components/MkMiniChart.vue';
+-import { misskeyApiGet } from '@/scripts/misskey-api.js';
++import { misskeyApiGet } from '@/utility/misskey-api.js';
+ import { acct } from '@/filters/user.js';
+ 
+ const props = withDefaults(defineProps<{
+diff --git a/packages/frontend/src/components/MkUsersTooltip.vue b/packages/frontend/src/components/MkUsersTooltip.vue
+index 0cb7f22e93..d0bfebc463 100644
+--- a/packages/frontend/src/components/MkUsersTooltip.vue
++++ b/packages/frontend/src/components/MkUsersTooltip.vue
+@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<MkTooltip ref="tooltip" :showing="showing" :targetElement="targetElement" :maxWidth="250" @closed="emit('closed')">
++<MkTooltip ref="tooltip" :showing="showing" :anchorElement="anchorElement" :maxWidth="250" @closed="emit('closed')">
+ 	<div :class="$style.root">
+ 		<div v-for="u in users" :key="u.id" :class="$style.user">
+ 			<MkAvatar :class="$style.avatar" :user="u"/>
+@@ -23,7 +23,7 @@ defineProps<{
+ 	showing: boolean;
+ 	users: Misskey.entities.UserLite[];
+ 	count: number;
+-	targetElement: HTMLElement;
++	anchorElement: HTMLElement;
+ }>();
+ 
+ const emit = defineEmits<{
+diff --git a/packages/frontend/src/components/global/MkAvatar.vue b/packages/frontend/src/components/global/MkAvatar.vue
+index 35c07bc80c..b413fef3b8 100644
+--- a/packages/frontend/src/components/global/MkAvatar.vue
++++ b/packages/frontend/src/components/global/MkAvatar.vue
+@@ -5,28 +5,29 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ <template>
+ <component :is="link ? MkA : 'span'" v-user-preview="preview ? user.id : undefined" v-bind="bound" class="_noSelect" :class="[$style.root, { [$style.animation]: animation, [$style.cat]: user.isCat, [$style.square]: squareAvatars }]" :style="{ color }" :title="acct(user)" @click="onClick">
+-	<MkImgWithBlurhash :class="$style.inner" :src="url" :hash="user.avatarBlurhash" :cover="true" :onlyAvgColor="true"/>
++	<MkImgWithBlurhash v-if="prefer.s.enableHighQualityImagePlaceholders" :class="$style.inner" :src="url" :hash="user.avatarBlurhash" :cover="true" :onlyAvgColor="true"/>
++	<img v-else :class="$style.inner" :src="url" alt="" decoding="async" style="pointer-events: none;"/>
+ 	<MkUserOnlineIndicator v-if="indicator" :class="$style.indicator" :user="user"/>
+ 	<div v-if="user.isCat" :class="[$style.ears]">
+ 		<div :class="$style.earLeft">
+ 			<div v-if="false" :class="$style.layer">
+-				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"/>
+-				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"/>
+-				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"/>
++				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"></div>
++				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"></div>
++				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"></div>
+ 			</div>
+ 		</div>
+ 		<div :class="$style.earRight">
+ 			<div v-if="false" :class="$style.layer">
+-				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"/>
+-				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"/>
+-				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"/>
++				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"></div>
++				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"></div>
++				<div :class="$style.plot" :style="{ backgroundImage: `url(${JSON.stringify(url)})` }"></div>
+ 			</div>
+ 		</div>
+ 	</div>
+ 	<template v-if="showDecoration">
+ 		<img
+ 			v-for="decoration in decorations ?? user.avatarDecorations"
+-			:class="[$style.decoration, { [$style.decorationBlink]: decoration.blink }]"
++			:class="[$style.decoration, { [$style.decorationBlink]: getDecorationIsBrink(decoration) }]"
+ 			:src="getDecorationUrl(decoration)"
+ 			:style="{
+ 				rotate: getDecorationAngle(decoration),
+@@ -34,6 +35,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				translate: getDecorationOffset(decoration),
+ 			}"
+ 			alt=""
++			draggable="false"
++			style="-webkit-user-drag: none;"
+ 		>
+ 	</template>
+ </component>
+@@ -45,14 +48,16 @@ import * as Misskey from 'misskey-js';
+ import { extractAvgColorFromBlurhash } from '@@/js/extract-avg-color-from-blurhash.js';
+ import MkImgWithBlurhash from '../MkImgWithBlurhash.vue';
+ import MkA from './MkA.vue';
+-import { getStaticImageUrl } from '@/scripts/media-proxy.js';
++import { getStaticImageUrl } from '@/utility/media-proxy.js';
+ import { acct, userPage } from '@/filters/user.js';
+ import MkUserOnlineIndicator from '@/components/MkUserOnlineIndicator.vue';
+-import { defaultStore } from '@/store.js';
++import { prefer } from '@/preferences.js';
+ 
+-const animation = ref(defaultStore.state.animation);
+-const squareAvatars = ref(defaultStore.state.squareAvatars);
+-const useBlurEffect = ref(defaultStore.state.useBlurEffect);
++const animation = ref(prefer.s.animation);
++const squareAvatars = ref(prefer.s.squareAvatars);
++
++type Decoration = Misskey.entities.UserDetailed['avatarDecorations'][number];
++type DecorationEditorDecoration = Omit<Misskey.entities.UserDetailed['avatarDecorations'][number], 'id'> & { blink?: boolean; };
+ 
+ const props = withDefaults(defineProps<{
+ 	user: Misskey.entities.User;
+@@ -60,7 +65,7 @@ const props = withDefaults(defineProps<{
+ 	link?: boolean;
+ 	preview?: boolean;
+ 	indicator?: boolean;
+-	decorations?: (Omit<Misskey.entities.UserDetailed['avatarDecorations'][number], 'id'> & { blink?: boolean; })[];
++	decorations?: DecorationEditorDecoration[];
+ 	forceShowDecoration?: boolean;
+ }>(), {
+ 	target: null,
+@@ -72,47 +77,50 @@ const props = withDefaults(defineProps<{
+ });
+ 
+ const emit = defineEmits<{
+-	(ev: 'click', v: MouseEvent): void;
++	(ev: 'click', v: PointerEvent): void;
+ }>();
+ 
+-const showDecoration = props.forceShowDecoration || defaultStore.state.showAvatarDecorations;
++const showDecoration = props.forceShowDecoration || prefer.s.showAvatarDecorations;
+ 
+ const bound = computed(() => props.link
+ 	? { to: userPage(props.user), target: props.target }
+ 	: {});
+ 
+ const url = computed(() => {
+-	if (props.user.avatarUrl == null) return null;
+-	if (defaultStore.state.disableShowingAnimatedImages || defaultStore.state.dataSaver.avatar) return getStaticImageUrl(props.user.avatarUrl);
++	if (prefer.s.disableShowingAnimatedImages || prefer.s.dataSaver.avatar) return getStaticImageUrl(props.user.avatarUrl);
+ 	return props.user.avatarUrl;
+ });
+ 
+-function onClick(ev: MouseEvent): void {
++function onClick(ev: PointerEvent): void {
+ 	if (props.link) return;
+ 	emit('click', ev);
+ }
+ 
+-function getDecorationUrl(decoration: Omit<Misskey.entities.UserDetailed['avatarDecorations'][number], 'id'>) {
+-	if (defaultStore.state.disableShowingAnimatedImages || defaultStore.state.dataSaver.avatar) return getStaticImageUrl(decoration.url);
++function getDecorationUrl(decoration: Decoration | DecorationEditorDecoration) {
++	if (prefer.s.disableShowingAnimatedImages || prefer.s.dataSaver.avatar) return getStaticImageUrl(decoration.url);
+ 	return decoration.url;
+ }
+ 
+-function getDecorationAngle(decoration: Omit<Misskey.entities.UserDetailed['avatarDecorations'][number], 'id'>) {
++function getDecorationAngle(decoration: Decoration | DecorationEditorDecoration) {
+ 	const angle = decoration.angle ?? 0;
+ 	return angle === 0 ? undefined : `${angle * 360}deg`;
+ }
+ 
+-function getDecorationScale(decoration: Omit<Misskey.entities.UserDetailed['avatarDecorations'][number], 'id'>) {
++function getDecorationScale(decoration: Decoration | DecorationEditorDecoration) {
+ 	const scaleX = decoration.flipH ? -1 : 1;
+ 	return scaleX === 1 ? undefined : `${scaleX} 1`;
+ }
+ 
+-function getDecorationOffset(decoration: Omit<Misskey.entities.UserDetailed['avatarDecorations'][number], 'id'>) {
++function getDecorationOffset(decoration: Decoration | DecorationEditorDecoration) {
+ 	const offsetX = decoration.offsetX ?? 0;
+ 	const offsetY = decoration.offsetY ?? 0;
+ 	return offsetX === 0 && offsetY === 0 ? undefined : `${offsetX * 100}% ${offsetY * 100}%`;
+ }
+ 
++function getDecorationIsBrink(decoration: Decoration | DecorationEditorDecoration) {
++	return 'blink' in decoration && decoration.blink === true;
++}
++
+ const color = ref<string | undefined>();
+ 
+ watch(() => props.user.avatarBlurhash, () => {
+diff --git a/packages/frontend/src/components/global/MkCustomEmoji.vue b/packages/frontend/src/components/global/MkCustomEmoji.vue
+index ec1d859080..9a171876a0 100644
+--- a/packages/frontend/src/components/global/MkCustomEmoji.vue
++++ b/packages/frontend/src/components/global/MkCustomEmoji.vue
+@@ -5,10 +5,21 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ <template>
+ <img
+-	v-if="errored && fallbackToImage"
++	v-if="shouldMute"
++	:class="[$style.root, { [$style.normal]: normal, [$style.noStyle]: noStyle }]"
++	src="/client-assets/unknown.png"
++	:title="alt"
++	draggable="false"
++	style="-webkit-user-drag: none;"
++	@click="onClick"
++/>
++<img
++	v-else-if="errored && fallbackToImage"
+ 	:class="[$style.root, { [$style.normal]: normal, [$style.noStyle]: noStyle }]"
+ 	src="/client-assets/dummy.png"
+ 	:title="alt"
++	draggable="false"
++	style="-webkit-user-drag: none;"
+ />
+ <span v-else-if="errored">:{{ customEmojiName }}:</span>
+ <img
+@@ -18,6 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	:alt="alt"
+ 	:title="alt"
+ 	decoding="async"
++	draggable="false"
+ 	@error="errored = true"
+ 	@load="errored = false"
+ 	@click="onClick"
+@@ -27,16 +39,17 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script lang="ts" setup>
+ import { computed, defineAsyncComponent, inject, ref } from 'vue';
+ import type { MenuItem } from '@/types/menu.js';
+-import { getProxiedImageUrl, getStaticImageUrl } from '@/scripts/media-proxy.js';
+-import { defaultStore } from '@/store.js';
++import { getProxiedImageUrl, getStaticImageUrl } from '@/utility/media-proxy.js';
+ import { customEmojisMap } from '@/custom-emojis.js';
+ import * as os from '@/os.js';
+-import { misskeyApi, misskeyApiGet } from '@/scripts/misskey-api.js';
+-import { copyToClipboard } from '@/scripts/copy-to-clipboard.js';
+-import * as sound from '@/scripts/sound.js';
++import { misskeyApi, misskeyApiGet } from '@/utility/misskey-api.js';
++import { copyToClipboard } from '@/utility/copy-to-clipboard.js';
+ import { i18n } from '@/i18n.js';
+ import MkCustomEmojiDetailedDialog from '@/components/MkCustomEmojiDetailedDialog.vue';
+-import { $i } from '@/account.js';
++import { $i } from '@/i.js';
++import { prefer } from '@/preferences.js';
++import { DI } from '@/di.js';
++import { makeEmojiMuteKey, mute as muteEmoji, unmute as unmuteEmoji, checkMuted as checkEmojiMuted } from '@/utility/emoji-mute';
+ 
+ const props = defineProps<{
+ 	name: string;
+@@ -48,12 +61,16 @@ const props = defineProps<{
+ 	menu?: boolean;
+ 	menuReaction?: boolean;
+ 	fallbackToImage?: boolean;
++	ignoreMuted?: boolean;
+ }>();
+ 
+-const react = inject<((name: string) => void) | null>('react', null);
++const react = inject(DI.mfmEmojiReactCallback);
+ 
+ const customEmojiName = computed(() => (props.name[0] === ':' ? props.name.substring(1, props.name.length - 1) : props.name).replace('@.', ''));
+ const isLocal = computed(() => !props.host && (customEmojiName.value.endsWith('@.') || !customEmojiName.value.includes('@')));
++const emojiCodeToMute = makeEmojiMuteKey(props);
++const isMuted = checkEmojiMuted(emojiCodeToMute);
++const shouldMute = computed(() => !props.ignoreMuted && isMuted.value);
+ 
+ const rawUrl = computed(() => {
+ 	if (props.url) {
+@@ -77,7 +94,7 @@ const url = computed(() => {
+ 				false,
+ 				true,
+ 			);
+-	return defaultStore.reactiveState.disableShowingAnimatedImages.value
++	return prefer.s.disableShowingAnimatedImages
+ 		? getStaticImageUrl(proxied)
+ 		: proxied;
+ });
+@@ -85,48 +102,72 @@ const url = computed(() => {
+ const alt = computed(() => `:${customEmojiName.value}:`);
+ const errored = ref(url.value == null);
+ 
+-function onClick(ev: MouseEvent) {
++function onClick(ev: PointerEvent) {
+ 	if (props.menu) {
+ 		const menuItems: MenuItem[] = [];
+ 
+ 		menuItems.push({
+ 			type: 'label',
+ 			text: `:${props.name}:`,
+-		}, {
+-			text: i18n.ts.copy,
+-			icon: 'ti ti-copy',
+-			action: () => {
+-				copyToClipboard(`:${props.name}:`);
+-				os.success();
+-			},
+ 		});
+ 
++		if (isLocal.value) {
++			menuItems.push({
++				text: i18n.ts.copy,
++				icon: 'ti ti-copy',
++				action: () => {
++					copyToClipboard(`:${props.name}:`);
++				},
++			});
++		}
++
+ 		if (props.menuReaction && react) {
+ 			menuItems.push({
+ 				text: i18n.ts.doReaction,
+ 				icon: 'ti ti-plus',
+ 				action: () => {
+ 					react(`:${props.name}:`);
+-					sound.playMisskeySfx('reaction');
+ 				},
+ 			});
+ 		}
+ 
+-		menuItems.push({
+-			text: i18n.ts.info,
+-			icon: 'ti ti-info-circle',
+-			action: async () => {
+-				const { dispose } = os.popup(MkCustomEmojiDetailedDialog, {
+-					emoji: await misskeyApiGet('emoji', {
+-						name: customEmojiName.value,
+-					}),
+-				}, {
+-					closed: () => dispose(),
+-				});
+-			},
+-		});
++		if (isLocal.value) {
++			menuItems.push({
++				type: 'divider',
++			}, {
++				text: i18n.ts.info,
++				icon: 'ti ti-info-circle',
++				action: async () => {
++					const { dispose } = os.popup(MkCustomEmojiDetailedDialog, {
++						emoji: await misskeyApiGet('emoji', {
++							name: customEmojiName.value,
++						}),
++					}, {
++						closed: () => dispose(),
++					});
++				},
++			});
++		}
+ 
+-		if ($i?.isModerator ?? $i?.isAdmin) {
++		if (isMuted.value) {
++			menuItems.push({
++				text: i18n.ts.emojiUnmute,
++				icon: 'ti ti-mood-smile',
++				action: async () => {
++					await unmute();
++				},
++			});
++		} else {
++			menuItems.push({
++				text: i18n.ts.emojiMute,
++				icon: 'ti ti-mood-off',
++				action: async () => {
++					await mute();
++				},
++			});
++		}
++
++		if (($i?.isModerator ?? $i?.isAdmin) && isLocal.value) {
+ 			menuItems.push({
+ 				text: i18n.ts.edit,
+ 				icon: 'ti ti-pencil',
+@@ -144,19 +185,50 @@ async function edit(name: string) {
+ 	const emoji = await misskeyApi('emoji', {
+ 		name: name,
+ 	});
+-	const { dispose } = os.popup(defineAsyncComponent(() => import('@/pages/emoji-edit-dialog.vue')), {
++	const { dispose } = await os.popupAsyncWithDialog(import('@/pages/emoji-edit-dialog.vue').then(x => x.default), {
+ 		emoji: emoji,
+ 	}, {
+ 		closed: () => dispose(),
+ 	});
+ }
+ 
++function mute() {
++	const titleEmojiName = isLocal.value
++		? `:${customEmojiName.value}:`
++		: emojiCodeToMute;
++	os.confirm({
++		type: 'question',
++		title: i18n.tsx.muteX({ x: titleEmojiName }),
++	}).then(({ canceled }) => {
++		if (canceled) {
++			return;
++		}
++		muteEmoji(emojiCodeToMute);
++	});
++}
++
++function unmute() {
++	const titleEmojiName = isLocal.value
++		? `:${customEmojiName.value}:`
++		: emojiCodeToMute;
++	os.confirm({
++		type: 'question',
++		title: i18n.tsx.unmuteX({ x: titleEmojiName }),
++	}).then(({ canceled }) => {
++		if (canceled) {
++			return;
++		}
++		unmuteEmoji(emojiCodeToMute);
++	});
++}
++
+ </script>
+ 
+ <style lang="scss" module>
+ .root {
+ 	height: 2em;
+ 	vertical-align: middle;
++	-webkit-user-drag: none;
+ 	transition: transform 0.2s ease;
+ 
+ 	&:hover {
+diff --git a/packages/frontend/src/components/global/MkPageHeader.vue b/packages/frontend/src/components/global/MkPageHeader.vue
+index 1070c0c83b..e8c93b7092 100644
+--- a/packages/frontend/src/components/global/MkPageHeader.vue
++++ b/packages/frontend/src/components/global/MkPageHeader.vue
+@@ -4,12 +4,12 @@ SPDX-License-Identifier: AGPL-3.0-only
+ -->
+ 
+ <template>
+-<div v-if="show" ref="el" :class="[$style.root]" :style="{ background: bg }">
++<div v-if="show" ref="el" :class="[$style.root]">
+ 	<div :class="[$style.upper, { [$style.slim]: narrow, [$style.thin]: thin_ }]">
+-		<div v-if="!thin_ && narrow && props.displayMyAvatar && $i" class="_button" :class="$style.buttonsLeft" @click="openAccountMenu">
++		<div v-if="!thin_ && narrow && props.displayMyAvatar && $i" class="_button" @click="openAccountMenu">
+ 			<MkAvatar :class="$style.avatar" :user="$i"/>
+ 		</div>
+-		<div v-else-if="!thin_ && narrow && !hideTitle" :class="$style.buttonsLeft"/>
++		<div v-else-if="!thin_ && narrow && !hideTitle" :class="$style.buttons"></div>
+ 
+ 		<template v-if="pageMetadata">
+ 			<div v-if="!hideTitle" :class="$style.titleContainer" @click="top">
+@@ -18,9 +18,9 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				</div>
+ 				<i v-else-if="pageMetadata.icon" :class="[$style.titleIcon, pageMetadata.icon]"></i>
+ 
+-				<div :class="$style.title">
++				<div class="_nowrap" :class="$style.title">
+ 					<MkUserName v-if="pageMetadata.userName" :user="pageMetadata.userName" :nowrap="true"/>
+-					<div v-else-if="pageMetadata.title">{{ pageMetadata.title }}</div>
++					<div v-else-if="pageMetadata.title" class="_nowrap">{{ pageMetadata.title }}</div>
+ 					<div v-if="pageMetadata.subtitle" :class="$style.subtitle">
+ 						{{ pageMetadata.subtitle }}
+ 					</div>
+@@ -28,7 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			</div>
+ 			<XTabs v-if="!narrow || hideTitle" :class="$style.tabs" :tab="tab" :tabs="tabs" :rootEl="el" @update:tab="key => emit('update:tab', key)" @tabClick="onTabClick"/>
+ 		</template>
+-		<div v-if="(!thin_ && narrow && !hideTitle) || (actions && actions.length > 0)" :class="$style.buttonsRight">
++		<div v-if="(!thin_ && narrow && !hideTitle) || (actions && actions.length > 0)" :class="$style.buttons">
+ 			<template v-for="action in actions">
+ 				<button v-tooltip.noDelay="action.text" class="_button" :class="[$style.button, { [$style.highlighted]: action.highlighted }]" @click.stop="action.handler" @touchstart="preventDrag"><i :class="action.icon"></i></button>
+ 			</template>
+@@ -40,42 +40,48 @@ SPDX-License-Identifier: AGPL-3.0-only
+ </div>
+ </template>
+ 
+-<script lang="ts" setup>
+-import { onMounted, onUnmounted, ref, inject, shallowRef, computed } from 'vue';
+-import tinycolor from 'tinycolor2';
+-import XTabs from './MkPageHeader.tabs.vue';
+-import type { Tab } from './MkPageHeader.tabs.vue';
+-import { scrollToTop } from '@@/js/scroll.js';
+-import { globalEvents } from '@/events.js';
+-import { injectReactiveMetadata } from '@/scripts/page-metadata.js';
+-import { $i, openAccountMenu as openAccountMenu_ } from '@/account.js';
++<script lang="ts">
+ import type { PageHeaderItem } from '@/types/page-header.js';
+-import type { PageMetadata } from '@/scripts/page-metadata.js';
++import type { PageMetadata } from '@/page.js';
++import type { Tab } from './MkPageHeader.tabs.vue';
+ 
+-const props = withDefaults(defineProps<{
++export type PageHeaderProps = {
+ 	overridePageMetadata?: PageMetadata;
+ 	tabs?: Tab[];
+ 	tab?: string;
+ 	actions?: PageHeaderItem[] | null;
+ 	thin?: boolean;
+ 	hideTitle?: boolean;
++	canOmitTitle?: boolean;
+ 	displayMyAvatar?: boolean;
+-}>(), {
++};
++</script>
++
++<script lang="ts" setup>
++import { onMounted, onUnmounted, ref, inject, useTemplateRef, computed } from 'vue';
++import { scrollToTop } from '@@/js/scroll.js';
++import XTabs from './MkPageHeader.tabs.vue';
++import { getAccountMenu } from '@/accounts.js';
++import { $i } from '@/i.js';
++import { DI } from '@/di.js';
++import * as os from '@/os.js';
++
++const props = withDefaults(defineProps<PageHeaderProps>(), {
+ 	tabs: () => ([] as Tab[]),
+ });
+ 
+ const emit = defineEmits<{
+-	(ev: 'update:tab', key: string);
++	(ev: 'update:tab', key: string): void;
+ }>();
+ 
+-const injectedPageMetadata = injectReactiveMetadata();
++//const viewId = inject(DI.viewId);
++const injectedPageMetadata = inject(DI.pageMetadata, ref(null));
+ const pageMetadata = computed(() => props.overridePageMetadata ?? injectedPageMetadata.value);
+ 
+-const hideTitle = computed(() => inject('shouldOmitHeaderTitle', false) || props.hideTitle);
++const hideTitle = computed(() => inject('shouldOmitHeaderTitle', false) || props.hideTitle || (props.canOmitTitle && props.tabs.length > 0));
+ const thin_ = props.thin || inject('shouldHeaderThin', false);
+ 
+-const el = shallowRef<HTMLElement | undefined>(undefined);
+-const bg = ref<string | undefined>(undefined);
++const el = useTemplateRef('el');
+ const narrow = ref(false);
+ const hasTabs = computed(() => props.tabs.length > 0);
+ const hasActions = computed(() => props.actions && props.actions.length > 0);
+@@ -93,33 +99,25 @@ const top = () => {
+ 	}
+ };
+ 
+-function openAccountMenu(ev: MouseEvent) {
+-	openAccountMenu_({
++async function openAccountMenu(ev: PointerEvent) {
++	const menuItems = await getAccountMenu({
+ 		withExtraOperation: true,
+-	}, ev);
++	});
++
++	os.popupMenu(menuItems, ev.currentTarget ?? ev.target);
+ }
+ 
+ function onTabClick(): void {
+ 	top();
+ }
+ 
+-const calcBg = () => {
+-	const rawBg = 'var(--MI_THEME-bg)';
+-	const tinyBg = tinycolor(rawBg.startsWith('var(') ? getComputedStyle(document.documentElement).getPropertyValue(rawBg.slice(4, -1)) : rawBg);
+-	tinyBg.setAlpha(0.85);
+-	bg.value = tinyBg.toRgbString();
+-};
+-
+ let ro: ResizeObserver | null;
+ 
+ onMounted(() => {
+-	calcBg();
+-	globalEvents.on('themeChanged', calcBg);
+-
+ 	if (el.value && el.value.parentElement) {
+ 		narrow.value = el.value.parentElement.offsetWidth < 500;
+ 		ro = new ResizeObserver((entries, observer) => {
+-			if (el.value && el.value.parentElement && document.body.contains(el.value as HTMLElement)) {
++			if (el.value && el.value.parentElement && window.document.body.contains(el.value as HTMLElement)) {
+ 				narrow.value = el.value.parentElement.offsetWidth < 500;
+ 			}
+ 		});
+@@ -128,17 +126,24 @@ onMounted(() => {
+ });
+ 
+ onUnmounted(() => {
+-	globalEvents.off('themeChanged', calcBg);
+ 	if (ro) ro.disconnect();
+ });
+ </script>
+ 
+ <style lang="scss" module>
+ .root {
++	background: color(from var(--MI_THEME-pageHeaderBg) srgb r g b / 0.75);
+ 	-webkit-backdrop-filter: var(--MI-blur, blur(15px));
+ 	backdrop-filter: var(--MI-blur, blur(15px));
+-	border-bottom: solid 0.5px var(--MI_THEME-divider);
++	border-bottom: solid 0.5px transparent;
+ 	width: 100%;
++	color: var(--MI_THEME-pageHeaderFg);
++}
++
++@container style(--MI_THEME-pageHeaderBg: var(--MI_THEME-bg)) {
++	.root {
++		border-bottom: solid 0.5px var(--MI_THEME-divider);
++	}
+ }
+ 
+ .upper,
+@@ -149,8 +154,10 @@ onUnmounted(() => {
+ 
+ .upper {
+ 	--height: 50px;
++	--margin: var(--MI-margin);
+ 	display: flex;
+-	gap: var(--MI-margin);
++	gap: var(--margin);
++	align-items: center;
+ 	height: var(--height);
+ 
+ 	.tabs:first-child {
+@@ -163,6 +170,7 @@ onUnmounted(() => {
+ 
+ 	&.thin {
+ 		--height: 40px;
++		--margin: 8px;
+ 
+ 		> .buttons {
+ 			> .button {
+@@ -173,12 +181,8 @@ onUnmounted(() => {
+ 
+ 	&.slim {
+ 		text-align: center;
+-		gap: 0;
+ 
+-		.tabs:first-child {
+-			margin-left: 0;
+-		}
+-		> .titleContainer {
++		.titleContainer {
+ 			margin: 0 auto;
+ 			max-width: 100%;
+ 		}
+@@ -191,7 +195,7 @@ onUnmounted(() => {
+ }
+ 
+ .buttons {
+-	--margin: 8px;
++	flex-shrink: 0;
+ 	display: flex;
+ 	align-items: center;
+ 	min-width: var(--height);
+@@ -201,16 +205,6 @@ onUnmounted(() => {
+ 	}
+ }
+ 
+-.buttonsLeft {
+-	composes: buttons;
+-	margin: 0 var(--margin) 0 0;
+-}
+-
+-.buttonsRight {
+-	composes: buttons;
+-	margin: 0 0 0 var(--margin);
+-}
+-
+ .avatar {
+ 	$size: 32px;
+ 	display: inline-block;
+@@ -225,7 +219,7 @@ onUnmounted(() => {
+ 	align-items: center;
+ 	justify-content: center;
+ 	height: var(--height);
+-	width: calc(var(--height) - (var(--margin)));
++	width: calc(var(--height) - 8px);
+ 	box-sizing: border-box;
+ 	position: relative;
+ 	border-radius: 5px;
+@@ -248,6 +242,7 @@ onUnmounted(() => {
+ .titleContainer {
+ 	display: flex;
+ 	align-items: center;
++	min-width: 0;
+ 	max-width: min(30vw, 400px);
+ 	overflow: clip;
+ 	white-space: nowrap;
+@@ -281,9 +276,6 @@ onUnmounted(() => {
+ 
+ .title {
+ 	min-width: 0;
+-	overflow: hidden;
+-	text-overflow: ellipsis;
+-	white-space: nowrap;
+ 	line-height: 1.1;
+ }
+ 
+diff --git a/packages/frontend/src/pages/emoji-edit-dialog.vue b/packages/frontend/src/pages/emoji-edit-dialog.vue
+index da3315cff5..edd3987524 100644
+--- a/packages/frontend/src/pages/emoji-edit-dialog.vue
++++ b/packages/frontend/src/pages/emoji-edit-dialog.vue
+@@ -16,7 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<template v-else #header>New emoji</template>
+ 
+ 	<div style="display: flex; flex-direction: column; min-height: 100%;">
+-		<MkSpacer :marginMin="20" :marginMax="28" style="flex-grow: 1;">
++		<div class="_spacer" style="--MI_SPACER-min: 20px; --MI_SPACER-max: 28px; flex-grow: 1;">
+ 			<div class="_gaps_m">
+ 				<div v-if="imgUrl != null" :class="$style.imgs">
+ 					<div style="background: #000;" :class="$style.imgContainer">
+@@ -36,7 +36,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<MkInput v-model="name" pattern="[a-z0-9_]" autocapitalize="off">
+ 					<template #label>{{ i18n.ts.name }}</template>
+ 				</MkInput>
+-				<MkInput v-model="category" :datalist="customEmojiCategories">
++				<MkInput v-model="category" :datalist="customEmojiCategories.filter(x => x != null)">
+ 					<template #label>{{ i18n.ts.category }}</template>
+ 				</MkInput>
+ 				<MkInput v-model="aliases" autocapitalize="off">
+@@ -58,7 +58,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ 						<div v-for="role in rolesThatCanBeUsedThisEmojiAsReaction" :key="role.id" :class="$style.roleItem">
+ 							<MkRolePreview :class="$style.role" :role="role" :forModeration="true" :detailed="false" style="pointer-events: none;"/>
+-							<button v-if="role.target === 'manual'" class="_button" :class="$style.roleUnassign" @click="removeRole(role, $event)"><i class="ti ti-x"></i></button>
++							<button v-if="role.target === 'manual'" class="_button" :class="$style.roleUnassign" @click="removeRole(role)"><i class="ti ti-x"></i></button>
+ 							<button v-else class="_button" :class="$style.roleUnassign" disabled><i class="ti ti-ban"></i></button>
+ 						</div>
+ 
+@@ -66,11 +66,11 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 						<MkInfo warn>{{ i18n.ts.rolesThatCanBeUsedThisEmojiAsReactionPublicRoleWarn }}</MkInfo>
+ 					</div>
+ 				</MkFolder>
+-				<MkSwitch v-model="isSensitive">isSensitive</MkSwitch>
++				<MkSwitch v-model="isSensitive">{{ i18n.ts.sensitive }}</MkSwitch>
+ 				<MkSwitch v-model="localOnly">{{ i18n.ts.localOnly }}</MkSwitch>
+ 				<MkButton v-if="emoji" danger @click="del()"><i class="ti ti-trash"></i> {{ i18n.ts.delete }}</MkButton>
+ 			</div>
+-		</MkSpacer>
++		</div>
+ 		<div :class="$style.footer">
+ 			<MkButton primary rounded style="margin: 0 auto;" @click="done"><i class="ti ti-check"></i> {{ props.emoji ? i18n.ts.update : i18n.ts.create }}</MkButton>
+ 		</div>
+@@ -79,7 +79,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, watch, ref } from 'vue';
++import { computed, watch, ref, useTemplateRef } from 'vue';
+ import * as Misskey from 'misskey-js';
+ import MkWindow from '@/components/MkWindow.vue';
+ import MkButton from '@/components/MkButton.vue';
+@@ -87,11 +87,11 @@ import MkInput from '@/components/MkInput.vue';
+ import MkInfo from '@/components/MkInfo.vue';
+ import MkFolder from '@/components/MkFolder.vue';
+ import * as os from '@/os.js';
+-import { misskeyApi } from '@/scripts/misskey-api.js';
++import { misskeyApi } from '@/utility/misskey-api.js';
+ import { i18n } from '@/i18n.js';
+ import { customEmojiCategories } from '@/custom-emojis.js';
+ import MkSwitch from '@/components/MkSwitch.vue';
+-import { selectFile } from '@/scripts/select-file.js';
++import { selectFile } from '@/utility/drive.js';
+ import MkRolePreview from '@/components/MkRolePreview.vue';
+ 
+ const props = defineProps<{
+@@ -99,11 +99,11 @@ const props = defineProps<{
+ }>();
+ 
+ const emit = defineEmits<{
+-	(ev: 'done', v: { deleted?: boolean; updated?: Misskey.entities.AdminEmojiUpdateRequest; created?: Misskey.entities.AdminEmojiUpdateRequest }): void,
++	(ev: 'done', v: { deleted?: boolean; updated?: Misskey.entities.EmojiDetailed; created?: Misskey.entities.EmojiDetailed }): void,
+ 	(ev: 'closed'): void
+ }>();
+ 
+-const windowEl = ref<InstanceType<typeof MkWindow> | null>(null);
++const windowEl = useTemplateRef('windowEl');
+ const name = ref<string>(props.emoji ? props.emoji.name : '');
+ const category = ref<string>(props.emoji?.category ? props.emoji.category : '');
+ const aliases = ref<string>(props.emoji ? props.emoji.aliases.join(' ') : '');
+@@ -120,8 +120,11 @@ watch(roleIdsThatCanBeUsedThisEmojiAsReaction, async () => {
+ 
+ const imgUrl = computed(() => file.value ? file.value.url : props.emoji ? props.emoji.url : null);
+ 
+-async function changeImage(ev: Event) {
+-	file.value = await selectFile(ev.currentTarget ?? ev.target, null);
++async function changeImage(ev: PointerEvent) {
++	file.value = await selectFile({
++		anchorElement: ev.currentTarget ?? ev.target,
++		multiple: false,
++	});
+ 	const candidate = file.value.name.replace(/\.(.+)$/, '');
+ 	if (candidate.match(/^[a-z0-9_]+$/)) {
+ 		name.value = candidate;
+@@ -132,15 +135,15 @@ async function addRole() {
+ 	const roles = await misskeyApi('admin/roles/list');
+ 	const currentRoleIds = rolesThatCanBeUsedThisEmojiAsReaction.value.map(x => x.id);
+ 
+-	const { canceled, result: role } = await os.select({
+-		items: roles.filter(r => r.isPublic).filter(r => !currentRoleIds.includes(r.id)).map(r => ({ text: r.name, value: r })),
++	const { canceled, result: roleId } = await os.select({
++		items: roles.filter(r => r.isPublic).filter(r => !currentRoleIds.includes(r.id)).map(r => ({ label: r.name, value: r.id })),
+ 	});
+-	if (canceled || role == null) return;
++	if (canceled || roleId == null) return;
+ 
+-	rolesThatCanBeUsedThisEmojiAsReaction.value.push(role);
++	rolesThatCanBeUsedThisEmojiAsReaction.value.push(roles.find(r => r.id === roleId)!);
+ }
+ 
+-async function removeRole(role: Misskey.entities.RoleLite, ev: Event) {
++async function removeRole(role: Misskey.entities.RoleLite) {
+ 	rolesThatCanBeUsedThisEmojiAsReaction.value = rolesThatCanBeUsedThisEmojiAsReaction.value.filter(x => x.id !== role.id);
+ }
+ 
+@@ -153,28 +156,40 @@ async function done() {
+ 		isSensitive: isSensitive.value,
+ 		localOnly: localOnly.value,
+ 		roleIdsThatCanBeUsedThisEmojiAsReaction: rolesThatCanBeUsedThisEmojiAsReaction.value.map(x => x.id),
+-	};
+-
+-	if (file.value) {
+-		params.fileId = file.value.id;
+-	}
++		fileId: file.value ? file.value.id : undefined,
++	} satisfies Misskey.entities.AdminEmojiUpdateRequest;
+ 
+ 	if (props.emoji) {
++		const emojiDetailed = {
++			id: props.emoji.id,
++			aliases: params.aliases,
++			name: params.name,
++			category: params.category,
++			host: props.emoji.host,
++			url: file.value ? file.value.url : props.emoji.url,
++			license: params.license,
++			isSensitive: params.isSensitive,
++			localOnly: params.localOnly,
++			roleIdsThatCanBeUsedThisEmojiAsReaction: params.roleIdsThatCanBeUsedThisEmojiAsReaction,
++		} satisfies Misskey.entities.EmojiDetailed;
++
+ 		await os.apiWithDialog('admin/emoji/update', {
+ 			id: props.emoji.id,
+ 			...params,
+ 		});
+ 
+ 		emit('done', {
+-			updated: {
+-				id: props.emoji.id,
+-				...params,
+-			},
++			updated: emojiDetailed,
+ 		});
+ 
+ 		windowEl.value?.close();
+ 	} else {
+-		const created = await os.apiWithDialog('admin/emoji/add', params);
++		if (params.fileId == null) return;
++
++		const created = await os.apiWithDialog('admin/emoji/add', {
++			...params,
++			fileId: params.fileId, // TSを黙らすため
++		});
+ 
+ 		emit('done', {
+ 			created: created,
+@@ -245,7 +260,7 @@ async function del() {
+ 	left: 0;
+ 	padding: 12px;
+ 	border-top: solid 0.5px var(--MI_THEME-divider);
+-	background: var(--MI_THEME-acrylicBg);
++	background: color(from var(--MI_THEME-bg) srgb r g b / 0.5);
+ 	-webkit-backdrop-filter: var(--MI-blur, blur(15px));
+ 	backdrop-filter: var(--MI-blur, blur(15px));
+ }

@@ -1,0 +1,2217 @@
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/01.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/01.png
+new file mode 100644
+index 0000000000..266bd0f4a1
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/01.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/02.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/02.png
+new file mode 100644
+index 0000000000..051e0e2e43
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/02.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/03.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/03.png
+new file mode 100644
+index 0000000000..f6f2bb203b
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/03.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/04.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/04.png
+new file mode 100644
+index 0000000000..6cd0eed5e0
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/04.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/05.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/05.png
+new file mode 100644
+index 0000000000..b2b14b7fa9
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/05.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/06.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/06.png
+new file mode 100644
+index 0000000000..bc9267731b
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/06.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/07.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/07.png
+new file mode 100644
+index 0000000000..54881f62aa
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/07.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/08.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/08.png
+new file mode 100644
+index 0000000000..b7985bb94a
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/08.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/09.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/09.png
+new file mode 100644
+index 0000000000..8467ed3144
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/09.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/10secarisa_monos/10.png b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/10.png
+new file mode 100644
+index 0000000000..0368c1a1f1
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/10secarisa_monos/10.png differ
+diff --git a/packages/frontend/assets/drop-and-fusion/chang.mp3 b/packages/frontend/assets/drop-and-fusion/chang.mp3
+new file mode 100644
+index 0000000000..6bdeb49731
+Binary files /dev/null and b/packages/frontend/assets/drop-and-fusion/chang.mp3 differ
+diff --git a/packages/frontend/assets/reversi/10secarisa_b.png b/packages/frontend/assets/reversi/10secarisa_b.png
+new file mode 100644
+index 0000000000..d7145ef43e
+Binary files /dev/null and b/packages/frontend/assets/reversi/10secarisa_b.png differ
+diff --git a/packages/frontend/assets/reversi/10secarisa_w.png b/packages/frontend/assets/reversi/10secarisa_w.png
+new file mode 100644
+index 0000000000..e3ae705c85
+Binary files /dev/null and b/packages/frontend/assets/reversi/10secarisa_w.png differ
+diff --git a/packages/frontend/src/events.ts b/packages/frontend/src/events.ts
+index d476aec04a..77a728242b 100644
+--- a/packages/frontend/src/events.ts
++++ b/packages/frontend/src/events.ts
+@@ -7,6 +7,8 @@ import { EventEmitter } from 'eventemitter3';
+ import * as Misskey from 'misskey-js';
+ 
+ export const globalEvents = new EventEmitter<{
++	prependTimeline: (note: Misskey.entities.Note) => void;
++	appendReaction: (reaction: string) => void;
+ 	themeChanged: () => void;
+ 	clientNotification: (notification: Misskey.entities.Notification) => void;
+ 	requestClearPageCache: () => void;
+diff --git a/packages/frontend/src/pages/drop-and-fusion.game.vue b/packages/frontend/src/pages/drop-and-fusion.game.vue
+index 10099e6291..7b5589936b 100644
+--- a/packages/frontend/src/pages/drop-and-fusion.game.vue
++++ b/packages/frontend/src/pages/drop-and-fusion.game.vue
+@@ -49,7 +49,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 							:leaveToClass="$style.transition_stock_leaveTo"
+ 							:moveClass="$style.transition_stock_move"
+ 						>
+-							<img v-for="x in stock" :key="x.id" :src="getTextureImageUrl(x.mono)" style="width: 32px; vertical-align: bottom;"/>
++							<img v-for="x in stock" :key="x.id" :src="getTextureImageUrl(x.mono)" style="width: 32px; vertical-align: bottom;" :style="{ scale: monoDefinitions.find(def => def.id === x.mono.id)!.spriteScale }"/>
+ 						</TransitionGroup>
+ 					</div>
+ 				</div>
+@@ -78,7 +78,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 						:moveClass="$style.transition_picked_move"
+ 						mode="out-in"
+ 					>
+-						<img v-if="currentPick" :key="currentPick.id" :src="getTextureImageUrl(currentPick.mono)" :class="$style.currentMono" :style="{ marginBottom: -((currentPick?.mono.sizeY * viewScale) / 2) + 'px', left: -((currentPick?.mono.sizeX * viewScale) / 2) + 'px', width: `${currentPick?.mono.sizeX * viewScale}px` }"/>
++						<img v-if="currentPick" :key="currentPick.id" :src="getTextureImageUrl(currentPick.mono)" :class="$style.currentMono" :style="{ marginBottom: -((currentPick?.mono.sizeY * viewScale * monoDefinitions.find(x => x.id === currentPick?.mono.id)?.spriteScale!) / 2) + 'px', left: -((currentPick?.mono.sizeX * viewScale * monoDefinitions.find(x => x.id === currentPick?.mono.id)?.spriteScale!) / 2) + 'px', width: `${currentPick?.mono.sizeX * viewScale * monoDefinitions.find(x => x.id === currentPick?.mono.id)?.spriteScale!}px` }"/>
+ 					</Transition>
+ 					<template v-if="dropReady && currentPick">
+ 						<img src="/client-assets/drop-and-fusion/drop-arrow.svg" :class="$style.currentMonoArrow"/>
+@@ -172,7 +172,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<div>FUSION RECIPE</div>
+ 					<div>
+ 						<div v-for="(mono, i) in game.monoDefinitions.sort((a, b) => a.level - b.level)" :key="mono.id" style="display: inline-block;">
+-							<img :src="getTextureImageUrl(mono)" style="width: 32px; vertical-align: bottom;"/>
++							<img :src="getTextureImageUrl(mono)" style="width: 32px; vertical-align: bottom;" :style="{ scale: monoDefinitions.find(x => x.id === mono.id)!.spriteScale }">
+ 							<div v-if="i < game.monoDefinitions.length - 1" style="display: inline-block; margin-left: 4px; vertical-align: bottom;"><i class="ti ti-arrow-big-right"></i></div>
+ 						</div>
+ 					</div>
+@@ -510,8 +510,80 @@ const SWEETS_MONOS: FrontendMonoDefinition[] = [{
+ 	spriteScale: 1,
+ }];
+ 
++const _10SECARISA_MONOS: FrontendMonoDefinition[] = [{
++	id: 'ac23eaf4-ff7a-4848-9071-4133b963c16a',
++	sfxPitch: 0.25,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/10.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 1.4,
++}, {
++	id: '9428fd5f-a97b-42c9-84bc-5b589decab29',
++	sfxPitch: 0.5,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/09.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 1.5,
++}, {
++	id: '872441e1-fefe-43d2-9693-d8d7bf8fb685',
++	sfxPitch: 0.75,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/08.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 1.4,
++}, {
++	id: '7ad2c550-f634-482a-948a-83dfadcffdc3',
++	sfxPitch: 1,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/07.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 1.7,
++}, {
++	id: '6e0861f6-e971-4066-bcc2-930c196dd307',
++	sfxPitch: 1.5,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/06.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 2.1,
++}, {
++	id: '5ec29f34-d1f2-4d47-b333-267b6f25261e',
++	sfxPitch: 2,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/05.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 2.4,
++}, {
++	id: '4ba4a70f-0a87-48b2-8ff7-10bd6248acca',
++	sfxPitch: 2.5,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/04.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 2.3,
++}, {
++	id: '3e15e087-25c9-4ae8-9e0b-d50269f9c91e',
++	sfxPitch: 3,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/03.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 2.8,
++}, {
++	id: '2f051890-0fa4-470b-b8f7-3782414d7016',
++	sfxPitch: 3.5,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/02.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 3.8,
++}, {
++	id: '1904602c-418f-42d7-ac9e-69ee996044ea',
++	sfxPitch: 4,
++	img: '/client-assets/drop-and-fusion/10secarisa_monos/01.png',
++	imgSizeX: 1280,
++	imgSizeY: 1280,
++	spriteScale: 4,
++}];
++
+ const props = defineProps<{
+-	gameMode: 'normal' | 'square' | 'yen' | 'sweets' | 'space';
++	gameMode: 'normal' | 'square' | 'yen' | 'sweets' | 'space' | '10secarisa';
+ 	mute: boolean;
+ }>();
+ 
+@@ -525,6 +597,7 @@ const monoDefinitions = computed(() => {
+ 		props.gameMode === 'yen' ? YEN_MONOS :
+ 		props.gameMode === 'sweets' ? SWEETS_MONOS :
+ 		props.gameMode === 'space' ? NORAML_MONOS :
++		props.gameMode === '10secarisa' ? _10SECARISA_MONOS :
+ 		[] as never;
+ });
+ 
+@@ -533,6 +606,7 @@ function getScoreUnit(gameMode: string) {
+ 		gameMode === 'square' ? 'pt' :
+ 		gameMode === 'yen' ? '円' :
+ 		gameMode === 'sweets' ? 'kcal' :
++		gameMode === '10secarisa' ? 'あり' :
+ 		'' as never;
+ }
+ 
+@@ -1209,13 +1283,14 @@ onMounted(async () => {
+ 
+ 	await start();
+ 
+-	const bgmBuffer = await sound.loadAudio('/client-assets/drop-and-fusion/bgm_1.mp3');
++	const bgmBuffer = await sound.loadAudio(props.gameMode === '10secarisa' ? '/client-assets/drop-and-fusion/chang.mp3' : '/client-assets/drop-and-fusion/bgm_1.mp3');
+ 	if (!bgmBuffer) return;
+ 	bgmNodes = sound.createSourceNode(bgmBuffer, {
+ 		volume: props.mute ? 0 : bgmVolume.value,
+ 	});
+ 	if (!bgmNodes) return;
+ 	bgmNodes.soundSource.loop = true;
++	bgmNodes.soundSource.loopStart = props.gameMode === '10secarisa' ? 32 / 3 : 0;
+ 	bgmNodes.soundSource.start();
+ });
+ 
+diff --git a/packages/frontend/src/pages/drop-and-fusion.vue b/packages/frontend/src/pages/drop-and-fusion.vue
+index 54352c9b0d..b6f53ded6b 100644
+--- a/packages/frontend/src/pages/drop-and-fusion.vue
++++ b/packages/frontend/src/pages/drop-and-fusion.vue
+@@ -29,6 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 								<option value="yen">YEN</option>
+ 								<option value="sweets">SWEETS</option>
+ 								<!--<option value="space">SPACE</option>-->
++								<option value="10secarisa">10SEC ARISA</option>
+ 							</MkSelect>
+ 							<MkButton primary gradate large rounded inline @click="start">{{ i18n.ts.start }}</MkButton>
+ 						</div>
+@@ -73,7 +74,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 							<div><b>Credit</b></div>
+ 							<div>
+ 								<div>Ai-chan illustration: @poteriri@misskey.io</div>
+-								<div>BGM: @ys@misskey.design</div>
++								<div v-if="gameMode === '10secarisa'">10sec Arisa illustration: @arisa_love_oji@live-theater.net</div>
++								<div v-else>BGM: @ys@misskey.design</div>
+ 							</div>
+ 						</div>
+ 					</div>
+@@ -95,7 +97,7 @@ import MkSelect from '@/components/MkSelect.vue';
+ import MkSwitch from '@/components/MkSwitch.vue';
+ import { misskeyApiGet } from '@/scripts/misskey-api.js';
+ 
+-const gameMode = ref<'normal' | 'square' | 'yen' | 'sweets' | 'space'>('normal');
++const gameMode = ref<'normal' | 'square' | 'yen' | 'sweets' | 'space' | '10secarisa'>('normal');
+ const gameStarted = ref(false);
+ const mute = ref(false);
+ const ranking = ref(null);
+@@ -110,6 +112,7 @@ function getScoreUnit(gameMode: string) {
+ 		gameMode === 'yen' ? '円' :
+ 		gameMode === 'sweets' ? 'kcal' :
+ 		gameMode === 'space' ? 'pt' :
++		gameMode === '10secarisa' ? 'あり' :
+ 		'' as never;
+ }
+ 
+diff --git a/packages/frontend/src/pages/reversi/game.board.vue b/packages/frontend/src/pages/reversi/game.board.vue
+index 429f502133..6e2e23a044 100644
+--- a/packages/frontend/src/pages/reversi/game.board.vue
++++ b/packages/frontend/src/pages/reversi/game.board.vue
+@@ -69,6 +69,10 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 									<img v-if="stone === true" :class="$style.boardCellStone" :src="blackUser.avatarUrl ?? undefined"/>
+ 									<img v-else-if="stone === false" :class="$style.boardCellStone" :src="whiteUser.avatarUrl ?? undefined"/>
+ 								</template>
++								<template v-else-if="use10secarisaAsStone">
++									<img v-if="stone === true" :class="$style.boardCellStone" src="/client-assets/reversi/10secarisa_b.png"/>
++									<img v-else-if="stone === false" :class="$style.boardCellStone" src="/client-assets/reversi/10secarisa_w.png"/>
++								</template>
+ 								<template v-else>
+ 									<img v-if="stone === true" :class="$style.boardCellStone" src="/client-assets/reversi/stone_b.png"/>
+ 									<img v-else-if="stone === false" :class="$style.boardCellStone" src="/client-assets/reversi/stone_w.png"/>
+@@ -126,6 +130,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			<div class="_gaps_s" style="text-align: left;">
+ 				<MkSwitch v-model="showBoardLabels">{{ i18n.ts._reversi.showBoardLabels }}</MkSwitch>
+ 				<MkSwitch v-model="useAvatarAsStone">{{ i18n.ts._reversi.useAvatarAsStone }}</MkSwitch>
++				<MkSwitch v-model="use10secarisaAsStone">{{ i18n.ts._reversi.use10secarisaAsStone }}</MkSwitch>
+ 			</div>
+ 		</MkFolder>
+ 
+@@ -167,7 +172,7 @@ const props = defineProps<{
+ }>();
+ 
+ const showBoardLabels = ref<boolean>(false);
+-const useAvatarAsStone = ref<boolean>(true);
++const stoneStyle = ref<'avatar' | 'simple' | '10secarisa'>('avatar');
+ const autoplaying = ref<boolean>(false);
+ // eslint-disable-next-line vue/no-setup-props-reactivity-loss
+ const game = ref<Misskey.entities.ReversiGameDetailed & { logs: Reversi.Serializer.SerializedLog[] }>(deepClone(props.game));
+@@ -180,6 +185,20 @@ const engine = shallowRef<Reversi.Game>(Reversi.Serializer.restoreGame({
+ 	logs: game.value.logs,
+ }));
+ 
++const useAvatarAsStone = computed({
++	get: () => stoneStyle.value === 'avatar',
++	set: (v) => {
++		stoneStyle.value = v ? 'avatar' : 'simple';
++	},
++});
++
++const use10secarisaAsStone = computed({
++	get: () => stoneStyle.value === '10secarisa',
++	set: (v) => {
++		stoneStyle.value = v ? '10secarisa' : 'simple';
++	},
++});
++
+ const iAmPlayer = computed(() => {
+ 	return game.value.user1Id === $i.id || game.value.user2Id === $i.id;
+ });
+diff --git a/packages/frontend/src/pages/timeline.vue b/packages/frontend/src/pages/timeline.vue
+index 044a1908ab..9fbcdf783f 100644
+--- a/packages/frontend/src/pages/timeline.vue
++++ b/packages/frontend/src/pages/timeline.vue
+@@ -9,25 +9,31 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<MkSpacer :contentMax="800">
+ 		<MkHorizontalSwipe v-model:tab="src" :tabs="$i ? headerTabs : headerTabsWhenNotLogin">
+ 			<div :key="src" ref="rootEl">
+-				<MkInfo v-if="isBasicTimeline(src) && !defaultStore.reactiveState.timelineTutorials.value[src]" style="margin-bottom: var(--MI-margin);" closable @close="closeTutorial()">
+-					{{ i18n.ts._timelineDescription[src] }}
+-				</MkInfo>
+-				<MkPostForm v-if="defaultStore.reactiveState.showFixedPostForm.value" :class="$style.postForm" class="post-form _panel" fixed style="margin-bottom: var(--MI-margin);"/>
+-				<div v-if="queue > 0" :class="$style.new"><button class="_buttonPrimary" :class="$style.newButton" @click="top()">{{ i18n.ts.newNoteRecived }}</button></div>
+-				<div :class="$style.tl">
+-					<MkTimeline
+-						ref="tlComponent"
+-						:key="src + withRenotes + withReplies + onlyFiles + withSensitive"
+-						:src="src.split(':')[0]"
+-						:list="src.split(':')[1]"
+-						:withRenotes="withRenotes"
+-						:withReplies="withReplies"
+-						:withSensitive="withSensitive"
+-						:onlyFiles="onlyFiles"
+-						:sound="true"
+-						@queue="queueUpdated"
+-					/>
+-				</div>
++				<TransitionGroup :name="defaultStore.state.animation ? '_transition_list' : ''">
++					<template v-if="a1on2024enabled">
++						<canvas ref="canvas2024" :class="$style.canvas"/>
++						<MkButton :class="$style.canvasActionButton" @click="canvas2024WithSound = !canvas2024WithSound"><i class="ti" :class="canvas2024WithSound ? 'ti-volume' : 'ti-volume-off'"></i></MkButton>
++					</template>
++					<MkInfo v-if="isBasicTimeline(src) && !defaultStore.reactiveState.timelineTutorials.value[src]" style="margin-bottom: var(--MI-margin);" closable @close="closeTutorial()">
++						{{ i18n.ts._timelineDescription[src] }}
++					</MkInfo>
++					<MkPostForm v-if="defaultStore.reactiveState.showFixedPostForm.value" :class="$style.postForm" class="post-form _panel" fixed style="margin-bottom: var(--MI-margin);"/>
++					<div v-if="queue > 0" :class="$style.new"><button class="_buttonPrimary" :class="$style.newButton" @click="top()">{{ i18n.ts.newNoteRecived }}</button></div>
++					<div :class="$style.tl">
++						<MkTimeline
++							ref="tlComponent"
++							:key="src + withRenotes + withReplies + onlyFiles + withSensitive"
++							:src="src.split(':')[0]"
++							:list="src.split(':')[1]"
++							:withRenotes="withRenotes"
++							:withReplies="withReplies"
++							:withSensitive="withSensitive"
++							:onlyFiles="onlyFiles"
++							:sound="true"
++							@queue="queueUpdated"
++						/>
++					</div>
++				</TransitionGroup>
+ 			</div>
+ 		</MkHorizontalSwipe>
+ 	</MkSpacer>
+@@ -35,18 +41,28 @@ SPDX-License-Identifier: AGPL-3.0-only
+ </template>
+ 
+ <script lang="ts" setup>
+-import { computed, watch, provide, shallowRef, ref, onMounted, onActivated } from 'vue';
++import { computed, watch, provide, shallowRef, ref, onMounted, onUnmounted, onActivated } from 'vue';
++import * as Matter from 'matter-js';
++import * as mfm from 'mfm-js';
++import * as Misskey from 'misskey-js';
+ import type { Tab } from '@/components/global/MkPageHeader.tabs.vue';
++import MkButton from '@/components/MkButton.vue';
+ import MkTimeline from '@/components/MkTimeline.vue';
+ import MkInfo from '@/components/MkInfo.vue';
+ import MkPostForm from '@/components/MkPostForm.vue';
+ import MkHorizontalSwipe from '@/components/MkHorizontalSwipe.vue';
++import MkRippleEffect from '@/components/MkRippleEffect.vue';
++import { checkWordMute } from '@/scripts/check-word-mute.js';
++import { getStaticImageUrl } from '@/scripts/media-proxy';
+ import { scroll } from '@@/js/scroll.js';
++import { globalEvents } from '@/events';
+ import * as os from '@/os.js';
+ import { misskeyApi } from '@/scripts/misskey-api.js';
+ import { defaultStore } from '@/store.js';
+ import { i18n } from '@/i18n.js';
+ import { $i } from '@/account.js';
++import { localDate, a1on2024enabled } from '@/ref.js';
++import * as sound from '@/scripts/sound.js';
+ import { definePageMetadata } from '@/scripts/page-metadata.js';
+ import { antennasCache, userListsCache, favoritedChannelsCache } from '@/cache.js';
+ import { deviceKind } from '@/scripts/device-kind.js';
+@@ -60,6 +76,12 @@ provide('shouldOmitHeaderTitle', true);
+ 
+ const tlComponent = shallowRef<InstanceType<typeof MkTimeline>>();
+ const rootEl = shallowRef<HTMLElement>();
++const canvas2024 = shallowRef<HTMLCanvasElement>();
++const canvas2024WithSound = ref(false);
++const render2024Map = new Map<HTMLCanvasElement, Matter.Render>();
++const runner2024Map = new Map<HTMLCanvasElement, Matter.Runner>();
++const timelineHandler2024Map = new Map<HTMLCanvasElement, (note: Misskey.entities.Note) => void>();
++const reactionHandler2024Map = new Map<HTMLCanvasElement, (reaction: string) => void>();
+ 
+ type TimelinePageSrc = BasicTimelineType | `list:${string}`;
+ 
+@@ -118,10 +140,162 @@ const withSensitive = computed<boolean>({
+ 	set: (x) => saveTlFilter('withSensitive', x),
+ });
+ 
++watch(canvas2024, (value, oldValue) => {
++	if (oldValue) {
++		const render = render2024Map.get(oldValue);
++		if (render) {
++			Matter.Render.stop(render);
++		}
++		const runner = runner2024Map.get(oldValue);
++		if (runner) {
++			Matter.Runner.stop(runner);
++		}
++	}
++	if (!value) {
++		return;
++	}
++	const engine = Matter.Engine.create({
++		constraintIterations: 4,
++		positionIterations: 8,
++		velocityIterations: 8,
++	});
++	const render = Matter.Render.create({
++		canvas: value,
++		engine,
++		options: {
++			width: 800,
++			height: 450,
++			background: 'transparent',
++			wireframeBackground: 'transparent', // transparent to hide
++			wireframes: false,
++			showSleeping: false,
++			pixelRatio: window.devicePixelRatio,
++		},
++	});
++	value.removeAttribute('style');
++	render2024Map.set(value, render);
++	Matter.Render.run(render);
++	const runner = Matter.Runner.create();
++	runner2024Map.set(value, runner);
++	Matter.Runner.run(runner, engine);
++	const ground = Matter.Bodies.rectangle(400, 500, 800, 100, { isStatic: true, label: 'Ground', render: { visible: false }, chamfer: { radius: 12 } });
++	const pit = Matter.Bodies.rectangle(400, 5000, 80000, 100, { isStatic: true, label: 'Pit', render: { visible: false } });
++	Matter.Composite.add(engine.world, [ground, pit]);
++	Matter.Events.on(engine, 'collisionStart', (event) => {
++		for (const pair of event.pairs) {
++			if (pair.bodyA.label === 'Pit') {
++				Matter.Composite.remove(engine.world, pair.bodyB);
++			} else if (pair.bodyB.label === 'Pit') {
++				Matter.Composite.remove(engine.world, pair.bodyA);
++			} else if (pair.bodyA.label === pair.bodyB.label) {
++				const aspect = (Math.max(...pair.bodyA.vertices.map(v => v.x)) - Math.min(...pair.bodyA.vertices.map(v => v.x))) / (Math.max(...pair.bodyA.vertices.map(v => v.y)) - Math.min(...pair.bodyA.vertices.map(v => v.y)));
++				const rect = value.getBoundingClientRect();
++				const x = pair.activeContacts[0]?.vertex.x ?? (pair.bodyA.position.x + pair.bodyB.position.x) / 2;
++				const y = pair.activeContacts[0]?.vertex.y ?? (pair.bodyA.position.y + pair.bodyB.position.y) / 2;
++				os.popup(MkRippleEffect, { x: x * rect.width / 800 + rect.x, y: y * rect.height / 450 + rect.y }, {}, 'end');
++				Matter.Composite.remove(engine.world, [pair.bodyA, pair.bodyB]);
++				if (canvas2024WithSound.value) {
++					sound.playUrl('/client-assets/drop-and-fusion/fusion.mp3', {
++						volume: 1,
++						pan: (x - 400) / 400,
++						playbackRate: 1 / Math.log1p(aspect),
++					});
++				}
++			} else if (canvas2024WithSound.value) {
++				const x = pair.activeContacts[0]?.vertex.x ?? (pair.bodyA.position.x + pair.bodyB.position.x) / 2;
++				const aspectA = (Math.max(...pair.bodyA.vertices.map(v => v.x)) - Math.min(...pair.bodyA.vertices.map(v => v.x))) / (Math.max(...pair.bodyA.vertices.map(v => v.y)) - Math.min(...pair.bodyA.vertices.map(v => v.y)));
++				const aspectB = (Math.max(...pair.bodyB.vertices.map(v => v.x)) - Math.min(...pair.bodyB.vertices.map(v => v.x))) / (Math.max(...pair.bodyB.vertices.map(v => v.y)) - Math.min(...pair.bodyB.vertices.map(v => v.y)));
++				sound.playUrl('/client-assets/drop-and-fusion/collision.mp3', {
++					volume: Math.min(1, pair.separation),
++					pan: (x - 400) / 400,
++					playbackRate: 1 / Math.log1p(aspectA),
++				});
++				sound.playUrl('/client-assets/drop-and-fusion/collision.mp3', {
++					volume: Math.min(1, pair.separation),
++					pan: (x - 400) / 400,
++					playbackRate: 1 / Math.log1p(aspectB),
++				});
++			}
++		}
++	});
++	const drop = (name: string) => {
++		const path = `/emoji/${name}.webp`;
++		const url = defaultStore.reactiveState.disableShowingAnimatedImages.value
++			? getStaticImageUrl(path)
++			: path;
++		const ready: Promise<HTMLImageElement> = render.textures[url] ? Promise.resolve(render.textures[url]) : new Promise((resolve) => {
++			const image = new Image();
++			image.src = url;
++			image.decode().then(() => {
++				resolve(render.textures[url] = image);
++			});
++		});
++		ready.then(image => {
++			const aspect = image.naturalWidth / image.naturalHeight;
++			const marginX = Math.min(400, 12 * aspect);
++			const x = Math.random() * (800 - marginX * 2) + marginX;
++			const y = Math.min(0, ...Matter.Composite.allBodies(engine.world).map(b => b.position.y)) - 24;
++			const body = Matter.Bodies.rectangle(x, y, 24 * aspect, 24, {
++				label: `:${name}:`,
++				render: {
++					sprite: {
++						texture: url,
++						xScale: 24 / image.naturalHeight,
++						yScale: 24 / image.naturalHeight,
++					},
++				},
++			});
++			Matter.Composite.add(engine.world, body);
++		});
++	};
++	const timelineHandler = (note: Misskey.entities.Note) => {
++		const appearNote = note.renote && !note.text && note.cw == null && !note.files?.length && !note.poll ? note.renote : note;
++		if (appearNote.user.host || !appearNote.text || appearNote.cw != null || checkWordMute(note, $i, $i?.mutedWords as (string | string[])[])) {
++			return;
++		}
++		const ast = mfm.parseSimple(appearNote.text);
++		for (const node of ast) {
++			if (node.type !== 'emojiCode') {
++				continue;
++			}
++			drop(node.props.name);
++		}
++	};
++	globalEvents.on('prependTimeline', timelineHandler);
++	timelineHandler2024Map.set(value, timelineHandler);
++	const reactionHandler = (reaction: string) => {
++		if (reaction.startsWith(':') && reaction.endsWith('@.:')) {
++			drop(reaction.slice(1, -3));
++		}
++	};
++	globalEvents.on('appendReaction', reactionHandler);
++	reactionHandler2024Map.set(value, reactionHandler);
++});
++
+ watch(src, () => {
+ 	queue.value = 0;
+ });
+ 
++watch(withSensitive, () => {
++	// これだけはクライアント側で完結する処理なので手動でリロード
++	tlComponent.value?.reloadTimeline();
++});
++
++onUnmounted(() => {
++	for (const render of render2024Map.values()) {
++		Matter.Render.stop(render);
++	}
++	for (const runner of runner2024Map.values()) {
++		Matter.Runner.stop(runner);
++	}
++	for (const handler of timelineHandler2024Map.values()) {
++		globalEvents.off('prependTimeline', handler);
++	}
++	for (const handler of reactionHandler2024Map.values()) {
++		globalEvents.off('appendReaction', handler);
++	}
++});
++
+ function queueUpdated(q: number): void {
+ 	queue.value = q;
+ }
+@@ -248,6 +422,7 @@ onActivated(() => {
+ 	switchTlIfNeeded();
+ });
+ 
++const a1on2024 = computed(() => localDate.value.year === 2024 && localDate.value.month === 4 && localDate.value.day === 1);
+ const headerActions = computed(() => {
+ 	const tmp = [
+ 		{
+@@ -295,6 +470,15 @@ const headerActions = computed(() => {
+ 			},
+ 		});
+ 	}
++	if (a1on2024.value) {
++		tmp.unshift({
++			icon: 'ti ti-mood-puzzled',
++			text: i18n.ts.headlineMisskey,
++			handler: (ev: Event) => {
++				a1on2024enabled.value = !a1on2024enabled.value;
++			},
++		});
++	}
+ 	return tmp;
+ });
+ 
+@@ -346,6 +530,7 @@ definePageMetadata(() => ({
+ 	width: 100%;
+ 	margin: calc(-0.675em - 8px) 0;
+ 
++	.canvasActionButton + &,
+ 	&:first-child {
+ 		margin-top: calc(-0.675em - 8px - var(--MI-margin));
+ 	}
+@@ -367,4 +552,16 @@ definePageMetadata(() => ({
+ 	border-radius: var(--MI-radius);
+ 	overflow: clip;
+ }
++
++.canvas {
++	display: block;
++	width: 100%;
++	aspect-ratio: 16 / 9;
++}
++
++.canvasActionButton {
++	position: absolute;
++	top: 12px;
++	right: 12px;
++}
+ </style>
+diff --git a/packages/frontend/src/ref.ts b/packages/frontend/src/ref.ts
+new file mode 100644
+index 0000000000..49c5546e86
+--- /dev/null
++++ b/packages/frontend/src/ref.ts
+@@ -0,0 +1,28 @@
++import { shallowReadonly, shallowRef, watch } from 'vue';
++
++const initial = new Date();
++const localDateRef = shallowRef({ year: initial.getFullYear(), month: initial.getMonth() + 1, day: initial.getDate() });
++
++function updateDate() {
++	const now = new Date();
++	localDateRef.value = { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
++	setTimeout(updateDate, (new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).valueOf() - now.valueOf()) / 2);
++}
++
++updateDate();
++
++export const localDate = shallowReadonly(localDateRef);
++
++export const a1on2024enabled = shallowRef(false);
++
++watch(localDate, (newDate) => {
++	if (a1on2024enabled.value) {
++		if (newDate.year !== 2024 || newDate.month !== 4 || newDate.day !== 1) {
++			a1on2024enabled.value = false;
++		}
++	}
++});
++
++globalThis.__MK_REFS__ = {
++	a1on2024enabled,
++};
+diff --git a/packages/frontend/src/style.scss b/packages/frontend/src/style.scss
+index 48aacf10bc..f55fce24ba 100644
+--- a/packages/frontend/src/style.scss
++++ b/packages/frontend/src/style.scss
+@@ -480,6 +480,22 @@ html[data-color-scheme=dark] ._woodenFrame {
+ 	transform: scale(0.9);
+ }
+ 
++._transition_list-move {
++	transition: transform 0.7s cubic-bezier(0.23, 1, 0.32, 1);
++}
++._transition_list-enter-active,
++._transition_list-leave-active {
++	transition: transform 0.7s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.7s cubic-bezier(0.23, 1, 0.32, 1);
++}
++._transition_list-enter-from,
++._transition_list-leave-to {
++	opacity: 0;
++	transform: translateY(-64px);
++}
++._transition_list-leave-active {
++	position: absolute;
++}
++
+ ._blink {
+ 	animation: blink 1s infinite;
+ }
+diff --git a/packages/frontend/src/widgets/WidgetBirthdayFollowings.vue b/packages/frontend/src/widgets/WidgetBirthdayFollowings.vue
+index 98e186f836..d49292a3b9 100644
+--- a/packages/frontend/src/widgets/WidgetBirthdayFollowings.vue
++++ b/packages/frontend/src/widgets/WidgetBirthdayFollowings.vue
+@@ -12,7 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 	<div :class="$style.bdayFRoot">
+ 		<MkLoading v-if="fetching"/>
+ 		<div v-else-if="users.length > 0" :class="$style.bdayFGrid">
+-			<MkAvatar v-for="user in users" :key="user.id" :user="user.followee" link preview></MkAvatar>
++			<MkAvatar v-for="user in users" :key="user.id" :user="user.followee" link preview small></MkAvatar>
+ 		</div>
+ 		<div v-else :class="$style.bdayFFallback">
+ 			<img :src="infoImageUrl" class="_ghost" :class="$style.bdayFFallbackImage"/>
+diff --git a/packages/frontend/src/widgets/WidgetCalendar.vue b/packages/frontend/src/widgets/WidgetCalendar.vue
+index 94169d5e40..ecf608d2d0 100644
+--- a/packages/frontend/src/widgets/WidgetCalendar.vue
++++ b/packages/frontend/src/widgets/WidgetCalendar.vue
+@@ -176,19 +176,19 @@ defineExpose<WidgetComponentExpose>({
+ 
+ 	&:nth-child(1) {
+ 		> .meter > .meterVal {
+-			background: #f7796c;
++			background: #ff2384;
+ 		}
+ 	}
+ 
+ 	&:nth-child(2) {
+ 		> .meter > .meterVal {
+-			background: #a1de41;
++			background: #005eff;
+ 		}
+ 	}
+ 
+ 	&:nth-child(3) {
+ 		> .meter > .meterVal {
+-			background: #41ddde;
++			background: #ffbb01;
+ 		}
+ 	}
+ }
+diff --git a/packages/frontend/src/widgets/WidgetInstanceInfo.vue b/packages/frontend/src/widgets/WidgetInstanceInfo.vue
+index 69832332b1..db46dc9556 100644
+--- a/packages/frontend/src/widgets/WidgetInstanceInfo.vue
++++ b/packages/frontend/src/widgets/WidgetInstanceInfo.vue
+@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <div class="_panel">
+ 	<div :class="$style.container" :style="{ backgroundImage: instance.bannerUrl ? `url(${ instance.bannerUrl })` : null }">
+ 		<div :class="$style.iconContainer">
+-			<img :src="instance.iconUrl ?? instance.faviconUrl ?? '/favicon.ico'" alt="" :class="$style.icon"/>
++			<img :src="instance.iconUrl ?? instance.faviconUrl ?? '/favicon.png'" alt="" :class="$style.icon"/>
+ 		</div>
+ 		<div :class="$style.bodyContainer">
+ 			<div :class="$style.body">
+@@ -69,7 +69,6 @@ defineExpose<WidgetComponentExpose>({
+ 	height: 60px;
+ 	border-radius: 8px;
+ 	box-sizing: border-box;
+-	border: solid 3px #fff;
+ }
+ 
+ .bodyContainer {
+diff --git a/packages/frontend/src/widgets/WidgetMltdEventBorder.vue b/packages/frontend/src/widgets/WidgetMltdEventBorder.vue
+new file mode 100644
+index 0000000000..e34c8a9b9e
+--- /dev/null
++++ b/packages/frontend/src/widgets/WidgetMltdEventBorder.vue
+@@ -0,0 +1,1094 @@
++<template>
++<MkContainer :showHeader="widgetProps.showHeader" :naked="widgetProps.transparent">
++	<template #icon><i class="ti ti-table-shortcut"></i></template>
++	<template #header>{{ i18n.ts._widgets.mltdEventBorder }}</template>
++	<template #func="{ buttonStyleClass }"><button class="_button" :class="buttonStyleClass" @click="configure()"><i class="ti ti-settings"></i></button></template>
++
++	<MkLoading v-if="!events"/>
++	<div v-else :class="$style.root">
++		<div :class="$style.title">{{ widgetProps.target }}<span v-if="widgetProps.offset" :class="$style.offset"> ({{ diffFormat.format(widgetProps.offset as number).startsWith('-') ? '' : '+' }}{{ diffFormat.format(widgetProps.offset as number) }})</span></div>
++		<div :class="$style.updatedAt">{{ currentTime }}</div>
++		<div :class="$style.currentPoint"><span :class="$style.pad">{{ currentPoint?.[1] || '---,---,---' }}</span><span>{{ currentPoint?.[2] }}</span></div>
++		<div :class="$style.currentUnit">pt</div>
++		<div v-if="previousDiff" :class="[$style.previousPoint, $style.row3]">{{ previousDiff?.startsWith('-') ? '' : '+' }}{{ previousDiff }}</div>
++		<div v-if="previousTime" :class="[$style.previousUnit, $style.row3]">({{ previousTime }})</div>
++		<div v-if="previousHourDiff" :class="[$style.previousPoint, $style.row4]">{{ previousHourDiff?.startsWith('-') ? '' : '+' }}{{ previousHourDiff }}</div>
++		<div v-if="previousHourTime" :class="[$style.previousUnit, $style.row4]">({{ previousHourTime }})</div>
++		<div v-if="previousDayDiff" :class="[$style.previousPoint, $style.row5]">{{ previousDayDiff?.startsWith('-') ? '' : '+' }}{{ previousDayDiff }}</div>
++		<div v-if="previousDayTime" :class="[$style.previousUnit, $style.row5]">({{ previousDayTime }})</div>
++		<div :class="$style.credit">Powered by matsurihi.me</div>
++	</div>
++</MkContainer>
++</template>
++
++<script lang="ts" setup>
++import { computed, onUnmounted, ref, watch } from 'vue';
++import { WidgetComponentEmits, WidgetComponentExpose, WidgetComponentProps, useWidgetPropsManager } from './widget';
++import MkContainer from '@/components/MkContainer.vue';
++import { i18n } from '@/i18n';
++import { GetFormResultType } from '@/scripts/form';
++/*
++import * as sound from '@/scripts/sound';
++ */
++
++const name = 'mltdEventBorder';
++const targets = {
++	TPR: {
++		type: 'eventPoint',
++		ranks: 100,
++	},
++	PR: {
++		type: 'eventPoint',
++		ranks: 2500,
++	},
++	GR: {
++		type: 'eventPoint',
++		ranks: 5000,
++	},
++	SR: {
++		type: 'eventPoint',
++		ranks: 10000,
++	},
++	BR: {
++		type: 'eventPoint',
++		ranks: 25000,
++	},
++	TPM: {
++		type: 'highScore',
++		ranks: 100,
++	},
++	PM: {
++		type: 'highScore',
++		ranks: 2000,
++	},
++	GM: {
++		type: 'highScore',
++		ranks: 5000,
++	},
++	SM: {
++		type: 'highScore',
++		ranks: 10000,
++	},
++	BM: {
++		type: 'highScore',
++		ranks: 20000,
++	},
++	TPMT: {
++		type: 'highScoreTotal',
++		ranks: 100,
++	},
++	PMT: {
++		type: 'highScoreTotal',
++		ranks: 2000,
++	},
++	GMT: {
++		type: 'highScoreTotal',
++		ranks: 5000,
++	},
++	SMT: {
++		type: 'highScoreTotal',
++		ranks: 10000,
++	},
++	BMT: {
++		type: 'highScoreTotal',
++		ranks: 20000,
++	},
++	TPL: {
++		type: 'loungePoint',
++		ranks: 10,
++	},
++	PL: {
++		type: 'loungePoint',
++		ranks: 50,
++	},
++	GL: {
++		type: 'loungePoint',
++		ranks: 100,
++	},
++	SL: {
++		type: 'loungePoint',
++		ranks: 250,
++	},
++	BL: {
++		type: 'loungePoint',
++		ranks: 500,
++	},
++	天海春香TP: {
++		type: 'idolPoint/1',
++		ranks: 10,
++	},
++	天海春香P: {
++		type: 'idolPoint/1',
++		ranks: 100,
++	},
++	天海春香G: {
++		type: 'idolPoint/1',
++		ranks: 1000,
++	},
++	如月千早TP: {
++		type: 'idolPoint/2',
++		ranks: 10,
++	},
++	如月千早P: {
++		type: 'idolPoint/2',
++		ranks: 100,
++	},
++	如月千早G: {
++		type: 'idolPoint/2',
++		ranks: 1000,
++	},
++	星井美希TP: {
++		type: 'idolPoint/3',
++		ranks: 10,
++	},
++	星井美希P: {
++		type: 'idolPoint/3',
++		ranks: 100,
++	},
++	星井美希G: {
++		type: 'idolPoint/3',
++		ranks: 1000,
++	},
++	萩原雪歩TP: {
++		type: 'idolPoint/4',
++		ranks: 10,
++	},
++	萩原雪歩P: {
++		type: 'idolPoint/4',
++		ranks: 100,
++	},
++	萩原雪歩G: {
++		type: 'idolPoint/4',
++		ranks: 1000,
++	},
++	高槻やよいTP: {
++		type: 'idolPoint/5',
++		ranks: 10,
++	},
++	高槻やよいP: {
++		type: 'idolPoint/5',
++		ranks: 100,
++	},
++	高槻やよいG: {
++		type: 'idolPoint/5',
++		ranks: 1000,
++	},
++	菊地真TP: {
++		type: 'idolPoint/6',
++		ranks: 10,
++	},
++	菊地真P: {
++		type: 'idolPoint/6',
++		ranks: 100,
++	},
++	菊地真G: {
++		type: 'idolPoint/6',
++		ranks: 1000,
++	},
++	水瀬伊織TP: {
++		type: 'idolPoint/7',
++		ranks: 10,
++	},
++	水瀬伊織P: {
++		type: 'idolPoint/7',
++		ranks: 100,
++	},
++	水瀬伊織G: {
++		type: 'idolPoint/7',
++		ranks: 1000,
++	},
++	四条貴音TP: {
++		type: 'idolPoint/8',
++		ranks: 10,
++	},
++	四条貴音P: {
++		type: 'idolPoint/8',
++		ranks: 100,
++	},
++	四条貴音G: {
++		type: 'idolPoint/8',
++		ranks: 1000,
++	},
++	秋月律子TP: {
++		type: 'idolPoint/9',
++		ranks: 10,
++	},
++	秋月律子P: {
++		type: 'idolPoint/9',
++		ranks: 100,
++	},
++	秋月律子G: {
++		type: 'idolPoint/9',
++		ranks: 1000,
++	},
++	三浦あずさTP: {
++		type: 'idolPoint/10',
++		ranks: 10,
++	},
++	三浦あずさP: {
++		type: 'idolPoint/10',
++		ranks: 100,
++	},
++	三浦あずさG: {
++		type: 'idolPoint/10',
++		ranks: 1000,
++	},
++	双海亜美TP: {
++		type: 'idolPoint/11',
++		ranks: 10,
++	},
++	双海亜美P: {
++		type: 'idolPoint/11',
++		ranks: 100,
++	},
++	双海亜美G: {
++		type: 'idolPoint/11',
++		ranks: 1000,
++	},
++	双海真美TP: {
++		type: 'idolPoint/12',
++		ranks: 10,
++	},
++	双海真美P: {
++		type: 'idolPoint/12',
++		ranks: 100,
++	},
++	双海真美G: {
++		type: 'idolPoint/12',
++		ranks: 1000,
++	},
++	我那覇響TP: {
++		type: 'idolPoint/13',
++		ranks: 10,
++	},
++	我那覇響P: {
++		type: 'idolPoint/13',
++		ranks: 100,
++	},
++	我那覇響G: {
++		type: 'idolPoint/13',
++		ranks: 1000,
++	},
++	春日未来TP: {
++		type: 'idolPoint/14',
++		ranks: 10,
++	},
++	春日未来P: {
++		type: 'idolPoint/14',
++		ranks: 100,
++	},
++	春日未来G: {
++		type: 'idolPoint/14',
++		ranks: 1000,
++	},
++	最上静香TP: {
++		type: 'idolPoint/15',
++		ranks: 10,
++	},
++	最上静香P: {
++		type: 'idolPoint/15',
++		ranks: 100,
++	},
++	最上静香G: {
++		type: 'idolPoint/15',
++		ranks: 1000,
++	},
++	伊吹翼TP: {
++		type: 'idolPoint/16',
++		ranks: 10,
++	},
++	伊吹翼P: {
++		type: 'idolPoint/16',
++		ranks: 100,
++	},
++	伊吹翼G: {
++		type: 'idolPoint/16',
++		ranks: 1000,
++	},
++	田中琴葉TP: {
++		type: 'idolPoint/17',
++		ranks: 10,
++	},
++	田中琴葉P: {
++		type: 'idolPoint/17',
++		ranks: 100,
++	},
++	田中琴葉G: {
++		type: 'idolPoint/17',
++		ranks: 1000,
++	},
++	島原エレナTP: {
++		type: 'idolPoint/18',
++		ranks: 10,
++	},
++	島原エレナP: {
++		type: 'idolPoint/18',
++		ranks: 100,
++	},
++	島原エレナG: {
++		type: 'idolPoint/18',
++		ranks: 1000,
++	},
++	佐竹美奈子TP: {
++		type: 'idolPoint/19',
++		ranks: 10,
++	},
++	佐竹美奈子P: {
++		type: 'idolPoint/19',
++		ranks: 100,
++	},
++	佐竹美奈子G: {
++		type: 'idolPoint/19',
++		ranks: 1000,
++	},
++	所恵美TP: {
++		type: 'idolPoint/20',
++		ranks: 10,
++	},
++	所恵美P: {
++		type: 'idolPoint/20',
++		ranks: 100,
++	},
++	所恵美G: {
++		type: 'idolPoint/20',
++		ranks: 1000,
++	},
++	徳川まつりTP: {
++		type: 'idolPoint/21',
++		ranks: 10,
++	},
++	徳川まつりP: {
++		type: 'idolPoint/21',
++		ranks: 100,
++	},
++	徳川まつりG: {
++		type: 'idolPoint/21',
++		ranks: 1000,
++	},
++	箱崎星梨花TP: {
++		type: 'idolPoint/22',
++		ranks: 10,
++	},
++	箱崎星梨花P: {
++		type: 'idolPoint/22',
++		ranks: 100,
++	},
++	箱崎星梨花G: {
++		type: 'idolPoint/22',
++		ranks: 1000,
++	},
++	野々原茜TP: {
++		type: 'idolPoint/23',
++		ranks: 10,
++	},
++	野々原茜P: {
++		type: 'idolPoint/23',
++		ranks: 100,
++	},
++	野々原茜G: {
++		type: 'idolPoint/23',
++		ranks: 1000,
++	},
++	望月杏奈TP: {
++		type: 'idolPoint/24',
++		ranks: 10,
++	},
++	望月杏奈P: {
++		type: 'idolPoint/24',
++		ranks: 100,
++	},
++	望月杏奈G: {
++		type: 'idolPoint/24',
++		ranks: 1000,
++	},
++	ロコTP: {
++		type: 'idolPoint/25',
++		ranks: 10,
++	},
++	ロコP: {
++		type: 'idolPoint/25',
++		ranks: 100,
++	},
++	ロコG: {
++		type: 'idolPoint/25',
++		ranks: 1000,
++	},
++	七尾百合子TP: {
++		type: 'idolPoint/26',
++		ranks: 10,
++	},
++	七尾百合子P: {
++		type: 'idolPoint/26',
++		ranks: 100,
++	},
++	七尾百合子G: {
++		type: 'idolPoint/26',
++		ranks: 1000,
++	},
++	高山紗代子TP: {
++		type: 'idolPoint/27',
++		ranks: 10,
++	},
++	高山紗代子P: {
++		type: 'idolPoint/27',
++		ranks: 100,
++	},
++	高山紗代子G: {
++		type: 'idolPoint/27',
++		ranks: 1000,
++	},
++	松田亜利沙TP: {
++		type: 'idolPoint/28',
++		ranks: 10,
++	},
++	松田亜利沙P: {
++		type: 'idolPoint/28',
++		ranks: 100,
++	},
++	松田亜利沙G: {
++		type: 'idolPoint/28',
++		ranks: 1000,
++	},
++	高坂海美TP: {
++		type: 'idolPoint/29',
++		ranks: 10,
++	},
++	高坂海美P: {
++		type: 'idolPoint/29',
++		ranks: 100,
++	},
++	高坂海美G: {
++		type: 'idolPoint/29',
++		ranks: 1000,
++	},
++	中谷育TP: {
++		type: 'idolPoint/30',
++		ranks: 10,
++	},
++	中谷育P: {
++		type: 'idolPoint/30',
++		ranks: 100,
++	},
++	中谷育G: {
++		type: 'idolPoint/30',
++		ranks: 1000,
++	},
++	天空橋朋花TP: {
++		type: 'idolPoint/31',
++		ranks: 10,
++	},
++	天空橋朋花P: {
++		type: 'idolPoint/31',
++		ranks: 100,
++	},
++	天空橋朋花G: {
++		type: 'idolPoint/31',
++		ranks: 1000,
++	},
++	エミリーTP: {
++		type: 'idolPoint/32',
++		ranks: 10,
++	},
++	エミリーP: {
++		type: 'idolPoint/32',
++		ranks: 100,
++	},
++	エミリーG: {
++		type: 'idolPoint/32',
++		ranks: 1000,
++	},
++	北沢志保TP: {
++		type: 'idolPoint/33',
++		ranks: 10,
++	},
++	北沢志保P: {
++		type: 'idolPoint/33',
++		ranks: 100,
++	},
++	北沢志保G: {
++		type: 'idolPoint/33',
++		ranks: 1000,
++	},
++	舞浜歩TP: {
++		type: 'idolPoint/34',
++		ranks: 10,
++	},
++	舞浜歩P: {
++		type: 'idolPoint/34',
++		ranks: 100,
++	},
++	舞浜歩G: {
++		type: 'idolPoint/34',
++		ranks: 1000,
++	},
++	木下ひなたTP: {
++		type: 'idolPoint/35',
++		ranks: 10,
++	},
++	木下ひなたP: {
++		type: 'idolPoint/35',
++		ranks: 100,
++	},
++	木下ひなたG: {
++		type: 'idolPoint/35',
++		ranks: 1000,
++	},
++	矢吹可奈TP: {
++		type: 'idolPoint/36',
++		ranks: 10,
++	},
++	矢吹可奈P: {
++		type: 'idolPoint/36',
++		ranks: 100,
++	},
++	矢吹可奈G: {
++		type: 'idolPoint/36',
++		ranks: 1000,
++	},
++	横山奈緒TP: {
++		type: 'idolPoint/37',
++		ranks: 10,
++	},
++	横山奈緒P: {
++		type: 'idolPoint/37',
++		ranks: 100,
++	},
++	横山奈緒G: {
++		type: 'idolPoint/37',
++		ranks: 1000,
++	},
++	二階堂千鶴TP: {
++		type: 'idolPoint/38',
++		ranks: 10,
++	},
++	二階堂千鶴P: {
++		type: 'idolPoint/38',
++		ranks: 100,
++	},
++	二階堂千鶴G: {
++		type: 'idolPoint/38',
++		ranks: 1000,
++	},
++	馬場このみTP: {
++		type: 'idolPoint/39',
++		ranks: 10,
++	},
++	馬場このみP: {
++		type: 'idolPoint/39',
++		ranks: 100,
++	},
++	馬場このみG: {
++		type: 'idolPoint/39',
++		ranks: 1000,
++	},
++	大神環TP: {
++		type: 'idolPoint/40',
++		ranks: 10,
++	},
++	大神環P: {
++		type: 'idolPoint/40',
++		ranks: 100,
++	},
++	大神環G: {
++		type: 'idolPoint/40',
++		ranks: 1000,
++	},
++	豊川風花TP: {
++		type: 'idolPoint/41',
++		ranks: 10,
++	},
++	豊川風花P: {
++		type: 'idolPoint/41',
++		ranks: 100,
++	},
++	豊川風花G: {
++		type: 'idolPoint/41',
++		ranks: 1000,
++	},
++	宮尾美也TP: {
++		type: 'idolPoint/42',
++		ranks: 10,
++	},
++	宮尾美也P: {
++		type: 'idolPoint/42',
++		ranks: 100,
++	},
++	宮尾美也G: {
++		type: 'idolPoint/42',
++		ranks: 1000,
++	},
++	福田のり子TP: {
++		type: 'idolPoint/43',
++		ranks: 10,
++	},
++	福田のり子P: {
++		type: 'idolPoint/43',
++		ranks: 100,
++	},
++	福田のり子G: {
++		type: 'idolPoint/43',
++		ranks: 1000,
++	},
++	真壁瑞希TP: {
++		type: 'idolPoint/44',
++		ranks: 10,
++	},
++	真壁瑞希P: {
++		type: 'idolPoint/44',
++		ranks: 100,
++	},
++	真壁瑞希G: {
++		type: 'idolPoint/44',
++		ranks: 1000,
++	},
++	篠宮可憐TP: {
++		type: 'idolPoint/45',
++		ranks: 10,
++	},
++	篠宮可憐P: {
++		type: 'idolPoint/45',
++		ranks: 100,
++	},
++	篠宮可憐G: {
++		type: 'idolPoint/45',
++		ranks: 1000,
++	},
++	百瀬莉緒TP: {
++		type: 'idolPoint/46',
++		ranks: 10,
++	},
++	百瀬莉緒P: {
++		type: 'idolPoint/46',
++		ranks: 100,
++	},
++	百瀬莉緒G: {
++		type: 'idolPoint/46',
++		ranks: 1000,
++	},
++	永吉昴TP: {
++		type: 'idolPoint/47',
++		ranks: 10,
++	},
++	永吉昴P: {
++		type: 'idolPoint/47',
++		ranks: 100,
++	},
++	永吉昴G: {
++		type: 'idolPoint/47',
++		ranks: 1000,
++	},
++	北上麗花TP: {
++		type: 'idolPoint/48',
++		ranks: 10,
++	},
++	北上麗花P: {
++		type: 'idolPoint/48',
++		ranks: 100,
++	},
++	北上麗花G: {
++		type: 'idolPoint/48',
++		ranks: 1000,
++	},
++	周防桃子TP: {
++		type: 'idolPoint/49',
++		ranks: 10,
++	},
++	周防桃子P: {
++		type: 'idolPoint/49',
++		ranks: 100,
++	},
++	周防桃子G: {
++		type: 'idolPoint/49',
++		ranks: 1000,
++	},
++	ジュリアTP: {
++		type: 'idolPoint/50',
++		ranks: 10,
++	},
++	ジュリアP: {
++		type: 'idolPoint/50',
++		ranks: 100,
++	},
++	ジュリアG: {
++		type: 'idolPoint/50',
++		ranks: 1000,
++	},
++	白石紬TP: {
++		type: 'idolPoint/51',
++		ranks: 10,
++	},
++	白石紬P: {
++		type: 'idolPoint/51',
++		ranks: 100,
++	},
++	白石紬G: {
++		type: 'idolPoint/51',
++		ranks: 1000,
++	},
++	桜守歌織TP: {
++		type: 'idolPoint/52',
++		ranks: 10,
++	},
++	桜守歌織P: {
++		type: 'idolPoint/52',
++		ranks: 100,
++	},
++	桜守歌織G: {
++		type: 'idolPoint/52',
++		ranks: 1000,
++	},
++} as const;
++
++const widgetPropsDef = {
++	showHeader: {
++		type: 'boolean' as const,
++		default: true,
++	},
++	transparent: {
++		type: 'boolean' as const,
++		default: false,
++	},
++	sound: {
++		type: 'boolean' as const,
++		default: false,
++	},
++	target: {
++		type: 'enum' as const,
++		default: 'PR' as const,
++		enum: Object.keys(targets).map((key) => ({
++			label: key,
++			value: key,
++		})) as unknown as string[],
++	},
++	offset: {
++		type: 'number' as const,
++		default: 0 as const,
++		min: -1e6 as const,
++		max: 1e6 as const,
++	},
++};
++
++type WidgetProps = GetFormResultType<typeof widgetPropsDef>;
++
++const props = defineProps<WidgetComponentProps<WidgetProps>>();
++const emit = defineEmits<WidgetComponentEmits<WidgetProps>>();
++
++const { widgetProps, configure } = useWidgetPropsManager(name,
++	widgetPropsDef,
++	props,
++	emit,
++);
++/*
++const popo = sound.setVolume(sound.getAudio('syuilo/popo'), 1);
++ */
++const pointFormat = new Intl.NumberFormat('en-US', {
++	style: 'decimal',
++	minimumFractionDigits: 0,
++	maximumFractionDigits: 0,
++	minimumIntegerDigits: 9,
++});
++const diffFormat = new Intl.NumberFormat('en-US', {
++	style: 'decimal',
++	minimumFractionDigits: 0,
++	maximumFractionDigits: 0,
++});
++const absoluteTimeFormat = new Intl.DateTimeFormat('en-US', {
++	hour: 'numeric',
++	minute: 'numeric',
++	hour12: false,
++});
++const relativeTimeFormat = new Intl.RelativeTimeFormat(navigator.language, {
++	style: 'short',
++	numeric: 'auto',
++});
++
++const events = ref<{
++	id: number;
++}[] | null>();
++let eventsETag = '';
++let eventsTimeoutId: ReturnType<typeof setTimeout>;
++const border = ref<{
++	data: {
++		score: number;
++		aggregatedAt: Date;
++	}[];
++}[] | null>();
++let borderETag = '';
++let borderTimeoutId: ReturnType<typeof setTimeout>;
++const abortController = new AbortController();
++const current = computed(() => {
++	if (!border.value?.[0]?.data[0]) {
++		return null;
++	}
++	const data = border.value[0].data;
++	return data[data.length - 1];
++});
++const currentPoint = computed(() => {
++	if (!current.value) {
++		return null;
++	}
++	return pointFormat.format(current.value.score).match(/^([0,]*)(.*)$/);
++});
++const currentTime = computed(() => {
++	if (!current.value) {
++		return null;
++	}
++	return absoluteTimeFormat.format(current.value.aggregatedAt);
++});
++const previous = computed(() => {
++	if (!border.value?.[0]?.data[1]) {
++		return null;
++	}
++	const data = border.value[0].data;
++	return data[data.length - 2];
++});
++const previousDiff = computed(() => {
++	if (!current.value || !previous.value) {
++		return null;
++	}
++	return diffFormat.format(current.value.score - previous.value.score);
++});
++const previousTime = computed(() => {
++	if (!current.value || !previous.value) {
++		return null;
++	}
++	return relativeTimeFormat.format((previous.value.aggregatedAt.getTime() - current.value.aggregatedAt.getTime()) / 60000, 'minute');
++});
++const previousHour = computed(() => {
++	if (!border.value?.[0]?.data[1]) {
++		return null;
++	}
++	const data = border.value[0].data;
++	const lastHour = new Date(data[data.length - 1].aggregatedAt);
++	lastHour.setHours(lastHour.getHours() - 1);
++	return data.findLast((d) => d.aggregatedAt <= lastHour) ?? null;
++});
++const previousHourDiff = computed(() => {
++	if (!current.value || !previousHour.value) {
++		return null;
++	}
++	return diffFormat.format(current.value.score - previousHour.value.score);
++});
++const previousHourTime = computed(() => {
++	if (!current.value || !previousHour.value) {
++		return null;
++	}
++	return relativeTimeFormat.format((previousHour.value.aggregatedAt.getTime() - current.value.aggregatedAt.getTime()) / 60000, 'minute');
++});
++const previousDay = computed(() => {
++	if (!border.value?.[0]?.data[1]) {
++		return null;
++	}
++	const data = border.value[0].data;
++	const yesterday = new Date(data[data.length - 1].aggregatedAt);
++	yesterday.setDate(yesterday.getDate() - 1);
++	return data.findLast((d) => d.aggregatedAt <= yesterday) ?? null;
++});
++const previousDayDiff = computed(() => {
++	if (!current.value || !previousDay.value) {
++		return null;
++	}
++	return diffFormat.format(current.value.score - previousDay.value.score);
++});
++const previousDayTime = computed(() => {
++	if (!current.value || !previousDay.value) {
++		return null;
++	}
++	return relativeTimeFormat.format((previousDay.value.aggregatedAt.getTime() - current.value.aggregatedAt.getTime()) / 3600000, 'hour');
++});
++
++async function fetchEvent(initial = false): Promise<void> {
++	await fetch('https://api.matsurihi.me/api/mltd/v2/events?prettyPrint=false&at=now', {
++		headers: {
++			'If-None-Match': eventsETag,
++		},
++		mode: 'cors',
++		signal: abortController.signal,
++	}).then((response) => {
++		if (!response.ok) {
++			throw null; // eslint-disable-line no-throw-literal
++		}
++		eventsETag = response.headers.get('ETag') ?? '';
++		return response.json() as Promise<{
++			id: number;
++		}[]>;
++	}).then((json) => {
++		events.value = json.map((event) => ({
++			id: event.id,
++		}));
++	}).finally(() => {
++		const next = new Date();
++		next.setHours(next.getHours() + 1);
++		next.setMinutes(0);
++		next.setSeconds(0);
++		next.setMilliseconds(0);
++		eventsTimeoutId = setTimeout(fetchEvent, next.getTime() - Date.now(), false);
++		if (initial) {
++			fetchBorder(true);
++		}
++	});
++}
++
++async function fetchBorder(initial = false): Promise<void> {
++	const event = events.value?.[0];
++	if (!event) {
++		clearTimeout(borderTimeoutId);
++		const next = new Date();
++		next.setHours(next.getHours() + 1);
++		next.setMinutes(0);
++		next.setSeconds(0);
++		next.setMilliseconds(0);
++		borderTimeoutId = setTimeout(fetchBorder, next.getTime() - Date.now(), true);
++		return;
++	}
++	const target = targets[widgetProps.target as keyof typeof targets];
++	// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
++	await fetch(`https://api.matsurihi.me/api/mltd/v2/events/${event.id}/rankings/${target.type}/logs/${Math.max(1, target.ranks + (widgetProps.offset as number))}?prettyPrint=false&all=true`, {
++		headers: {
++			'If-None-Match': borderETag,
++		},
++		signal: abortController.signal,
++	}).then((response) => {
++		if (!response.ok) {
++			throw null; // eslint-disable-line no-throw-literal
++		}
++		borderETag = response.headers.get('ETag') ?? '';
++		return response.json() as Promise<{
++			data: {
++				score: number;
++				aggregatedAt: string;
++			}[];
++		}[]>;
++	}).then((json) => {
++		border.value = json.map((rank) => ({
++			data: rank.data.map((data) => ({
++				score: data.score,
++				aggregatedAt: new Date(data.aggregatedAt),
++			})),
++		}));
++		/*
++		if (!initial && widgetProps.sound && popo.paused) {
++			popo.play();
++		}
++		 */
++	}).finally(() => {
++		const next = new Date();
++		next.setSeconds(10 * -~(next.getSeconds() / 10));
++		next.setMilliseconds(0);
++		borderTimeoutId = setTimeout(fetchBorder, next.getTime() - Date.now(), false);
++	});
++}
++
++watch(() => widgetProps.target, () => {
++	fetchEvent(true);
++}, {
++	immediate: true,
++});
++
++onUnmounted(() => {
++	clearTimeout(eventsTimeoutId);
++	clearTimeout(borderTimeoutId);
++	abortController.abort();
++});
++
++defineExpose<WidgetComponentExpose>({
++	name,
++	configure,
++	id: props.widget ? props.widget.id : null,
++});
++</script>
++
++<style lang="scss" module>
++.root {
++	display: grid;
++	grid: 2em 3em 1.5em 1.5em 1.5em / 1fr auto auto;
++	padding: 1em 1em 1em 0;
++}
++
++.title {
++	grid-area: 1 / 1 / 2 / 3;
++	padding: 0 0 0 0.8em;
++	font-size: 1.25em;
++	line-height: 1.6;
++	font-weight: bold;
++
++	& > .offset {
++		opacity: 0.5;
++	}
++}
++
++.updatedAt {
++	grid-area: 1 / 3 / 2 / 4;
++	font-size: 1.25em;
++	line-height: 1.6;
++	text-align: right;
++}
++
++.currentPoint {
++	grid-area: 2 / 1 / 3 / 3;
++	justify-self: end;
++	font-size: 2.4em;
++	line-height: 1.25;
++	font-variant-numeric: tabular-nums;
++	white-space: nowrap;
++}
++
++.currentUnit {
++	grid-area: 2 / 3 / 3 / 4;
++	padding: 0 0 0 0.25em;
++	font-size: 1.2em;
++	line-height: 3;
++}
++
++.previousPoint {
++	grid-column: 2 / 3;
++	font-size: 1.2em;
++	line-height: 1.25;
++	font-variant-numeric: tabular-nums;
++	text-align: right;
++
++	&.row3 {
++		grid-row: 3 / 4;
++	}
++
++	&.row4 {
++		grid-row: 4 / 5;
++	}
++
++	&.row5 {
++		grid-row: 5 / 6;
++	}
++}
++
++.previousUnit {
++	grid-column: 3 / 4;
++	padding: 0 0 0 0.5em;
++	font-size: 0.6em;
++	line-height: 2.4;
++	opacity: 0.75;
++
++	&.row3 {
++		grid-row: 3 / 4;
++	}
++
++	&.row4 {
++		grid-row: 4 / 5;
++	}
++
++	&.row5 {
++		grid-row: 5 / 6;
++	}
++}
++
++.credit {
++	grid-area: 5 / 1 / 6 / 2;
++	align-self: end;
++	padding: 0 1em 0 1.5em;
++	font-size: 0.6em;
++	opacity: 0.5;
++}
++
++.pad {
++	opacity: 0.25;
++}
++</style>
+diff --git a/packages/frontend/src/widgets/WidgetMltdEventInfo.vue b/packages/frontend/src/widgets/WidgetMltdEventInfo.vue
+new file mode 100644
+index 0000000000..83eddc7c21
+--- /dev/null
++++ b/packages/frontend/src/widgets/WidgetMltdEventInfo.vue
+@@ -0,0 +1,221 @@
++<template>
++<MkContainer :showHeader="widgetProps.showHeader" :naked="widgetProps.transparent">
++	<template #icon><i class="ti ti-table-shortcut"></i></template>
++	<template #header>{{ i18n.ts._widgets.mltdEventInfo }}</template>
++	<template #func="{ buttonStyleClass }"><button class="_button" :class="buttonStyleClass" @click="configure()"><i class="ti ti-settings"></i></button></template>
++
++	<MkLoading v-if="!events"/>
++	<div v-else :class="$style.root">
++		<div :class="$style.prefix">{{ namePrefix }}</div>
++		<div v-if="nameSuffix === '～M@STERPIECE～'" :class="$style.name"><span style="color: #01a860;">～</span><span style="color: #9238be;">M</span><span style="color: #ffe43f;">@</span><span style="color: #fd99e1;">S</span><span style="color: #d3dde9;">T</span><span style="color: #b4e04b;">E</span><span style="color: #e22b30;">R</span><span style="color: #2743d2;">P</span><span style="color: #01adb9;">I</span><span style="color: #f39939;">E</span><span style="color: #ffe43f;">C</span><span style="color: #515558;">E</span><span style="color: #a6126a;">～</span></div>
++		<div v-else :class="$style.name">{{ nameSuffix ?? i18n.ts.nothing }}</div>
++		<template v-if="events[0]">
++			<div v-if="events[0].schedule.beginAt && events[0].schedule.endAt" :class="$style.progress"><span :class="$style.pad">{{ progress ? '0'.repeat(7 - progress.length) : '---.---' }}</span>{{ progress }}<span :class="$style.unit">%</span></div>
++			<div v-if="events[0].schedule.beginAt" :class="$style.time"><i class="ti ti-arrow-bar-right"></i><MkTime :time="events[0].schedule.beginAt" mode="absolute"/></div>
++			<div v-if="events[0].schedule.boostBeginAt" :class="$style.time"><i class="ti ti-arrows-right"></i><MkTime :time="events[0].schedule.boostBeginAt" mode="absolute"/></div>
++			<div v-if="events[0].schedule.endAt" :class="$style.time"><i class="ti ti-arrow-bar-to-right"></i><MkTime :time="events[0].schedule.endAt" mode="absolute"/></div>
++			<div v-if="events[0].schedule.endAt" :class="$style.remaining">({{ remaining }})</div>
++		</template>
++		<div :class="$style.credit">Powered by matsurihi.me</div>
++	</div>
++</MkContainer>
++</template>
++
++<script lang="ts" setup>
++import { computed, onUnmounted, ref } from 'vue';
++import { WidgetComponentEmits, WidgetComponentExpose, WidgetComponentProps, useWidgetPropsManager } from './widget';
++import MkContainer from '@/components/MkContainer.vue';
++import { i18n } from '@/i18n';
++import { GetFormResultType } from '@/scripts/form';
++import { defaultIdlingRenderScheduler } from '@/scripts/idle-render.js';
++
++const name = 'mltdEventInfo';
++
++const widgetPropsDef = {
++	showHeader: {
++		type: 'boolean' as const,
++		default: true,
++	},
++	transparent: {
++		type: 'boolean' as const,
++		default: false,
++	},
++};
++
++type WidgetProps = GetFormResultType<typeof widgetPropsDef>;
++
++const props = defineProps<WidgetComponentProps<WidgetProps>>();
++const emit = defineEmits<WidgetComponentEmits<WidgetProps>>();
++
++const { widgetProps, configure } = useWidgetPropsManager(name,
++	widgetPropsDef,
++	props,
++	emit,
++);
++
++const progressFormat = new Intl.NumberFormat('en-US', {
++	style: 'percent',
++	minimumFractionDigits: 3,
++	maximumFractionDigits: 3,
++});
++const relativeTimeFormat = new Intl.RelativeTimeFormat(navigator.language, {
++	numeric: 'auto',
++});
++const events = ref<{
++	id: number;
++	name: string;
++	schedule: {
++		beginAt: Date;
++		endAt: Date;
++		boostBeginAt?: Date;
++	};
++}[] | null>();
++let eventsETag = '';
++let eventsTimeoutId: ReturnType<typeof setTimeout>;
++const abortController = new AbortController();
++const nameSplitIndex = computed(() => events.value?.[0]?.name.indexOf('～'));
++const namePrefix = computed(() => ~nameSplitIndex.value ? events.value?.[0]?.name.slice(0, nameSplitIndex.value) : '');
++const nameSuffix = computed(() => ~nameSplitIndex.value ? events.value?.[0]?.name.slice(nameSplitIndex.value) : events.value?.[0]?.name);
++const progress = ref('');
++const remaining = ref('');
++
++async function fetchEvent(): Promise<void> {
++	await fetch('https://api.matsurihi.me/api/mltd/v2/events?prettyPrint=false&at=now', {
++		headers: {
++			'If-None-Match': eventsETag,
++		},
++		mode: 'cors',
++		signal: abortController.signal,
++	}).then((response) => {
++		if (!response.ok) {
++			throw null; // eslint-disable-line no-throw-literal
++		}
++		eventsETag = response.headers.get('ETag') ?? '';
++		return response.json() as Promise<{
++			id: number;
++			name: string;
++			schedule: {
++				beginAt: string;
++				endAt: string;
++				boostBeginAt: string | null;
++			};
++		}[]>;
++	}).then((json) => {
++		events.value = json.map((event) => ({
++			id: event.id,
++			name: event.name,
++			schedule: {
++				beginAt: new Date(event.schedule.beginAt),
++				endAt: new Date(event.schedule.endAt),
++				boostBeginAt: event.schedule.boostBeginAt ? new Date(event.schedule.boostBeginAt) : undefined,
++			},
++		}));
++	}).finally(() => {
++		const next = new Date();
++		next.setHours(next.getHours() + 1);
++		next.setMinutes(0);
++		next.setSeconds(0);
++		next.setMilliseconds(0);
++		eventsTimeoutId = setTimeout(fetchEvent, next.getTime() - Date.now());
++	});
++}
++
++function tick(): void {
++	if (!events.value?.[0]) {
++		return;
++	}
++	const now = new Date();
++	progress.value = progressFormat.format(Math.min(1, (now.getTime() - events.value[0].schedule.beginAt.getTime()) / (events.value[0].schedule.endAt.getTime() - events.value[0].schedule.beginAt.getTime()))).slice(0, -1);
++	let x = (events.value[0].schedule.endAt.getTime() - now.getTime()) / 1000;
++	let unit: Intl.RelativeTimeFormatUnit = 'second';
++	if (x > 300) {
++		x /= 60;
++		unit = 'minute';
++	}
++	if (x > 300) {
++		x /= 60;
++		unit = 'hour';
++	}
++	remaining.value = relativeTimeFormat.format(Math.floor(x), unit);
++}
++
++fetchEvent();
++tick();
++defaultIdlingRenderScheduler.add(tick);
++
++onUnmounted(() => {
++	clearTimeout(eventsTimeoutId);
++	abortController.abort();
++	defaultIdlingRenderScheduler.delete(tick);
++});
++
++defineExpose<WidgetComponentExpose>({
++	name,
++	configure,
++	id: props.widget ? props.widget.id : null,
++});
++</script>
++
++<style lang="scss" module>
++.root {
++	display: grid;
++	grid: auto auto 1em 1em 1em auto / auto 1fr;
++	padding: 1em 1em 0;
++}
++
++.prefix {
++	grid-area: 1 / 1 / 2 / 3;
++	font-size: 0.8em;
++	line-height: 1.25;
++}
++
++.name {
++	grid-area: 2 / 1 / 3 / 3;
++	font-size: 1.6em;
++	line-height: 1.25;
++}
++
++.time {
++	grid-column: 1 / 2;
++	font-size: 0.5em;
++	line-height: 2;
++	opacity: 0.875;
++
++	& > i {
++		padding: 0 0.5em;
++	}
++}
++
++.progress {
++	grid-area: 3 / 2 / 5 / 3;
++	padding: 0 0 0 0.5em;
++	font-size: 1.25em;
++	line-height: 1.6;
++	text-align: right;
++
++	& > .unit {
++		font-size: 0.5em;
++	}
++}
++
++.remaining {
++	grid-area: 5 / 2 / 6 / 3;
++	padding: 0 0 0 1em;
++	font-size: 0.8em;
++	line-height: 1.25;
++	font-variant-numeric: tabular-nums;
++	text-align: right;
++	opacity: 0.75;
++}
++
++.credit {
++	padding: 0 1em 0 0;
++	font-size: 0.6em;
++	line-height: 3;
++	opacity: 0.5;
++}
++
++.pad {
++	opacity: 0.25;
++}
++</style>
+diff --git a/packages/frontend/src/widgets/WidgetUserList.vue b/packages/frontend/src/widgets/WidgetUserList.vue
+index 805e14c669..3f0f004392 100644
+--- a/packages/frontend/src/widgets/WidgetUserList.vue
++++ b/packages/frontend/src/widgets/WidgetUserList.vue
+@@ -16,7 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		<MkLoading v-else-if="fetching"/>
+ 		<div v-else class="users">
+ 			<span v-for="user in users" :key="user.id" class="user">
+-				<MkAvatar :user="user" class="avatar" indicator link preview/>
++				<MkAvatar :user="user" class="avatar" indicator link preview small/>
+ 			</span>
+ 		</div>
+ 	</div>
+diff --git a/packages/frontend/src/widgets/index.ts b/packages/frontend/src/widgets/index.ts
+index ea17d484c5..527bfb1776 100644
+--- a/packages/frontend/src/widgets/index.ts
++++ b/packages/frontend/src/widgets/index.ts
+@@ -7,6 +7,8 @@ import { defineAsyncComponent } from 'vue';
+ import type { App } from 'vue';
+ 
+ export default function(app: App) {
++	app.component('WidgetMltdEventInfo', defineAsyncComponent(() => import('./WidgetMltdEventInfo.vue')));
++	app.component('WidgetMltdEventBorder', defineAsyncComponent(() => import('./WidgetMltdEventBorder.vue')));
+ 	app.component('WidgetProfile', defineAsyncComponent(() => import('./WidgetProfile.vue')));
+ 	app.component('WidgetInstanceInfo', defineAsyncComponent(() => import('./WidgetInstanceInfo.vue')));
+ 	app.component('WidgetMemo', defineAsyncComponent(() => import('./WidgetMemo.vue')));
+@@ -44,6 +46,8 @@ export const federationWidgets = [
+ ];
+ 
+ export const widgets = [
++	'mltdEventInfo',
++	'mltdEventBorder',
+ 	'profile',
+ 	'instanceInfo',
+ 	'memo',
+diff --git a/packages/misskey-bubble-game/src/game.ts b/packages/misskey-bubble-game/src/game.ts
+index 7f230e39cb..71190f841b 100644
+--- a/packages/misskey-bubble-game/src/game.ts
++++ b/packages/misskey-bubble-game/src/game.ts
+@@ -6,7 +6,7 @@
+ import { EventEmitter } from 'eventemitter3';
+ import * as Matter from 'matter-js';
+ import seedrandom from 'seedrandom';
+-import { NORAML_MONOS, SQUARE_MONOS, SWEETS_MONOS, YEN_MONOS } from './monos.js';
++import { NORAML_MONOS, SQUARE_MONOS, SWEETS_MONOS, YEN_MONOS, _10SECARISA_MONOS } from './monos.js';
+ 
+ export type Mono = {
+ 	id: string;
+@@ -58,7 +58,7 @@ export class DropAndFusionGame extends EventEmitter<{
+ 	private tickCallbackQueue: { frame: number; callback: () => void; }[] = [];
+ 	private overflowCollider: Matter.Body;
+ 	private isGameOver = false;
+-	private gameMode: 'normal' | 'yen' | 'square' | 'sweets' | 'space';
++	private gameMode: 'normal' | 'yen' | 'square' | 'sweets' | 'space' | '10secarisa';
+ 	private rng: () => number;
+ 	private logs: Log[] = [];
+ 
+@@ -87,6 +87,7 @@ export class DropAndFusionGame extends EventEmitter<{
+ 			case 'square': return SQUARE_MONOS;
+ 			case 'sweets': return SWEETS_MONOS;
+ 			case 'space': return NORAML_MONOS;
++			case '10secarisa': return _10SECARISA_MONOS;
+ 		}
+ 	}
+ 
+diff --git a/packages/misskey-bubble-game/src/monos.ts b/packages/misskey-bubble-game/src/monos.ts
+index 41ab2358c4..30dd376e81 100644
+--- a/packages/misskey-bubble-game/src/monos.ts
++++ b/packages/misskey-bubble-game/src/monos.ts
+@@ -950,3 +950,86 @@ export const SWEETS_MONOS: Mono[] = [{
+ 	score: 30,
+ 	dropCandidate: true,
+ }];
++
++const _10SECARISA_BASE_SIZE = 32;
++export const _10SECARISA_MONOS: Mono[] = [{
++	id: 'ac23eaf4-ff7a-4848-9071-4133b963c16a',
++	level: 10,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	shape: 'circle',
++	score: 512,
++	dropCandidate: false,
++}, {
++	id: '9428fd5f-a97b-42c9-84bc-5b589decab29',
++	level: 9,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	shape: 'circle',
++	score: 256,
++	dropCandidate: false,
++}, {
++	id: '872441e1-fefe-43d2-9693-d8d7bf8fb685',
++	level: 8,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	shape: 'circle',
++	score: 128,
++	dropCandidate: false,
++}, {
++	id: '7ad2c550-f634-482a-948a-83dfadcffdc3',
++	level: 7,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	shape: 'circle',
++	score: 64,
++	dropCandidate: false,
++}, {
++	id: '6e0861f6-e971-4066-bcc2-930c196dd307',
++	level: 6,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25 * 1.25,
++	shape: 'circle',
++	score: 32,
++	dropCandidate: false,
++}, {
++	id: '5ec29f34-d1f2-4d47-b333-267b6f25261e',
++	level: 5,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25 * 1.25,
++	shape: 'circle',
++	score: 16,
++	dropCandidate: true,
++}, {
++	id: '4ba4a70f-0a87-48b2-8ff7-10bd6248acca',
++	level: 4,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25 * 1.25 * 1.25,
++	shape: 'circle',
++	score: 8,
++	dropCandidate: true,
++}, {
++	id: '3e15e087-25c9-4ae8-9e0b-d50269f9c91e',
++	level: 3,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25 * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25 * 1.25,
++	shape: 'circle',
++	score: 4,
++	dropCandidate: true,
++}, {
++	id: '2f051890-0fa4-470b-b8f7-3782414d7016',
++	level: 2,
++	sizeX: _10SECARISA_BASE_SIZE * 1.25,
++	sizeY: _10SECARISA_BASE_SIZE * 1.25,
++	shape: 'circle',
++	score: 2,
++	dropCandidate: true,
++}, {
++	id: '1904602c-418f-42d7-ac9e-69ee996044ea',
++	level: 1,
++	sizeX: _10SECARISA_BASE_SIZE,
++	sizeY: _10SECARISA_BASE_SIZE,
++	shape: 'circle',
++	score: 1,
++	dropCandidate: true,
++}];

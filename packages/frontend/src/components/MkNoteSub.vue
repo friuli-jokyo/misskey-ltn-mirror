@@ -4,7 +4,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div v-if="!muted" :class="[$style.root, { [$style.children]: depth > 1 }]">
+<div v-if="note == null" :class="$style.deleted">
+	{{ i18n.ts.deletedNote }}
+</div>
+<div v-else-if="!muted" :class="[$style.root, { [$style.children]: depth > 1 }]">
 	<div :class="$style.main">
 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
 		<div v-if="note.visibility === 'followers'" :class="$style.followersBar"></div>
@@ -33,13 +36,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 <div v-else :class="$style.muted" @click="muted = false">
 	<I18n :src="i18n.ts.userSaysSomething" tag="small">
 		<template #name>
-			<I18n v-if="note.anonymouslySendToUser" :src="i18n.ts.anonymouslySendToUser" tag="span">
-				<template #user>
-					<MkA v-user-preview="note.anonymouslySendToUser.id" :to="userPage(note.anonymouslySendToUser)">
-						<MkUserName :user="note.anonymouslySendToUser"/>
-					</MkA>
-				</template>
-			</I18n>
+			<MkA v-if="note.anonymouslySendToUser" v-user-preview="note.anonymouslySendToUser.id" :to="userPage(note.anonymouslySendToUser)">
+				<MkUserName :user="note.anonymouslySendToUser"/>
+			</MkA>
 			<MkA v-else v-user-preview="note.userId" :to="userPage(note.user)">
 				<MkUserName :user="note.user"/>
 			</MkA>
@@ -56,14 +55,14 @@ import MkNoteHeader from '@/components/MkNoteHeader.vue';
 import MkSubNoteContent from '@/components/MkSubNoteContent.vue';
 import MkCwButton from '@/components/MkCwButton.vue';
 import { notePage } from '@/filters/note.js';
-import { misskeyApi } from '@/scripts/misskey-api.js';
+import { misskeyApi } from '@/utility/misskey-api.js';
 import { i18n } from '@/i18n.js';
-import { $i } from '@/account.js';
+import { $i } from '@/i.js';
 import { userPage } from '@/filters/user.js';
-import { checkWordMute } from '@/scripts/check-word-mute.js';
+import { checkWordMute } from '@/utility/check-word-mute.js';
 
 const props = withDefaults(defineProps<{
-	note: Misskey.entities.Note;
+	note: Misskey.entities.Note | null;
 	detail?: boolean;
 
 	// how many notes are in between this one and the note being viewed in detail
@@ -73,15 +72,19 @@ const props = withDefaults(defineProps<{
 });
 
 function userOf(note: Misskey.entities.Note): Misskey.entities.User {
-	return note.anonymousChannelUsername ? { ...note.user, username: note.anonymousChannelUsername, avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}` } : note.user;
+	return note.anonymousChannelUsername ? {
+		...note.user,
+		username: note.anonymousChannelUsername,
+		avatarUrl: `${location.origin}/identicon/@${note.anonymousChannelUsername}@${hostname}`,
+	} : note.user;
 }
 
-const muted = ref($i ? checkWordMute(props.note, $i, $i.mutedWords) : false);
+const muted = ref(props.note && $i ? checkWordMute(props.note, $i, $i.mutedWords) : false);
 
-const showContent = ref(false);
+const showContent = ref(props.note?.cw != null && prefer.s.autoOpenCws.some((word) => props.note!.cw!.includes(word)));
 const replies = ref<Misskey.entities.Note[]>([]);
 
-if (props.detail) {
+if (props.detail && props.note) {
 	misskeyApi('notes/children', {
 		noteId: props.note.id,
 		limit: 5,
@@ -201,6 +204,16 @@ if (props.detail) {
 	padding: 8px !important;
 	border: 1px solid var(--MI_THEME-divider);
 	margin: 8px 8px 0 8px;
+	border-radius: 8px;
+}
+
+.deleted {
+	text-align: center;
+	padding: 8px !important;
+	margin: 8px 8px 0 8px;
+	--color: light-dark(rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.15));
+	background-size: auto auto;
+	background-image: repeating-linear-gradient(135deg, transparent, transparent 10px, var(--color) 4px, var(--color) 14px);
 	border-radius: 8px;
 }
 </style>

@@ -4,7 +4,8 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { DataSource, In, SelectQueryBuilder } from 'typeorm';
+import * as Redis from 'ioredis';
+import { DataSource, SelectQueryBuilder } from 'typeorm';
 import { DI } from '@/di-symbols.js';
 import { type Config, FulltextSearchProvider } from '@/config.js';
 import { bindThis } from '@/decorators.js';
@@ -17,6 +18,7 @@ import { CacheService } from '@/core/CacheService.js';
 import { QueryService } from '@/core/QueryService.js';
 import { IdService } from '@/core/IdService.js';
 import { LoggerService } from '@/core/LoggerService.js';
+import postgresqlParser from '../../node_modules/node-sql-parser/build/postgresql.js';
 import type { Index, MeiliSearch } from 'meilisearch';
 
 type K = string;
@@ -55,6 +57,24 @@ export type SearchPagination = {
 	limit: number;
 };
 
+function stringifySearch(q: string, opts: SearchOpts): string {
+	return Buffer.from(JSON.stringify([
+		q,
+		opts.userId,
+		opts.channelId,
+		opts.host,
+		opts.onlyFollows,
+		opts.onlyMentioned,
+		opts.onlySpecified,
+		opts.minRenoteCount,
+		opts.maxRenoteCount,
+		opts.minRepliesCount,
+		opts.maxRepliesCount,
+		opts.minReactionsCount,
+		opts.maxReactionsCount,
+	])).toString('base64url');
+}
+
 function compileValue(value: V): string {
 	if (typeof value === 'string') {
 		return `'${value}'`; // TODO: escape
@@ -83,11 +103,14 @@ function compileQuery(q: Q): string {
 	}
 }
 
+const parser = new postgresqlParser.Parser();
+
 @Injectable()
 export class SearchService {
 	private readonly meilisearchIndexScope: 'local' | 'global' | string[] = 'local';
 	private readonly meilisearchNoteIndex: Index | null = null;
 	private readonly provider: FulltextSearchProvider;
+	private pgroongaAvailabilityCache: boolean | null = null;
 
 	constructor(
 		@Inject(DI.config)
@@ -95,6 +118,9 @@ export class SearchService {
 
 		@Inject(DI.db)
 		private db: DataSource,
+
+		@Inject(DI.redis)
+		private redisClient: Redis.Redis,
 
 		@Inject(DI.meilisearch)
 		private meilisearch: MeiliSearch | null,
@@ -110,8 +136,10 @@ export class SearchService {
 		private idService: IdService,
 		private loggerService: LoggerService,
 	) {
-		if (meilisearch) {
-			this.meilisearchNoteIndex = meilisearch.index(`${config.meilisearch!.index}---notes`);
+		const meilisearchConfig = config.meilisearch;
+
+		if (meilisearch && meilisearchConfig) {
+			this.meilisearchNoteIndex = meilisearch.index(`${meilisearchConfig.index}---notes`);
 			this.meilisearchNoteIndex.updateSettings({
 				searchableAttributes: [
 					'text',
@@ -195,25 +223,134 @@ export class SearchService {
 		opts: SearchOpts,
 		pagination: SearchPagination,
 	): Promise<MiNote[]> {
+		if ((opts.onlyFollows || opts.onlyMentioned || opts.onlySpecified) && me == null) {
+			return [];
+		}
+
+		const cacheKey = `search:${me?.id ?? '_'}:${stringifySearch(q, opts)}`;
+		const cachedIds = await this.redisClient.lrange(cacheKey, 0, -1);
+		if (cachedIds.length > 0) {
+			const filteredIds = cachedIds.filter((id) =>
+				(pagination.sinceId == null || id > pagination.sinceId)
+				&& (pagination.untilId == null || id < pagination.untilId),
+			);
+
+			if (filteredIds.length === 0) {
+				return [];
+			}
+
+			const sortedIds = filteredIds.sort((a, b) =>
+				pagination.sinceId && !pagination.untilId
+					? (a < b ? -1 : 1)
+					: (a > b ? -1 : 1),
+			).slice(0, pagination.limit);
+
+			const query = this.notesRepository.createQueryBuilder('note')
+				.innerJoinAndSelect('note.user', 'user')
+				.leftJoinAndSelect('note.reply', 'reply')
+				.leftJoinAndSelect('note.renote', 'renote')
+				.leftJoinAndSelect('reply.user', 'replyUser')
+				.leftJoinAndSelect('renote.user', 'renoteUser')
+				.where('note.id IN (:...noteIds)', { noteIds: sortedIds });
+
+			const notes = await query.getMany();
+			const order = new Map(sortedIds.map((id, index) => [id, index]));
+			return notes.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+		}
+
 		switch (this.provider) {
 			case 'auto': {
-				return this.searchNoteAuto(q, me, opts, pagination);
+				return this.searchNoteAuto(q, me, opts, pagination, cacheKey);
 			}
-			case 'sqlLike': {
-				return this.searchNoteByLike(q, me, opts, pagination);
-			}
+			case 'sqlLike':
+				return this.searchNoteByLike(q, me, opts, pagination, false, cacheKey);
 			case 'sqlPgroonga': {
-				return this.searchNoteByPgroonga(q, me, opts, pagination);
+				return this.searchNoteByPgroonga(q, me, opts, pagination, false, cacheKey);
 			}
 			case 'meilisearch': {
+				if (this.hasDetailedSqlFilters(opts)) {
+					return this.searchNoteByLike(q, me, opts, pagination);
+				}
+
+				if (opts.onlyFollows || opts.onlyMentioned || opts.onlySpecified) {
+					return this.searchNoteByLike(q, me, opts, pagination);
+				}
+
 				return this.searchNoteByMeiliSearch(q, me, opts, pagination);
 			}
 			default: {
-				// eslint-disable-next-line @typescript-eslint/no-unused-vars
-				const typeCheck: never = this.provider;
+				const _: never = this.provider;
 				return [];
 			}
 		}
+	}
+
+	@bindThis
+	private hasDetailedSqlFilters(opts: SearchOpts): boolean {
+		return opts.minRenoteCount != null
+			|| opts.maxRenoteCount != null
+			|| opts.minRepliesCount != null
+			|| opts.maxRepliesCount != null
+			|| opts.minReactionsCount != null
+			|| opts.maxReactionsCount != null;
+	}
+
+	@bindThis
+	private async isPgroongaAvailable(): Promise<boolean> {
+		if (this.pgroongaAvailabilityCache != null) {
+			return this.pgroongaAvailabilityCache;
+		}
+
+		this.pgroongaAvailabilityCache = (await this.db.query('SELECT 0 FROM pg_extension WHERE extname = \'pgroonga\' LIMIT 1')).length > 0;
+		return this.pgroongaAvailabilityCache;
+	}
+
+	@bindThis
+	private async isCommonTerm(
+		q: string,
+		me: MiUser | null,
+		opts: SearchOpts,
+		usePgroonga: boolean,
+	): Promise<boolean> {
+		const threshold = this.config.fulltextSearch?.commonTermThreshold;
+		if (typeof threshold !== 'number' || !Number.isSafeInteger(threshold) || threshold < 0) {
+			return false;
+		}
+		const commonTermThreshold: number = threshold;
+
+		const sampling = this.queryNoteBySql(q, me, opts, usePgroonga);
+		const tableSample = this.config.fulltextSearch?.tableSample;
+
+		if (tableSample) {
+			const { ast } = parser.parse(`SELECT * FROM _ TABLESAMPLE ${tableSample}`);
+
+			// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+			if (Array.isArray(ast)
+				|| ast.type !== 'select'
+				|| ast.where
+				|| ast.groupby
+				|| ast.having
+				|| ast.orderby
+				|| ast.window
+				|| ast.limit?.value.length
+				|| [ast.from].flat().length !== 1
+			) {
+				throw new Error('malformed tableSample detected');
+			}
+		}
+
+		const attributes: PropertyDescriptor = Object.create(null);
+		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
+			let expression = `SELECT COUNT(*) > ${commonTermThreshold} AS "isCommonTerm" FROM note note`;
+			if (tableSample) {
+				expression += ` TABLESAMPLE ${tableSample}`;
+			}
+			return expression;
+		};
+		Object.defineProperty(sampling, 'createSelectExpression', attributes);
+
+		const result = await sampling.getRawOne<{ isCommonTerm: boolean }>();
+		return result?.isCommonTerm ?? false;
 	}
 
 	@bindThis
@@ -222,36 +359,20 @@ export class SearchService {
 		me: MiUser | null,
 		opts: SearchOpts,
 		pagination: SearchPagination,
+		cacheKey: string,
 	): Promise<MiNote[]> {
-		const isPgroongaAvailable = (await this.db.query('SELECT 0 FROM pg_extension WHERE extname = \'pgroonga\'')).length > 0;
-		if (this.meilisearch) {
-			const commonTermThreshold = this.config.fulltextSearch?.commonTermThreshold;
-			if (Number.isSafeInteger(commonTermThreshold)) {
-				const sampling = this.queryNoteBySql(q, me, opts, isPgroongaAvailable);
-				const attributes: PropertyDescriptor = Object.create(null);
-				const tableSample = this.config.fulltextSearch?.tableSample;
-				if (tableSample?.includes(';')) {
-					throw new Error(`Invalid tableSample: ${tableSample}`);
-				}
-				attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
-					let expression = `SELECT COUNT(*) > ${commonTermThreshold} AS "isCommonTerm" FROM note note`;
-					if (tableSample) {
-						expression += ` TABLESAMPLE ${tableSample}`;
-					}
-					return expression;
-				};
-				Object.defineProperty(sampling, 'createSelectExpression', attributes);
-				const { isCommonTerm } = (await sampling.getRawOne<{ isCommonTerm: boolean }>())!;
-				if (isCommonTerm) {
-					return this.searchNoteByMeiliSearch(q, me, opts, pagination);
-				}
+		const usePgroonga = await this.isPgroongaAvailable();
+		const softLimit = this.meilisearch != null;
+
+		if (this.meilisearch && !this.hasDetailedSqlFilters(opts) && !opts.onlyFollows && !opts.onlyMentioned && !opts.onlySpecified) {
+			if (await this.isCommonTerm(q, me, opts, usePgroonga)) {
+				return this.searchNoteByMeiliSearch(q, me, opts, pagination);
 			}
 		}
-		if (isPgroongaAvailable) {
-			return this.searchNoteByPgroonga(q, me, opts, pagination, !!this.meilisearch);
-		} else {
-			return this.searchNoteByLike(q, me, opts, pagination, !!this.meilisearch);
-		}
+
+		return usePgroonga
+			? this.searchNoteByPgroonga(q, me, opts, pagination, softLimit, cacheKey)
+			: this.searchNoteByLike(q, me, opts, pagination, softLimit, cacheKey);
 	}
 
 	@bindThis
@@ -261,6 +382,7 @@ export class SearchService {
 		opts: SearchOpts,
 		pagination: SearchPagination,
 		softLimit = false,
+		cacheKey?: string,
 	): Promise<MiNote[]> {
 		const cte = this.queryNoteBySql(q, me, opts, false);
 		const query = this.queryService.makePaginationQuery(
@@ -271,23 +393,32 @@ export class SearchService {
 			pagination.untilId,
 			undefined,
 			undefined,
+			'id',
 			'_',
 		);
+		query.expressionMap.selects = cte.expressionMap.selects;
+
+		const attributes: PropertyDescriptor = Object.create(null);
+		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
+			return 'SELECT * FROM note note';
+		};
+		Object.defineProperty(query, 'createSelectExpression', attributes);
+
 		if (!softLimit) {
 			query.limit(pagination.limit);
 		}
-		query.expressionMap.selects = cte.expressionMap.selects;
-		const attributes: PropertyDescriptor = Object.create(null);
-		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
-			return 'SELECT * FROM note note'; // NOTE: selected columns in the cte are already transformed so just pass-through here
-		};
-		Object.defineProperty(query, 'createSelectExpression', attributes);
-		const result = await query.getMany();
-		if (softLimit) {
-			return result.slice(0, pagination.limit);
-		} else {
-			return result;
+
+		const notes = await query.getMany();
+
+		if (cacheKey && notes.length > 0) {
+			await this.redisClient.multi()
+				.del(cacheKey)
+				.rpush(cacheKey, ...notes.map((note) => note.id))
+				.expire(cacheKey, 300)
+				.exec();
 		}
+
+		return softLimit ? notes.slice(0, pagination.limit) : notes;
 	}
 
 	@bindThis
@@ -297,6 +428,7 @@ export class SearchService {
 		opts: SearchOpts,
 		pagination: SearchPagination,
 		softLimit = false,
+		cacheKey?: string,
 	): Promise<MiNote[]> {
 		const cte = this.queryNoteBySql(q, me, opts, true);
 		const query = this.queryService.makePaginationQuery(
@@ -307,23 +439,32 @@ export class SearchService {
 			pagination.untilId,
 			undefined,
 			undefined,
+			'id',
 			'_',
 		);
+		query.expressionMap.selects = cte.expressionMap.selects;
+
+		const attributes: PropertyDescriptor = Object.create(null);
+		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
+			return 'SELECT * FROM note note';
+		};
+		Object.defineProperty(query, 'createSelectExpression', attributes);
+
 		if (!softLimit) {
 			query.limit(pagination.limit);
 		}
-		query.expressionMap.selects = cte.expressionMap.selects;
-		const attributes: PropertyDescriptor = Object.create(null);
-		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
-			return 'SELECT * FROM note note'; // NOTE: selected columns in the cte are already transformed so just pass-through here
-		};
-		Object.defineProperty(query, 'createSelectExpression', attributes);
-		const result = await query.getMany();
-		if (softLimit) {
-			return result.slice(0, pagination.limit);
-		} else {
-			return result;
+
+		const notes = await query.getMany();
+
+		if (cacheKey && notes.length > 0) {
+			await this.redisClient.multi()
+				.del(cacheKey)
+				.rpush(cacheKey, ...notes.map((note) => note.id))
+				.expire(cacheKey, 300)
+				.exec();
 		}
+
+		return softLimit ? notes.slice(0, pagination.limit) : notes;
 	}
 
 	@bindThis
@@ -332,7 +473,7 @@ export class SearchService {
 		me: MiUser | null,
 		opts: SearchOpts,
 		usePgroonga: boolean,
-	): SelectQueryBuilder<MiNote> {
+	) {
 		const query = this.notesRepository.createQueryBuilder('note');
 
 		if (opts.userId) {
@@ -351,7 +492,7 @@ export class SearchService {
 		if (usePgroonga) {
 			query.andWhere('concat_ws_unsafe_immutable(\' \', note.cw, note.text) &@~ :q', { q });
 		} else {
-			query.andWhere('lower(concat_ws_unsafe_immutable(\' \', note.cw, note.text)) LIKE :q', { q: `%${sqlLikeEscape(q.toLowerCase())}%` });
+			query.andWhere('LOWER(concat_ws_unsafe_immutable(\' \', note.cw, note.text)) LIKE :q', { q: `%${ sqlLikeEscape(q.toLowerCase()) }%` });
 		}
 
 		query
@@ -360,22 +501,39 @@ export class SearchService {
 
 		if (opts.host) {
 			if (opts.host === '.') {
-				query.andWhere('user.host IS NULL');
+				query.andWhere('note.userHost IS NULL');
 			} else {
-				query.andWhere('user.host = :host', { host: opts.host });
+				query.andWhere('note.userHost = :host', { host: opts.host });
 			}
 		}
 
 		if (opts.onlyFollows) {
-			query.andWhere(`note.userId IN (${this.followingsRepository.createQueryBuilder('following').select('following.followeeId').where('following.followerId = :followerId').getQuery()})`, { followerId: me?.id });
+			if (!me) {
+				query.andWhere('1 = 0');
+			} else {
+				const followingQuery = this.followingsRepository.createQueryBuilder('following')
+					.select('following.followeeId')
+					.where('following.followerId = :followerId', { followerId: me.id });
+
+				query.andWhere(`note.userId IN (${followingQuery.getQuery()})`);
+				query.setParameters(followingQuery.getParameters());
+			}
 		}
 
 		if (opts.onlyMentioned) {
-			query.andWhere(':mentions <@ note.mentions', { mentions: [me?.id] });
+			if (!me) {
+				query.andWhere('1 = 0');
+			} else {
+				query.andWhere(':mentionedUserId = ANY(note.mentions)', { mentionedUserId: me.id });
+			}
 		}
 
 		if (opts.onlySpecified) {
-			query.andWhere(':visibleUserIds <@ note.visibleUserIds', { visibleUserIds: [me?.id] });
+			if (!me) {
+				query.andWhere('1 = 0');
+			} else {
+				query.andWhere(':visibleUserId = ANY(note.visibleUserIds)', { visibleUserId: me.id });
+			}
 		}
 
 		if (opts.minRenoteCount != null) {
@@ -395,16 +553,15 @@ export class SearchService {
 		}
 
 		if (opts.minReactionsCount != null) {
-			query.andWhere('COALESCE((SELECT sum(reaction::INTEGER) FROM LATERAL jsonb_array_elements(jsonb_path_query_array(note.reactions, \'$.*\')) reaction), 0) >= :minReactionsCount', { minReactionsCount: opts.minReactionsCount });
+			query.andWhere('COALESCE((SELECT SUM(value::INTEGER) FROM LATERAL jsonb_each(note.reactions)), 0) >= :minReactionsCount', { minReactionsCount: opts.minReactionsCount });
 		}
 
 		if (opts.maxReactionsCount != null) {
-			query.andWhere('COALESCE((SELECT sum(reaction::INTEGER) FROM LATERAL jsonb_array_elements(jsonb_path_query_array(note.reactions, \'$.*\')) reaction), 0) <= :maxReactionsCount', { maxReactionsCount: opts.maxReactionsCount });
+			query.andWhere('COALESCE((SELECT SUM(value::INTEGER) FROM LATERAL jsonb_each(note.reactions)), 0) <= :maxReactionsCount', { maxReactionsCount: opts.maxReactionsCount });
 		}
 
 		this.queryService.generateVisibilityQuery(query, me);
-		if (me) this.queryService.generateMutedUserQuery(query, me);
-		if (me) this.queryService.generateBlockedUserQuery(query, me);
+		this.queryService.generateBaseNoteFilteringQuery(query, me);
 
 		return query;
 	}
@@ -464,9 +621,20 @@ export class SearchService {
 				this.cacheService.userBlockedCache.fetch(me.id),
 			])
 			: [new Set<string>(), new Set<string>()];
-		const notes = (await this.notesRepository.findBy({
-			id: In(res.hits.map(x => x.id)),
-		})).filter(note => {
+
+		const query = this.notesRepository.createQueryBuilder('note')
+			.innerJoinAndSelect('note.user', 'user')
+			.leftJoinAndSelect('note.reply', 'reply')
+			.leftJoinAndSelect('note.renote', 'renote')
+			.leftJoinAndSelect('reply.user', 'replyUser')
+			.leftJoinAndSelect('renote.user', 'renoteUser');
+
+		query.where('note.id IN (:...noteIds)', { noteIds: res.hits.map(x => x.id) });
+
+		this.queryService.generateBlockedHostQueryForNote(query);
+		this.queryService.generateSuspendedUserQueryForNote(query);
+
+		const notes = (await query.getMany()).filter(note => {
 			if (me && isUserRelated(note, userIdsWhoBlockingMe)) return false;
 			if (me && isUserRelated(note, userIdsWhoMeMuting)) return false;
 			return true;

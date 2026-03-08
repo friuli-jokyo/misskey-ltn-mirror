@@ -8,9 +8,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<div :class="$style.banner">
 		<i class="ti ti-user-edit"></i>
 	</div>
-	<MkSpacer :marginMin="20" :marginMax="32">
+	<div class="_spacer" style="--MI_SPACER-min: 20px; --MI_SPACER-max: 32px;">
 		<form class="_gaps_m" autocomplete="new-password" @submit.prevent="onSubmit">
-			<MkInput v-if="instance.disableRegistration" v-model="invitationCode" type="text" :spellcheck="false" required>
+			<MkInput v-if="instance.disableRegistration" v-model="invitationCode" type="text" :spellcheck="false" required data-cy-signup-invitation-code>
 				<template #label>{{ i18n.ts.invitationCode }}</template>
 				<template #prefix><i class="ti ti-key"></i></template>
 			</MkInput>
@@ -74,7 +74,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkCaptcha v-if="instance.enableMcaptcha" ref="mcaptcha" v-model="mCaptchaResponse" :class="$style.captcha" provider="mcaptcha" :sitekey="instance.mcaptchaSiteKey" :instanceUrl="instance.mcaptchaInstanceUrl"/>
 			<MkCaptcha v-if="instance.enableRecaptcha" ref="recaptcha" v-model="reCaptchaResponse" :class="$style.captcha" provider="recaptcha" :sitekey="instance.recaptchaSiteKey"/>
 			<MkCaptcha v-if="instance.enableTurnstile" ref="turnstile" v-model="turnstileResponse" :class="$style.captcha" provider="turnstile" :sitekey="instance.turnstileSiteKey"/>
-			<MkCaptcha v-if="instance.enableTestcaptcha" ref="testcaptcha" v-model="testcaptchaResponse" :class="$style.captcha" provider="testcaptcha"/>
+			<MkCaptcha v-if="instance.enableTestcaptcha" ref="testcaptcha" v-model="testcaptchaResponse" :class="$style.captcha" provider="testcaptcha" :sitekey="null"/>
 			<MkButton type="submit" :disabled="shouldDisableSubmitting" large gradate rounded data-cy-signup-submit style="margin: 0 auto;">
 				<template v-if="submitting">
 					<MkLoading :em="true" :colored="false"/>
@@ -82,7 +82,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<template v-else>{{ i18n.ts.start }}</template>
 			</MkButton>
 		</form>
-	</MkSpacer>
+	</div>
 </div>
 </template>
 
@@ -94,14 +94,14 @@ import * as Misskey from 'misskey-js';
 import * as config from '@@/js/config.js';
 import MkButton from './MkButton.vue';
 import MkInput from './MkInput.vue';
-import MkCaptcha from '@/components/MkCaptcha.vue';
 import type { Captcha } from '@/components/MkCaptcha.vue';
+import MkCaptcha from '@/components/MkCaptcha.vue';
 import * as os from '@/os.js';
-import { nameKey } from '@/scripts/client-name.js';
-import { misskeyApi } from '@/scripts/misskey-api.js';
-import { login } from '@/account.js';
+import { misskeyApi } from '@/utility/misskey-api.js';
 import { instance } from '@/instance.js';
 import { i18n } from '@/i18n.js';
+import { login } from '@/accounts.js';
+import { nameKey } from '@/utility/client-name.js';
 
 const props = withDefaults(defineProps<{
 	autoSet?: boolean;
@@ -141,6 +141,14 @@ const testcaptchaResponse = ref<string | null>(null);
 const usernameAbortController = ref<null | AbortController>(null);
 const emailAbortController = ref<null | AbortController>(null);
 
+onMounted(() => {
+	if (!instance.emailRequiredForSignup && supported()) {
+		nameKey().then(name => {
+			securityKeyName.value = name || 'My First Device';
+		});
+	}
+});
+
 const shouldDisableSubmitting = computed((): boolean => {
 	return submitting.value ||
 		instance.enableHcaptcha && !hCaptchaResponse.value ||
@@ -149,16 +157,9 @@ const shouldDisableSubmitting = computed((): boolean => {
 		instance.enableTurnstile && !turnstileResponse.value ||
 		instance.enableTestcaptcha && !testcaptchaResponse.value ||
 		instance.emailRequiredForSignup && emailState.value !== 'ok' ||
+		instance.disableRegistration && invitationCode.value === '' ||
 		usernameState.value !== 'ok' ||
 		passwordRetypeState.value !== 'match';
-});
-
-onMounted(() => {
-	if (!instance.emailRequiredForSignup && supported()) {
-		nameKey().then(name => {
-			securityKeyName.value = name || 'My First Device';
-		});
-	}
 });
 
 function getPasswordStrength(source: string): number {
@@ -286,7 +287,7 @@ async function onSubmit(): Promise<void> {
 		'testcaptcha-response': testcaptchaResponse.value,
 	};
 
-	const res = await fetch(`${config.apiUrl}/signup`, {
+	const res = await window.fetch(`${config.apiUrl}/signup`, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
@@ -309,25 +310,29 @@ async function onSubmit(): Promise<void> {
 			const resJson = (await res.json()) as Misskey.entities.SignupResponse;
 			if (_DEV_) console.log(resJson);
 
+			emit('signup', resJson);
+
 			if (supported() && securityKeyName.value) {
 				try {
 					const publicKey = await misskeyApi('i/2fa/register-key', {
 						password: password.value,
-					});
+					}, resJson.token);
+
 					const registration = await create(parseCreationOptionsFromJSON({
+						// @ts-expect-error -- ...
 						publicKey,
 					}));
+
 					await misskeyApi('i/2fa/key-done', {
 						password: password.value,
 						name: securityKeyName.value,
+						// @ts-expect-error -- ...
 						credential: registration.toJSON(),
-					});
-				} catch (e) {
-					// user canceled
-					console.error(e);
+					}, resJson.token);
+				} catch (err) {
+					console.error(err);
 				}
 			}
-			emit('signup', resJson);
 
 			if (props.autoSet) {
 				await login(resJson.token);

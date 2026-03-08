@@ -1,0 +1,1285 @@
+diff --git a/packages/backend/src/core/WebAuthnService.ts b/packages/backend/src/core/WebAuthnService.ts
+index 372e1e2ab7..37ebdcbbe4 100644
+--- a/packages/backend/src/core/WebAuthnService.ts
++++ b/packages/backend/src/core/WebAuthnService.ts
+@@ -54,7 +54,7 @@ export class WebAuthnService {
+ 	}
+ 
+ 	@bindThis
+-	public async initiateRegistration(userId: MiUser['id'], userName: string, userDisplayName?: string): Promise<PublicKeyCredentialCreationOptionsJSON> {
++	public async initiateRegistration(userId: MiUser['id'], userName: string, userDisplayName?: string, conditionalCreateState?: string): Promise<PublicKeyCredentialCreationOptionsJSON> {
+ 		const relyingParty = this.getRelyingParty();
+ 		const keys = await this.userSecurityKeysRepository.findBy({
+ 			userId: userId,
+@@ -79,6 +79,10 @@ export class WebAuthnService {
+ 
+ 		await this.redisClient.setex(`webauthn:challenge:${userId}`, 90, registrationOptions.challenge);
+ 
++		if (conditionalCreateState) {
++			await this.redisClient.setex(`webauthn:conditionalCreateState:${userId}:${conditionalCreateState}`, 90, '1');
++		}
++
+ 		return registrationOptions;
+ 	}
+ 
+@@ -111,7 +115,7 @@ export class WebAuthnService {
+ 				expectedChallenge: challenge,
+ 				expectedOrigin: relyingParty.origin,
+ 				expectedRPID: relyingParty.rpId,
+-				requireUserVerification: true,
++				requireUserVerification: false,
+ 			});
+ 		} catch (error) {
+ 			console.error(error);
+@@ -140,7 +144,7 @@ export class WebAuthnService {
+ 	}
+ 
+ 	@bindThis
+-	public async initiateAuthentication(userId: MiUser['id']): Promise<PublicKeyCredentialRequestOptionsJSON> {
++	public async initiateAuthentication(userId: MiUser['id'], userVerification?: UserVerificationRequirement): Promise<PublicKeyCredentialRequestOptionsJSON> {
+ 		const relyingParty = this.getRelyingParty();
+ 		const keys = await this.userSecurityKeysRepository.findBy({
+ 			userId: userId,
+@@ -152,11 +156,12 @@ export class WebAuthnService {
+ 
+ 		const authenticationOptions = await generateAuthenticationOptions({
+ 			rpID: relyingParty.rpId,
+-			allowCredentials: keys.map(key => (<{ id: string; transports?: AuthenticatorTransportFuture[]; }>{
++			allowCredentials: keys.map(key => ({
+ 				id: key.id,
+-				transports: key.transports ?? undefined,
++				type: 'public-key',
++				transports: (key.transports as AuthenticatorTransportFuture[] | null) ?? undefined,
+ 			})),
+-			userVerification: 'preferred',
++			userVerification,
+ 		});
+ 
+ 		await this.redisClient.setex(`webauthn:challenge:${userId}`, 90, authenticationOptions.challenge);
+@@ -188,7 +193,7 @@ export class WebAuthnService {
+ 	 * @returns If the challenge is successful, return the user ID. Otherwise, return null.
+ 	 */
+ 	@bindThis
+-	public async verifySignInWithPasskeyAuthentication(context: string, response: AuthenticationResponseJSON): Promise<MiUser['id'] | null> {
++	public async verifySignInWithPasskeyAuthentication(context: string, response: AuthenticationResponseJSON): Promise<{ userId: MiUser['id'] | null, finished: boolean }> {
+ 		const challenge = await this.redisClient.getdel(`webauthn:challenge:${context}`);
+ 
+ 		if (!challenge) {
+@@ -218,7 +223,7 @@ export class WebAuthnService {
+ 					counter: key.counter,
+ 					transports: key.transports ? key.transports as AuthenticatorTransportFuture[] : undefined,
+ 				},
+-				requireUserVerification: true,
++				requireUserVerification: false,
+ 			});
+ 		} catch (error) {
+ 			throw new IdentifiableError('b18c89a7-5b5e-4cec-bb5b-0419f332d430', `verification failed: ${error}`);
+@@ -227,7 +232,12 @@ export class WebAuthnService {
+ 		const { verified, authenticationInfo } = verification;
+ 
+ 		if (!verified) {
+-			return null;
++			return { userId: null, finished: false };
++		}
++
++		if (!authenticationInfo.userVerified) {
++			await this.redisClient.setex(`webauthn:challenge:${key.userId}`, 90, challenge);
++			return { userId: key.userId, finished: false };
+ 		}
+ 
+ 		await this.userSecurityKeysRepository.update({
+@@ -239,12 +249,27 @@ export class WebAuthnService {
+ 			credentialBackedUp: authenticationInfo.credentialBackedUp,
+ 		});
+ 
+-		return key.userId;
++		return { userId: key.userId, finished: true };
++	}
++
++	@bindThis
++	public async initiateAnonymousAuthentication(): Promise<[string, PublicKeyCredentialRequestOptionsJSON]> {
++		const relyingParty = await this.getRelyingParty();
++		const authenticationOptions = await generateAuthenticationOptions({
++			rpID: relyingParty.rpId,
++			allowCredentials: [],
++			userVerification: 'preferred',
++		});
++		const id = crypto.randomUUID();
++
++		await this.redisClient.setex(`webauthn:challenge:_${id}`, 300, authenticationOptions.challenge);
++
++		return [id, authenticationOptions];
+ 	}
+ 
+ 	@bindThis
+-	public async verifyAuthentication(userId: MiUser['id'], response: AuthenticationResponseJSON): Promise<boolean> {
+-		const challenge = await this.redisClient.getdel(`webauthn:challenge:${userId}`);
++	public async verifyAuthentication(response: AuthenticationResponseJSON, userId?: MiUser['id'], handle?: string): Promise<[userId: MiUser['id'], uv: boolean] | null> {
++		const challenge = await this.redisClient.getdel(`webauthn:challenge:${handle ? `_${handle}` : userId}`);
+ 
+ 		if (!challenge) {
+ 			throw new IdentifiableError('2d16e51c-007b-4edd-afd2-f7dd02c947f6', 'challenge not found');
+@@ -252,7 +277,7 @@ export class WebAuthnService {
+ 
+ 		const key = await this.userSecurityKeysRepository.findOneBy({
+ 			id: response.id,
+-			userId: userId,
++			userId,
+ 		});
+ 
+ 		if (!key) {
+@@ -275,7 +300,7 @@ export class WebAuthnService {
+ 				const cborPubKey = Buffer.from(isoCBOR.encode(cborMap)).toString('base64url');
+ 				await this.userSecurityKeysRepository.update({
+ 					id: response.id,
+-					userId: userId,
++					userId: key.userId,
+ 				}, {
+ 					publicKey: cborPubKey,
+ 				});
+@@ -298,7 +323,7 @@ export class WebAuthnService {
+ 					counter: key.counter,
+ 					transports: key.transports ? key.transports as AuthenticatorTransportFuture[] : undefined,
+ 				},
+-				requireUserVerification: true,
++				requireUserVerification: false,
+ 			});
+ 		} catch (error) {
+ 			console.error(error);
+@@ -308,12 +333,12 @@ export class WebAuthnService {
+ 		const { verified, authenticationInfo } = verification;
+ 
+ 		if (!verified) {
+-			return false;
++			return null;
+ 		}
+ 
+ 		await this.userSecurityKeysRepository.update({
+ 			id: response.id,
+-			userId: userId,
++			userId: key.userId,
+ 		}, {
+ 			lastUsed: new Date(),
+ 			counter: authenticationInfo.newCounter,
+@@ -321,6 +346,6 @@ export class WebAuthnService {
+ 			credentialBackedUp: authenticationInfo.credentialBackedUp,
+ 		});
+ 
+-		return verified;
++		return [key.userId, authenticationInfo.userVerified];
+ 	}
+ }
+diff --git a/packages/backend/src/server/api/SigninApiService.ts b/packages/backend/src/server/api/SigninApiService.ts
+index 1d983ca4bc..5095411ad1 100644
+--- a/packages/backend/src/server/api/SigninApiService.ts
++++ b/packages/backend/src/server/api/SigninApiService.ts
+@@ -67,6 +67,7 @@ export class SigninApiService {
+ 				password?: string;
+ 				token?: string;
+ 				credential?: AuthenticationResponseJSON;
++				capableConditionalCreate?: boolean;
+ 				'hcaptcha-response'?: string;
+ 				'g-recaptcha-response'?: string;
+ 				'turnstile-response'?: string;
+@@ -89,8 +90,18 @@ export class SigninApiService {
+ 			return { error };
+ 		}
+ 
++		if (typeof username !== 'string') {
++			reply.code(400);
++			return;
++		}
++
++		if (token != null && typeof token !== 'string') {
++			reply.code(400);
++			return;
++		}
++
+ 		try {
+-		// not more than 1 attempt per second and not more than 10 attempts per hour
++			// not more than 1 attempt per second and not more than 10 attempts per hour
+ 			await this.rateLimiterService.limit({ key: 'signin', duration: 60 * 60 * 1000, max: 10, minInterval: 1000 }, getIpHash(request.ip));
+ 		} catch (err) {
+ 			reply.code(429);
+@@ -103,16 +114,6 @@ export class SigninApiService {
+ 			};
+ 		}
+ 
+-		if (typeof username !== 'string') {
+-			reply.code(400);
+-			return;
+-		}
+-
+-		if (token != null && typeof token !== 'string') {
+-			reply.code(400);
+-			return;
+-		}
+-
+ 		// Fetch user
+ 		const user = await this.usersRepository.findOneBy({
+ 			usernameLower: username.toLowerCase(),
+@@ -173,30 +174,60 @@ export class SigninApiService {
+ 		if (!profile.twoFactorEnabled) {
+ 			if (process.env.NODE_ENV !== 'test') {
+ 				if (this.meta.enableHcaptcha && this.meta.hcaptchaSecretKey) {
++					if (!body['hcaptcha-response']) {
++						return {
++							finished: false,
++							next: 'captcha',
++						} satisfies Misskey.entities.SigninFlowResponse;
++					}
+ 					await this.captchaService.verifyHcaptcha(this.meta.hcaptchaSecretKey, body['hcaptcha-response']).catch(err => {
+ 						throw new FastifyReplyError(400, err);
+ 					});
+ 				}
+ 
+ 				if (this.meta.enableMcaptcha && this.meta.mcaptchaSecretKey && this.meta.mcaptchaSitekey && this.meta.mcaptchaInstanceUrl) {
++					if (!body['m-captcha-response']) {
++						return {
++							finished: false,
++							next: 'captcha',
++						} satisfies Misskey.entities.SigninFlowResponse;
++					}
+ 					await this.captchaService.verifyMcaptcha(this.meta.mcaptchaSecretKey, this.meta.mcaptchaSitekey, this.meta.mcaptchaInstanceUrl, body['m-captcha-response']).catch(err => {
+ 						throw new FastifyReplyError(400, err);
+ 					});
+ 				}
+ 
+ 				if (this.meta.enableRecaptcha && this.meta.recaptchaSecretKey) {
++					if (!body['g-recaptcha-response']) {
++						return {
++							finished: false,
++							next: 'captcha',
++						} satisfies Misskey.entities.SigninFlowResponse;
++					}
+ 					await this.captchaService.verifyRecaptcha(this.meta.recaptchaSecretKey, body['g-recaptcha-response']).catch(err => {
+ 						throw new FastifyReplyError(400, err);
+ 					});
+ 				}
+ 
+ 				if (this.meta.enableTurnstile && this.meta.turnstileSecretKey) {
++					if (!body['turnstile-response']) {
++						return {
++							finished: false,
++							next: 'captcha',
++						} satisfies Misskey.entities.SigninFlowResponse;
++					}
+ 					await this.captchaService.verifyTurnstile(this.meta.turnstileSecretKey, body['turnstile-response']).catch(err => {
+ 						throw new FastifyReplyError(400, err);
+ 					});
+ 				}
+ 
+ 				if (this.meta.enableTestcaptcha) {
++					if (!body['testcaptcha-response']) {
++						return {
++							finished: false,
++							next: 'captcha',
++						} satisfies Misskey.entities.SigninFlowResponse;
++					}
+ 					await this.captchaService.verifyTestcaptcha(body['testcaptcha-response']).catch(err => {
+ 						throw new FastifyReplyError(400, err);
+ 					});
+@@ -204,7 +235,7 @@ export class SigninApiService {
+ 			}
+ 
+ 			if (same) {
+-				return this.signinService.signin(request, reply, user);
++				return await this.signinService.signin(request, reply, user, body.capableConditionalCreate);
+ 			} else {
+ 				return await fail(403, {
+ 					id: '932c904e-9460-45b7-9ce6-7ed33be7eb2c',
+@@ -227,31 +258,25 @@ export class SigninApiService {
+ 				});
+ 			}
+ 
+-			return this.signinService.signin(request, reply, user);
++			return await this.signinService.signin(request, reply, user, body.capableConditionalCreate);
+ 		} else if (body.credential) {
+-			if (!same && !profile.usePasswordLessLogin) {
+-				return await fail(403, {
+-					id: '932c904e-9460-45b7-9ce6-7ed33be7eb2c',
+-				});
+-			}
+-
+-			const authorized = await this.webAuthnService.verifyAuthentication(user.id, body.credential);
+-
+-			if (authorized) {
+-				return this.signinService.signin(request, reply, user);
++			const authorized = await this.webAuthnService.verifyAuthentication(body.credential, user.id);
++
++			if (authorized?.[0] === user.id) {
++				if (authorized[1] || same) {
++					return await this.signinService.signin(request, reply, user, body.capableConditionalCreate);
++				} else {
++					return await fail(403, {
++						id: '932c904e-9460-45b7-9ce6-7ed33be7eb2c',
++					});
++				}
+ 			} else {
+ 				return await fail(403, {
+ 					id: '93b86c4b-72f9-40eb-9815-798928603d1e',
+ 				});
+ 			}
+-		} else if (securityKeysAvailable) {
+-			if (!same && !profile.usePasswordLessLogin) {
+-				return await fail(403, {
+-					id: '932c904e-9460-45b7-9ce6-7ed33be7eb2c',
+-				});
+-			}
+-
+-			const authRequest = await this.webAuthnService.initiateAuthentication(user.id);
++		} else if (securityKeysAvailable && profile.usePasswordLessLogin) {
++			const authRequest = await this.webAuthnService.initiateAuthentication(user.id, 'discouraged');
+ 
+ 			reply.code(200);
+ 			return {
+diff --git a/packages/backend/src/server/api/SigninService.ts b/packages/backend/src/server/api/SigninService.ts
+index 640356b50c..3ba2d99fc2 100644
+--- a/packages/backend/src/server/api/SigninService.ts
++++ b/packages/backend/src/server/api/SigninService.ts
+@@ -3,17 +3,18 @@
+  * SPDX-License-Identifier: AGPL-3.0-only
+  */
+ 
++import { randomUUID } from 'node:crypto';
+ import { Inject, Injectable } from '@nestjs/common';
+ import * as Misskey from 'misskey-js';
+ import { DI } from '@/di-symbols.js';
+-import type { SigninsRepository, UserProfilesRepository } from '@/models/_.js';
++import type { SigninsRepository, UserSecurityKeysRepository } from '@/models/_.js';
+ import { IdService } from '@/core/IdService.js';
+ import type { MiLocalUser } from '@/models/User.js';
+ import { GlobalEventService } from '@/core/GlobalEventService.js';
+ import { SigninEntityService } from '@/core/entities/SigninEntityService.js';
+ import { bindThis } from '@/decorators.js';
+-import { EmailService } from '@/core/EmailService.js';
+ import { NotificationService } from '@/core/NotificationService.js';
++import { WebAuthnService } from '@/core/WebAuthnService.js';
+ import type { FastifyRequest, FastifyReply } from 'fastify';
+ 
+ @Injectable()
+@@ -22,19 +23,19 @@ export class SigninService {
+ 		@Inject(DI.signinsRepository)
+ 		private signinsRepository: SigninsRepository,
+ 
+-		@Inject(DI.userProfilesRepository)
+-		private userProfilesRepository: UserProfilesRepository,
++		@Inject(DI.userSecurityKeysRepository)
++		private userSecurityKeysRepository: UserSecurityKeysRepository,
+ 
+ 		private signinEntityService: SigninEntityService,
+-		private emailService: EmailService,
+ 		private notificationService: NotificationService,
+ 		private idService: IdService,
+ 		private globalEventService: GlobalEventService,
++		private webAuthnService: WebAuthnService,
+ 	) {
+ 	}
+ 
+ 	@bindThis
+-	public signin(request: FastifyRequest, reply: FastifyReply, user: MiLocalUser) {
++	public async signin(request: FastifyRequest, reply: FastifyReply, user: MiLocalUser, capableConditionalCreate = false) {
+ 		setImmediate(async () => {
+ 			this.notificationService.createNotification(user.id, 'login', {});
+ 
+@@ -47,21 +48,21 @@ export class SigninService {
+ 			});
+ 
+ 			this.globalEventService.publishMainStream(user.id, 'signin', await this.signinEntityService.pack(record));
+-
+-			const profile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
+-			if (profile.email && profile.emailVerified) {
+-				this.emailService.sendEmail(profile.email, 'New login / ログインがありました',
+-					'There is a new login. If you do not recognize this login, update the security status of your account, including changing your password. / 新しいログインがありました。このログインに心当たりがない場合は、パスワードを変更するなど、アカウントのセキュリティ状態を更新してください。',
+-					'There is a new login. If you do not recognize this login, update the security status of your account, including changing your password. / 新しいログインがありました。このログインに心当たりがない場合は、パスワードを変更するなど、アカウントのセキュリティ状態を更新してください。');
+-			}
+ 		});
+ 
+-		reply.code(200);
+-		return {
++		const response = {
+ 			finished: true,
+ 			id: user.id,
+ 			i: user.token!,
+ 		} satisfies Misskey.entities.SigninFlowResponse;
++
++		if (capableConditionalCreate && await this.userSecurityKeysRepository.countBy({ userId: user.id }).then(result => result === 0)) {
++			response.state = randomUUID();
++			response.publicKey = await this.webAuthnService.initiateRegistration(user.id, user.username, user.name ?? undefined, response.state);
++		}
++
++		reply.code(200);
++		return response;
+ 	}
+ }
+ 
+diff --git a/packages/backend/src/server/api/SigninWithPasskeyApiService.ts b/packages/backend/src/server/api/SigninWithPasskeyApiService.ts
+index 9ba23c54e2..a915d091d7 100644
+--- a/packages/backend/src/server/api/SigninWithPasskeyApiService.ts
++++ b/packages/backend/src/server/api/SigninWithPasskeyApiService.ts
+@@ -12,6 +12,7 @@ import type {
+ 	UserProfilesRepository,
+ 	UsersRepository,
+ } from '@/models/_.js';
++import { UserEntityService } from '@/core/entities/UserEntityService.js';
+ import type { Config } from '@/config.js';
+ import { getIpHash } from '@/misc/get-ip-hash.js';
+ import type { MiLocalUser, MiUser } from '@/models/User.js';
+@@ -43,6 +44,7 @@ export class SigninWithPasskeyApiService {
+ 		private signinsRepository: SigninsRepository,
+ 
+ 		private idService: IdService,
++		private userEntityService: UserEntityService,
+ 		private rateLimiterService: RateLimiterService,
+ 		private signinService: SigninService,
+ 		private webAuthnService: WebAuthnService,
+@@ -123,7 +125,18 @@ export class SigninWithPasskeyApiService {
+ 
+ 		let authorizedUserId: MiUser['id'] | null;
+ 		try {
+-			authorizedUserId = await this.webAuthnService.verifySignInWithPasskeyAuthentication(context, credential);
++			const { userId, finished } = await this.webAuthnService.verifySignInWithPasskeyAuthentication(context, credential);
++			if (userId && !finished) {
++				reply.code(200);
++				return {
++					signinResponse: {
++						finished,
++						next: 'password',
++						user: await this.userEntityService.pack(userId, null, { schema: 'UserDetailedNotMe' }),
++					},
++				}
++			}
++			authorizedUserId = userId;
+ 		} catch (err) {
+ 			this.logger.warn(`Passkey challenge Verify error! : ${err}`);
+ 			const errorId = (err as IdentifiableError).id;
+@@ -156,6 +169,7 @@ export class SigninWithPasskeyApiService {
+ 			});
+ 		}
+ 
++		/*
+ 		const profile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
+ 
+ 		// Authentication was successful, but passwordless login is not enabled
+@@ -164,8 +178,9 @@ export class SigninWithPasskeyApiService {
+ 				id: '2d84773e-f7b7-4d0b-8f72-bb69b584c912',
+ 			});
+ 		}
++		 */
+ 
+-		const signinResponse = this.signinService.signin(request, reply, user);
++		const signinResponse = await this.signinService.signin(request, reply, user);
+ 		return {
+ 			signinResponse: signinResponse,
+ 		};
+diff --git a/packages/backend/src/server/api/SignupApiService.ts b/packages/backend/src/server/api/SignupApiService.ts
+index 3ec5e5d3e6..2e8dccbc1c 100644
+--- a/packages/backend/src/server/api/SignupApiService.ts
++++ b/packages/backend/src/server/api/SignupApiService.ts
+@@ -280,7 +280,7 @@ export class SignupApiService {
+ 				});
+ 			}
+ 
+-			return this.signinService.signin(request, reply, account as MiLocalUser);
++			return await this.signinService.signin(request, reply, account as MiLocalUser);
+ 		} catch (err) {
+ 			throw new FastifyReplyError(400, typeof err === 'string' ? err : (err as Error).toString());
+ 		}
+diff --git a/packages/backend/src/server/api/endpoints/i/2fa/key-done.ts b/packages/backend/src/server/api/endpoints/i/2fa/key-done.ts
+index 65eece5b97..4e38f96673 100644
+--- a/packages/backend/src/server/api/endpoints/i/2fa/key-done.ts
++++ b/packages/backend/src/server/api/endpoints/i/2fa/key-done.ts
+@@ -4,6 +4,7 @@
+  */
+ 
+ import bcrypt from 'bcryptjs';
++import * as Redis from 'ioredis';
+ import { Inject, Injectable } from '@nestjs/common';
+ import { Endpoint } from '@/server/api/endpoint-base.js';
+ import { UserEntityService } from '@/core/entities/UserEntityService.js';
+@@ -49,6 +50,7 @@ export const paramDef = {
+ 	properties: {
+ 		password: { type: 'string' },
+ 		token: { type: 'string', nullable: true },
++		state: { type: 'string', nullable: true },
+ 		name: { type: 'string', minLength: 1, maxLength: 30 },
+ 		credential: { type: 'object' },
+ 	},
+@@ -65,6 +67,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
+ 		@Inject(DI.userSecurityKeysRepository)
+ 		private userSecurityKeysRepository: UserSecurityKeysRepository,
+ 
++		@Inject(DI.redis)
++		private redisClient: Redis.Redis,
++
+ 		private webAuthnService: WebAuthnService,
+ 		private userAuthService: UserAuthService,
+ 		private userEntityService: UserEntityService,
+@@ -73,27 +78,36 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
+ 		super(meta, paramDef, async (ps, me) => {
+ 			const token = ps.token;
+ 			const profile = await this.userProfilesRepository.findOneByOrFail({ userId: me.id });
+-
+-			if (profile.twoFactorEnabled) {
+-				if (token == null) {
+-					throw new Error('authentication failed');
++			const verifiedByState = !!ps.state && await this.redisClient.getdel(`webauthn:conditionalCreateState:${me.id}:${ps.state}`) === '1';
++
++			if (!verifiedByState) {
++				if (profile.twoFactorEnabled) {
++					if (token == null) {
++						throw new Error('authentication failed');
++					}
++
++					try {
++						await this.userAuthService.twoFactorAuthenticate(profile, token);
++					} catch (e) {
++						throw new Error('authentication failed');
++					}
+ 				}
+ 
+-				try {
+-					await this.userAuthService.twoFactorAuthenticate(profile, token);
+-				} catch (e) {
++				if (!profile.password) {
+ 					throw new Error('authentication failed');
+ 				}
+-			}
+ 
+-			const passwordMatched = await bcrypt.compare(ps.password, profile.password ?? '');
+-			if (!passwordMatched) {
+-				throw new ApiError(meta.errors.incorrectPassword);
++				const passwordMatched = await bcrypt.compare(ps.password, profile.password);
++				if (!passwordMatched) {
++					throw new ApiError(meta.errors.incorrectPassword);
++				}
+ 			}
+ 
++			/*
+ 			if (!profile.twoFactorEnabled) {
+ 				throw new ApiError(meta.errors.twoFactorNotEnabled);
+ 			}
++			 */
+ 
+ 			const keyInfo = await this.webAuthnService.verifyRegistration(me.id, ps.credential);
+ 			const keyId = keyInfo.credentialID;
+diff --git a/packages/backend/src/server/api/endpoints/i/2fa/register-key.ts b/packages/backend/src/server/api/endpoints/i/2fa/register-key.ts
+index 9391aee5e0..bfa38c2195 100644
+--- a/packages/backend/src/server/api/endpoints/i/2fa/register-key.ts
++++ b/packages/backend/src/server/api/endpoints/i/2fa/register-key.ts
+@@ -222,9 +222,11 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
+ 				throw new ApiError(meta.errors.incorrectPassword);
+ 			}
+ 
++			/*
+ 			if (!profile.twoFactorEnabled) {
+ 				throw new ApiError(meta.errors.twoFactorNotEnabled);
+ 			}
++			 */
+ 
+ 			return await this.webAuthnService.initiateRegistration(
+ 				me.id,
+diff --git a/packages/backend/src/server/api/endpoints/i/2fa/unregister.ts b/packages/backend/src/server/api/endpoints/i/2fa/unregister.ts
+index b5a53cc889..6ae85c0583 100644
+--- a/packages/backend/src/server/api/endpoints/i/2fa/unregister.ts
++++ b/packages/backend/src/server/api/endpoints/i/2fa/unregister.ts
+@@ -71,7 +71,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
+ 				twoFactorSecret: null,
+ 				twoFactorBackupSecret: null,
+ 				twoFactorEnabled: false,
++				/*
+ 				usePasswordLessLogin: false,
++				 */
+ 			});
+ 
+ 			// Publish meUpdated event
+diff --git a/packages/frontend/src/components/MkSettingSuggestion.vue b/packages/frontend/src/components/MkSettingSuggestion.vue
+new file mode 100644
+index 0000000000..23bb7226f2
+--- /dev/null
++++ b/packages/frontend/src/components/MkSettingSuggestion.vue
+@@ -0,0 +1,29 @@
++<template>
++<div v-if="$i" class="_gaps_s">
++	<MkInfo v-if="thereIsUnresolvedAbuseReport" warn>{{ i18n.ts.thereIsUnresolvedAbuseReportWarning }} <MkA to="/admin/abuses" class="_link">{{ i18n.ts.check }}</MkA></MkInfo>
++	<MkInfo v-else-if="!$i.securityKeys && supported()" warn>{{ i18n.ts.passkeyNotConfiguredWarning }} <MkA to="/settings/security#register-key" class="_link">{{ i18n.ts.configure }}</MkA></MkInfo>
++	<MkInfo v-else-if="instance.enableEmail && !$i.emailVerified" warn>{{ i18n.ts.emailNotConfiguredWarning }} <MkA to="/settings/email" class="_link">{{ i18n.ts.configure }}</MkA></MkInfo>
++	<MkInfo v-else-if="!$i.twoFactorEnabled" warn>{{ i18n.ts.twoFactorNotConfiguredWarning }} <MkA to="/settings/security" class="_link">{{ i18n.ts.configure }}</MkA></MkInfo>
++</div>
++</template>
++
++<script lang="ts" setup>
++import { supported } from '@github/webauthn-json/browser-ponyfill';
++import { ref } from 'vue';
++import { $i } from '@/account.js';
++import MkInfo from '@/components/MkInfo.vue';
++import { i18n } from '@/i18n.js';
++import { instance } from '@/instance.js';
++import { misskeyApi } from '@/scripts/misskey-api.js';
++
++const thereIsUnresolvedAbuseReport = ref(false);
++
++if ($i?.isAdmin || $i?.isModerator) {
++	misskeyApi('admin/abuse-user-reports', {
++		state: 'unresolved',
++		limit: 1,
++	}).then(reports => {
++		thereIsUnresolvedAbuseReport.value = !!reports.length;
++	});
++}
++</script>
+diff --git a/packages/frontend/src/components/MkSignin.input.vue b/packages/frontend/src/components/MkSignin.input.vue
+index e98ac9cfd2..30e7c10dac 100644
+--- a/packages/frontend/src/components/MkSignin.input.vue
++++ b/packages/frontend/src/components/MkSignin.input.vue
+@@ -36,28 +36,35 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 				<template #prefix>@</template>
+ 				<template #suffix>@{{ host }}</template>
+ 			</MkInput>
++			<!-- some user-agents cannot initiate conditional mediation without a password field -->
++			<input :class="$style.password" type="password" autocomplete="password webauthn" tabindex="-1" @input="emit('passwordProvided', $event.target.value)" />
+ 			<MkButton type="submit" large primary rounded style="margin: 0 auto;" data-cy-signin-page-input-continue>{{ i18n.ts.continue }} <i class="ti ti-arrow-right"></i></MkButton>
+ 		</form>
+ 
+ 		<!-- パスワードレスログイン -->
+-		<div :class="$style.orHr">
+-			<p :class="$style.orMsg">{{ i18n.ts.or }}</p>
+-		</div>
+-		<div>
+-			<MkButton type="submit" style="margin: auto auto;" large rounded primary gradate @click="emit('passkeyClick', $event)">
+-				<i class="ti ti-device-usb" style="font-size: medium;"></i>{{ i18n.ts.signinWithPasskey }}
+-			</MkButton>
+-		</div>
++		<template v-if="!useConditionalMediation">
++			<div :class="$style.orHr">
++				<p :class="$style.orMsg">{{ i18n.ts.or }}</p>
++			</div>
++			<div>
++				<MkButton type="submit" style="margin: auto auto;" large rounded primary gradate @click="emit('passkeyClick', $event)">
++					<i class="ti ti-device-usb" style="font-size: medium;"></i>{{ i18n.ts.signinWithPasskey }}
++				</MkButton>
++			</div>
++		</template>
+ 	</div>
+ </div>
+ </template>
+ 
+ <script setup lang="ts">
+-import { ref } from 'vue';
++import { onMounted, onUnmounted, ref } from 'vue';
+ import { toUnicode } from 'punycode.js';
++import { supported as webAuthnSupported, get as webAuthnRequest, parseRequestOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
++import type { AuthenticationPublicKeyCredential } from '@github/webauthn-json/browser-ponyfill';
+ 
+ import { query, extractDomain } from '@@/js/url.js';
+ import { host as configHost } from '@@/js/config.js';
++import { misskeyApi } from '@/scripts/misskey-api';
+ import type { OpenOnRemoteOptions } from '@/scripts/please-login.js';
+ import { i18n } from '@/i18n.js';
+ import * as os from '@/os.js';
+@@ -69,14 +76,18 @@ import MkInfo from '@/components/MkInfo.vue';
+ const props = withDefaults(defineProps<{
+ 	message?: string,
+ 	openOnRemote?: OpenOnRemoteOptions,
++	useConditionalMediation?: boolean,
+ }>(), {
+ 	message: '',
+ 	openOnRemote: undefined,
++	useConditionalMediation: false,
+ });
+ 
+ const emit = defineEmits<{
+ 	(ev: 'usernameSubmitted', v: string): void;
++	(ev: 'passwordProvided', v: string): void;
+ 	(ev: 'passkeyClick', v: MouseEvent): void;
++	(ev: 'done', v: { context: string, credential: AuthenticationPublicKeyCredential }): void;
+ }>();
+ 
+ const host = toUnicode(configHost);
+@@ -172,6 +183,18 @@ async function specifyHostAndOpenRemote(options: OpenOnRemoteOptions): Promise<v
+ 	border-radius: 50%;
+ }
+ 
++.password {
++	clip: rect(1px, 1px, 1px, 1px);
++	clip-path: inset(50%);
++	contain: strict;
++	height: 1px;
++	overflow: clip;
++	padding: 0;
++	position: absolute;
++	white-space: nowrap;
++	width: 1px;
++}
++
+ .instanceManualSelectButton {
+ 	display: block;
+ 	text-align: center;
+diff --git a/packages/frontend/src/components/MkSignin.password.vue b/packages/frontend/src/components/MkSignin.password.vue
+index cd003a39df..c6224766f4 100644
+--- a/packages/frontend/src/components/MkSignin.password.vue
++++ b/packages/frontend/src/components/MkSignin.password.vue
+@@ -65,13 +65,14 @@ import MkCaptcha from '@/components/MkCaptcha.vue';
+ const props = defineProps<{
+ 	user: Misskey.entities.UserDetailed;
+ 	needCaptcha: boolean;
++	initialPassword?: string;
+ }>();
+ 
+ const emit = defineEmits<{
+ 	(ev: 'passwordSubmitted', v: PwResponse): void;
+ }>();
+ 
+-const password = ref('');
++const password = ref(props.initialPassword ?? '');
+ 
+ const hCaptcha = useTemplateRef('hcaptcha');
+ const mCaptcha = useTemplateRef('mcaptcha');
+diff --git a/packages/frontend/src/components/MkSignin.vue b/packages/frontend/src/components/MkSignin.vue
+index 2fb97e8e46..a2b6a01618 100644
+--- a/packages/frontend/src/components/MkSignin.vue
++++ b/packages/frontend/src/components/MkSignin.vue
+@@ -20,9 +20,12 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			key="input"
+ 			:message="message"
+ 			:openOnRemote="openOnRemote"
++			:useConditionalMediation="useConditionalMediation"
+ 
++			@passwordProvided="onPasswordProvided"
+ 			@usernameSubmitted="onUsernameSubmitted"
+ 			@passkeyClick="onPasskeyLogin"
++			@done="onConditionalMediationDone"
+ 		/>
+ 
+ 		<!-- 2. パスワード入力 -->
+@@ -33,6 +36,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ 			:user="userInfo!"
+ 			:needCaptcha="needCaptcha"
++			:initialPassword="password"
+ 
+ 			@passwordSubmitted="onPasswordSubmitted"
+ 		/>
+@@ -66,9 +70,10 @@ SPDX-License-Identifier: AGPL-3.0-only
+ <script setup lang="ts">
+ import { nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef } from 'vue';
+ import * as Misskey from 'misskey-js';
+-import { supported as webAuthnSupported, parseRequestOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
++import { parseRequestOptionsFromJSON, create as webAuthnCreate, get as webAuthnRequest, supported as webAuthnSupported } from '@github/webauthn-json/browser-ponyfill';
+ 
+ import type { AuthenticationPublicKeyCredential } from '@github/webauthn-json/browser-ponyfill';
++import { nameKey } from '@/scripts/client-name';
+ import type { OpenOnRemoteOptions } from '@/scripts/please-login.js';
+ import { misskeyApi } from '@/scripts/misskey-api.js';
+ import { showSuspendedDialog } from '@/scripts/show-suspended-dialog.js';
+@@ -101,15 +106,51 @@ const waiting = ref(false);
+ 
+ const passwordPageEl = useTemplateRef('passwordPageEl');
+ const needCaptcha = ref(false);
++const useConditionalMediation = ref(false);
+ 
+ const userInfo = ref<null | Misskey.entities.UserDetailed>(null);
+ const password = ref('');
++const credential = ref<null | AuthenticationPublicKeyCredential>(null);
+ 
+ //#region Passkey Passwordless
+ const credentialRequest = shallowRef<CredentialRequestOptions | null>(null);
+ const passkeyContext = ref('');
+ const doingPasskeyFromInputPage = ref(false);
+ 
++const abortController = new AbortController();
++
++if (webAuthnSupported()) {
++	;(window.PublicKeyCredential?.getClientCapabilities?.().then(capabilities => capabilities.conditionalMediation) ?? window.PublicKeyCredential?.isConditionalMediationAvailable?.())
++		?.then(available => {
++			if (!available) return;
++			useConditionalMediation.value = true;
++			misskeyApi('signin-with-passkey', {}, null, abortController.signal)
++				.then((response) => {
++					if (abortController.signal.aborted) {
++						useConditionalMediation.value = false;
++						return;
++					}
++					const options = parseRequestOptionsFromJSON({
++						mediation: 'conditional',
++						publicKey: response.option,
++						abortSignal: abortController.signal,
++					});
++					webAuthnRequest(options)
++						.then(credential => {
++							onConditionalMediationDone({ context: response.context, credential });
++						})
++						.catch(err => {
++							useConditionalMediation.value = false;
++							console.error(err);
++							os.alert({
++								type: 'error',
++								text: i18n.ts.signinFailed,
++							});
++						});
++				});
++		});
++}
++
+ function onPasskeyLogin(): void {
+ 	if (webAuthnSupported()) {
+ 		doingPasskeyFromInputPage.value = true;
+@@ -128,26 +169,39 @@ function onPasskeyLogin(): void {
+ 	}
+ }
+ 
+-function onPasskeyDone(credential: AuthenticationPublicKeyCredential): void {
++function onConditionalMediationDone(response: { context: string, credential: AuthenticationPublicKeyCredential }): void {
++	doingPasskeyFromInputPage.value = true;
++	passkeyContext.value = response.context;
++	onPasskeyDone(response.credential);
++}
++
++function onPasskeyDone(response: AuthenticationPublicKeyCredential): void {
+ 	waiting.value = true;
+ 
+ 	if (doingPasskeyFromInputPage.value) {
+ 		misskeyApi('signin-with-passkey', {
+-			credential: credential.toJSON(),
++			credential: response.toJSON(),
+ 			context: passkeyContext.value,
+-		}).then((res) => {
++		}).then(async (res) => {
+ 			if (res.signinResponse == null) {
+ 				onSigninApiError();
+ 				return;
+ 			}
+-			emit('login', res.signinResponse);
+-			onLoginSucceeded(res.signinResponse);
++			if (res.signinResponse.finished) {
++				emit('login', res.signinResponse);
++				await onLoginSucceeded(res.signinResponse);
++			} else {
++				userInfo.value = res.signinResponse.user;
++				credential.value = response;
++				page.value = res.signinResponse.next;
++				waiting.value = false;
++			}
+ 		}).catch(onSigninApiError);
+ 	} else if (userInfo.value != null) {
+ 		tryLogin({
+ 			username: userInfo.value.username,
+ 			password: password.value,
+-			credential: credential.toJSON(),
++			credential: response.toJSON(),
+ 		});
+ 	}
+ }
+@@ -166,9 +220,14 @@ async function onUsernameSubmitted(username: string) {
+ 
+ 	await tryLogin({
+ 		username,
++		password: password.value || undefined,
+ 	});
+ }
+ 
++function onPasswordProvided(pw: string) {
++	password.value = pw;
++}
++
+ async function onPasswordSubmitted(pw: PwResponse) {
+ 	waiting.value = true;
+ 	password.value = pw.password;
+@@ -184,12 +243,13 @@ async function onPasswordSubmitted(pw: PwResponse) {
+ 	} else {
+ 		await tryLogin({
+ 			username: userInfo.value.username,
+-			password: pw.password,
++			password: password.value,
+ 			'hcaptcha-response': pw.captcha.hCaptchaResponse,
+ 			'm-captcha-response': pw.captcha.mCaptchaResponse,
+ 			'g-recaptcha-response': pw.captcha.reCaptchaResponse,
+ 			'turnstile-response': pw.captcha.turnstileResponse,
+ 			'testcaptcha-response': pw.captcha.testcaptchaResponse,
++			credential: credential.value ? credential.value.toJSON() : undefined,
+ 		});
+ 	}
+ }
+@@ -210,6 +270,7 @@ async function onTotpSubmitted(token: string) {
+ 			username: userInfo.value.username,
+ 			password: password.value,
+ 			token,
++			credential: credential.value ? credential.value.toJSON() : undefined,
+ 		});
+ 	}
+ }
+@@ -217,6 +278,7 @@ async function onTotpSubmitted(token: string) {
+ async function tryLogin(req: Partial<Misskey.entities.SigninFlowRequest>): Promise<Misskey.entities.SigninFlowResponse> {
+ 	const _req = {
+ 		username: req.username ?? userInfo.value?.username,
++		capableConditionalCreate: await window.PublicKeyCredential?.getClientCapabilities?.().then(capabilities => capabilities.conditionalCreate) ?? false,
+ 		...req,
+ 	};
+ 
+@@ -230,6 +292,22 @@ async function tryLogin(req: Partial<Misskey.entities.SigninFlowRequest>): Promi
+ 
+ 	return await misskeyApi('signin-flow', _req).then(async (res) => {
+ 		if (res.finished) {
++			if (res.state && res.publicKey) {
++				await os.promiseDialog(Promise.all([
++					webAuthnCreate({
++						publicKey: res.publicKey,
++						mediation: 'conditional',
++					}).catch(() => null), // WORKAROUND: @see <https://bugs.webkit.org/show_bug.cgi?id=274217>
++					nameKey(),
++				]).then(([credential, name]) => credential
++					? misskeyApi('i/2fa/key-done', {
++						password: password.value,
++						state: res.state,
++						name: name ?? 'Auto-upgraded Passkey',
++						credential: credential.toJSON(),
++					}, res.i)
++					: Promise.resolve() as Promise<unknown>), null, () => {});
++			}
+ 			emit('login', res);
+ 			await onLoginSucceeded(res);
+ 		} else {
+@@ -361,7 +439,7 @@ function onSigninApiError(err?: any): void {
+ 			os.alert({
+ 				type: 'error',
+ 				title: i18n.ts.loginFailed,
+-				text: JSON.stringify(err),
++				text: JSON.stringify(err instanceof Error ? err.message : err),
+ 			});
+ 		}
+ 	}
+@@ -381,6 +459,7 @@ onBeforeUnmount(() => {
+ 	password.value = '';
+ 	needCaptcha.value = false;
+ 	userInfo.value = null;
++	abortController.abort();
+ });
+ </script>
+ 
+diff --git a/packages/frontend/src/components/MkSignupDialog.form.vue b/packages/frontend/src/components/MkSignupDialog.form.vue
+index 4227e1317a..bfe25c565b 100644
+--- a/packages/frontend/src/components/MkSignupDialog.form.vue
++++ b/packages/frontend/src/components/MkSignupDialog.form.vue
+@@ -62,6 +62,14 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					<span v-if="passwordRetypeState == 'not-match'" style="color: var(--MI_THEME-error)"><i class="ti ti-alert-triangle ti-fw"></i> {{ i18n.ts.passwordNotMatched }}</span>
+ 				</template>
+ 			</MkInput>
++			<MkInput v-if="!instance.emailRequiredForSignup && supported()" v-model="securityKeyName">
++				<template #label>{{ i18n.ts._2fa.securityKeyName }}</template>
++				<template #prefix><i class="ti ti-password-fingerprint"></i></template>
++				<template #caption>
++					{{ i18n.ts._2fa.securityKeyInfo }}
++					{{ i18n.ts.notUsePleaseLeaveBlank }}
++				</template>
++			</MkInput>
+ 			<MkCaptcha v-if="instance.enableHcaptcha" ref="hcaptcha" v-model="hCaptchaResponse" :class="$style.captcha" provider="hcaptcha" :sitekey="instance.hcaptchaSiteKey"/>
+ 			<MkCaptcha v-if="instance.enableMcaptcha" ref="mcaptcha" v-model="mCaptchaResponse" :class="$style.captcha" provider="mcaptcha" :sitekey="instance.mcaptchaSiteKey" :instanceUrl="instance.mcaptchaInstanceUrl"/>
+ 			<MkCaptcha v-if="instance.enableRecaptcha" ref="recaptcha" v-model="reCaptchaResponse" :class="$style.captcha" provider="recaptcha" :sitekey="instance.recaptchaSiteKey"/>
+@@ -79,7 +87,8 @@ SPDX-License-Identifier: AGPL-3.0-only
+ </template>
+ 
+ <script lang="ts" setup>
+-import { ref, computed } from 'vue';
++import { create, parseCreationOptionsFromJSON, supported } from '@github/webauthn-json/browser-ponyfill';
++import { ref, computed, onMounted } from 'vue';
+ import { toUnicode } from 'punycode.js';
+ import * as Misskey from 'misskey-js';
+ import * as config from '@@/js/config.js';
+@@ -88,6 +97,7 @@ import MkInput from './MkInput.vue';
+ import MkCaptcha from '@/components/MkCaptcha.vue';
+ import type { Captcha } from '@/components/MkCaptcha.vue';
+ import * as os from '@/os.js';
++import { nameKey } from '@/scripts/client-name.js';
+ import { misskeyApi } from '@/scripts/misskey-api.js';
+ import { login } from '@/account.js';
+ import { instance } from '@/instance.js';
+@@ -115,6 +125,7 @@ const testcaptcha = ref<Captcha | undefined>();
+ const username = ref<string>('');
+ const password = ref<string>('');
+ const retypedPassword = ref<string>('');
++const securityKeyName = ref<string>('');
+ const invitationCode = ref<string>('');
+ const email = ref('');
+ const usernameState = ref<null | 'wait' | 'ok' | 'unavailable' | 'error' | 'invalid-format' | 'min-range' | 'max-range'>(null);
+@@ -142,6 +153,14 @@ const shouldDisableSubmitting = computed((): boolean => {
+ 		passwordRetypeState.value !== 'match';
+ });
+ 
++onMounted(() => {
++	if (!instance.emailRequiredForSignup && supported()) {
++		nameKey().then(name => {
++			securityKeyName.value = name || 'My First Device';
++		});
++	}
++});
++
+ function getPasswordStrength(source: string): number {
+ 	let strength = 0;
+ 	let power = 0.018;
+@@ -290,6 +309,24 @@ async function onSubmit(): Promise<void> {
+ 			const resJson = (await res.json()) as Misskey.entities.SignupResponse;
+ 			if (_DEV_) console.log(resJson);
+ 
++			if (supported() && securityKeyName.value) {
++				try {
++					const publicKey = await misskeyApi('i/2fa/register-key', {
++						password: password.value,
++					});
++					const registration = await create(parseCreationOptionsFromJSON({
++						publicKey,
++					}));
++					await misskeyApi('i/2fa/key-done', {
++						password: password.value,
++						name: securityKeyName.value,
++						credential: registration.toJSON(),
++					});
++				} catch (e) {
++					// user canceled
++					console.error(e);
++				}
++			}
+ 			emit('signup', resJson);
+ 
+ 			if (props.autoSet) {
+diff --git a/packages/frontend/src/pages/settings/2fa.vue b/packages/frontend/src/pages/settings/2fa.vue
+index 776f59dda3..a04dbc6d03 100644
+--- a/packages/frontend/src/pages/settings/2fa.vue
++++ b/packages/frontend/src/pages/settings/2fa.vue
+@@ -23,14 +23,17 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 
+ 			<div v-if="$i.twoFactorEnabled" class="_gaps_s">
+ 				<div v-text="i18n.ts._2fa.alreadyRegistered"/>
+-				<template v-if="$i.securityKeysList.length > 0">
++				<!--
++				<template v-if="$i.securityKeysList?.length">
+ 					<MkButton @click="renewTOTP">{{ i18n.ts._2fa.renewTOTP }}</MkButton>
+ 					<MkInfo>{{ i18n.ts._2fa.whyTOTPOnlyRenew }}</MkInfo>
+ 				</template>
+ 				<MkButton v-else danger @click="unregisterTOTP">{{ i18n.ts.unregister }}</MkButton>
++				-->
++				<MkButton @click="renewTOTP">{{ i18n.ts._2fa.renewTOTP }}</MkButton>
++				<MkButton danger @click="unregisterTOTP">{{ i18n.ts.unregister }}</MkButton>
+ 			</div>
+-
+-			<div v-else-if="!$i.twoFactorEnabled" class="_gaps_s">
++			<div v-else class="_gaps_s">
+ 				<MkButton primary gradate @click="registerTOTP">{{ i18n.ts._2fa.registerTOTP }}</MkButton>
+ 				<MkLink url="https://misskey-hub.net/docs/for-users/stepped-guides/how-to-enable-2fa/" target="_blank"><i class="ti ti-help-circle"></i> {{ i18n.ts.learnMore }}</MkLink>
+ 			</div>
+@@ -48,9 +51,11 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 					{{ i18n.ts._2fa.securityKeyNotSupported }}
+ 				</MkInfo>
+ 
++				<!--
+ 				<MkInfo v-else-if="webAuthnSupported() && !$i.twoFactorEnabled" warn>
+ 					{{ i18n.ts._2fa.registerTOTPBeforeKey }}
+ 				</MkInfo>
++				-->
+ 
+ 				<template v-else>
+ 					<MkButton primary @click="addSecurityKey">{{ i18n.ts._2fa.registerSecurityKey }}</MkButton>
+@@ -66,7 +71,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 			</div>
+ 		</MkFolder>
+ 
+-		<MkSwitch :disabled="!$i.twoFactorEnabled || $i.securityKeysList.length === 0" :modelValue="usePasswordLessLogin" @update:modelValue="v => updatePasswordLessLogin(v)">
++		<MkSwitch :disabled="!$i.securityKeysList?.length" :modelValue="usePasswordLessLogin" @update:modelValue="v => updatePasswordLessLogin(v)">
+ 			<template #label>{{ i18n.ts.passwordLessLogin }}</template>
+ 			<template #caption>{{ i18n.ts.passwordLessLoginDescription }}</template>
+ 		</MkSwitch>
+@@ -75,7 +80,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ </template>
+ 
+ <script lang="ts" setup>
+-import { defineAsyncComponent, computed } from 'vue';
++import { defineAsyncComponent, computed, onMounted } from 'vue';
+ import { supported as webAuthnSupported, create as webAuthnCreate, parseCreationOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
+ import MkButton from '@/components/MkButton.vue';
+ import MkInfo from '@/components/MkInfo.vue';
+@@ -86,19 +91,30 @@ import MkLink from '@/components/MkLink.vue';
+ import * as os from '@/os.js';
+ import { signinRequired, updateAccountPartial } from '@/account.js';
+ import { i18n } from '@/i18n.js';
++import { nameKey } from '@/scripts/client-name.js';
+ 
+ const $i = signinRequired();
+ 
+ // メモ: 各エンドポイントはmeUpdatedを発行するため、refreshAccountは不要
+ 
+-withDefaults(defineProps<{
++const props = withDefaults(defineProps<{
+ 	first?: boolean;
++	action?: 'register-key';
+ }>(), {
+ 	first: false,
++	action: undefined,
+ });
+ 
+ const usePasswordLessLogin = computed(() => $i.usePasswordLessLogin ?? false);
+ 
++onMounted(() => {
++	switch (props.action) {
++		case 'register-key':
++			addSecurityKey();
++			break;
++	}
++});
++
+ async function registerTOTP(): Promise<void> {
+ 	const auth = await os.authenticateDialog();
+ 	if (auth.canceled) return;
+@@ -183,42 +199,58 @@ async function renameKey(key) {
+ }
+ 
+ async function addSecurityKey() {
+-	const auth = await os.authenticateDialog();
+-	if (auth.canceled) return;
+-
+-	const registrationOptions = parseCreationOptionsFromJSON({
+-		publicKey: await os.apiWithDialog('i/2fa/register-key', {
+-			password: auth.result.password,
+-			token: auth.result.token,
+-		}),
+-	});
+-
+-	const name = await os.inputText({
+-		title: i18n.ts._2fa.registerSecurityKey,
+-		text: i18n.ts._2fa.securityKeyName,
+-		type: 'text',
+-		minLength: 1,
+-		maxLength: 30,
+-	});
+-	if (name.canceled) return;
+-
+-	const credential = await os.promiseDialog(
+-		webAuthnCreate(registrationOptions),
+-		null,
+-		() => {}, // ユーザーのキャンセルはrejectなのでエラーダイアログを出さない
+-		i18n.ts._2fa.tapSecurityKey,
+-	);
+-	if (!credential) return;
+-
+-	const auth2 = await os.authenticateDialog();
+-	if (auth2.canceled) return;
++	try {
++		const defaultName = nameKey();
++		const auth = await os.authenticateDialog();
++		if (auth.canceled) return;
++
++		const registrationOptions = parseCreationOptionsFromJSON({
++			publicKey: await os.apiWithDialog('i/2fa/register-key', {
++				password: auth.result.password,
++				token: auth.result.token,
++			}),
++		});
+ 
+-	await os.apiWithDialog('i/2fa/key-done', {
+-		password: auth.result.password,
+-		token: auth.result.token,
+-		name: name.result,
+-		credential: credential.toJSON(),
+-	});
++		const name = await os.inputText({
++			title: i18n.ts._2fa.registerSecurityKey,
++			text: i18n.ts._2fa.securityKeyName,
++			type: 'text',
++			minLength: 1,
++			maxLength: 30,
++			default: await defaultName,
++		});
++		if (name.canceled) return;
++
++		const credential = await os.promiseDialog(
++			webAuthnCreate(registrationOptions).then(credential => {
++				if (!credential) throw new Error(i18n.ts.somethingHappened);
++				return credential;
++			}),
++			null,
++			(error) => {
++				// ユーザーのキャンセルはrejectなのでエラーダイアログを出さない
++				if (error.name === 'AbortError') return;
++				throw error;
++			},
++			i18n.ts._2fa.tapSecurityKey,
++		);
++		if (!credential) return;
++
++		const auth2 = await os.authenticateDialog();
++		if (auth2.canceled) return;
++
++		await os.apiWithDialog('i/2fa/key-done', {
++			password: auth2.result.password,
++			token: auth2.result.token,
++			name: name.result,
++			credential: credential.toJSON(),
++		});
++	} catch (error) {
++		os.alert({
++			type: 'error',
++			text: error instanceof Error ? error.message : JSON.stringify(error),
++		});
++	}
+ }
+ 
+ async function updatePasswordLessLogin(value: boolean) {
+diff --git a/packages/frontend/src/pages/settings/security.vue b/packages/frontend/src/pages/settings/security.vue
+index 8f9d4f858b..69429e8cf3 100644
+--- a/packages/frontend/src/pages/settings/security.vue
++++ b/packages/frontend/src/pages/settings/security.vue
+@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-only
+ 		<MkButton primary @click="change()">{{ i18n.ts.changePassword }}</MkButton>
+ 	</FormSection>
+ 
+-	<X2fa/>
++	<X2fa :action="action"/>
+ 
+ 	<FormSection>
+ 		<template #label>{{ i18n.ts.signinHistory }}</template>
+@@ -51,6 +51,12 @@ import { misskeyApi } from '@/scripts/misskey-api.js';
+ import { i18n } from '@/i18n.js';
+ import { definePageMetadata } from '@/scripts/page-metadata.js';
+ 
++withDefaults(defineProps<{
++	action?: 'register-key';
++}>(), {
++	action: undefined,
++});
++
+ const pagination = {
+ 	endpoint: 'i/signin-history' as const,
+ 	limit: 5,
+diff --git a/packages/frontend/src/scripts/client-name.ts b/packages/frontend/src/scripts/client-name.ts
+new file mode 100644
+index 0000000000..d6f8ca8831
+--- /dev/null
++++ b/packages/frontend/src/scripts/client-name.ts
+@@ -0,0 +1,29 @@
++const ICLOUD_KEYCHAIN = 'iCloud Keychain';
++
++export async function nameKey(): Promise<string | null> {
++	if (window.navigator.userAgentData) {
++		const result = await window.navigator.userAgentData.getHighEntropyValues(['model'])
++			.then(
++				ua => {
++					return ua.model || ua.platform;
++				},
++				() => {
++					return window.navigator.userAgentData.platform;
++				},
++			);
++		if (result === 'macOS') {
++			return ICLOUD_KEYCHAIN;
++		}
++		if (result) {
++			return result;
++		}
++	}
++	switch (window.navigator.platform) {
++		case 'MacIntel':
++		case 'iPad':
++		case 'iPhone':
++			return ICLOUD_KEYCHAIN;
++		default:
++			return null;
++	}
++}
