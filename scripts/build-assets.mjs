@@ -27,7 +27,7 @@ async function copyFrontendFonts() {
 async function build() {
 	await Promise.all([
 		copyFrontendFonts(),
-		loadConfig().then(config => config?.publishTarballInsteadOfProvideRepositoryUrl && buildTarball()),
+		buildTarball(),
 	]);
 }
 

@@ -143,7 +143,10 @@ export class QueueModule implements OnApplicationShutdown {
 		@Inject('queue:objectStorage') public objectStorageQueue: ObjectStorageQueue,
 		@Inject('queue:userWebhookDeliver') public userWebhookDeliverQueue: UserWebhookDeliverQueue,
 		@Inject('queue:systemWebhookDeliver') public systemWebhookDeliverQueue: SystemWebhookDeliverQueue,
-	) {
+	) {}
+
+	public startQueueEventListeners(): void {
+		if (this.queueEventListeners.length > 0) return;
 		this.initQueueEventListeners();
 	}
 
@@ -153,10 +156,8 @@ export class QueueModule implements OnApplicationShutdown {
 
 	private async getJobFromCache(jobId: string, queue: Bull.Queue, queueName: string): Promise<Bull.Job | undefined> {
 		const cacheKey = this.getJobCacheKey(queueName, jobId);
-		// Check cache first
 		let job = this.jobCache.get(cacheKey);
 		if (!job) {
-			// If not in cache, fetch from queue
 			job = await queue.getJob(jobId);
 			if (job) {
 				this.jobCache.set(cacheKey, job);
@@ -178,6 +179,7 @@ export class QueueModule implements OnApplicationShutdown {
 					: typeof job.progress === 'number'
 						? job.progress
 						: null;
+
 				this.globalEventService.publishJobStream(job.data.user.id, 'jobProgress', {
 					id: job.id,
 					name: job.name,
@@ -202,7 +204,6 @@ export class QueueModule implements OnApplicationShutdown {
 					completedAt: job.finishedOn ?? null,
 				});
 			}
-			// Remove from cache after completion
 			this.jobCache.delete(this.getJobCacheKey(queueName, jobId));
 		});
 
@@ -219,13 +220,11 @@ export class QueueModule implements OnApplicationShutdown {
 					completedAt: job.finishedOn ?? null,
 				});
 			}
-			// Remove from cache after failure
 			this.jobCache.delete(this.getJobCacheKey(queueName, jobId));
 		});
 	}
 
-	private async initQueueEventListeners() {
-		// Setup QueueEvents for all queues to listen to job events
+	private initQueueEventListeners() {
 		this.setupQueueEvents(QUEUE.SYSTEM, this.systemQueue);
 		this.setupQueueEvents(QUEUE.ENDED_POLL_NOTIFICATION, this.endedPollNotificationQueue);
 		this.setupQueueEvents(QUEUE.POST_SCHEDULED_NOTE, this.postScheduledNoteQueue);
@@ -241,10 +240,10 @@ export class QueueModule implements OnApplicationShutdown {
 	public async dispose(): Promise<void> {
 		// Wait for all potential queue jobs
 		await allSettled();
-		// Clear job cache
 		this.jobCache.clear();
 		// Close all QueueEvents listeners
 		await Promise.all(this.queueEventListeners.map(qe => qe.close()));
+		this.queueEventListeners = [];
 		// And then close all queues
 		await Promise.all([
 			this.systemQueue.close(),
@@ -260,7 +259,7 @@ export class QueueModule implements OnApplicationShutdown {
 		]);
 	}
 
-	async onApplicationShutdown(signal: string): Promise<void> {
+	async onApplicationShutdown(_signal: string): Promise<void> {
 		await this.dispose();
 	}
 }
