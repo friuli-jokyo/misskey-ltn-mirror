@@ -40,19 +40,11 @@ jobs:
                   shopt -s dotglob
                   cp -r * -t '${{ github.workspace }}'
                   cd '${{ github.workspace }}'
-            - name: Create Pull Request
+            - name: Commit and Push
               if: env.repo_version != env.ltn_version
-              id: cpr
-              uses: peter-evans/create-pull-request@v6
-              with:
-                  branch: update/${{ env.ltn_version }}
-                  delete-branch: true
-                  title: ${{ env.ltn_version }}
-                  commit-message: ${{ env.ltn_version }}
-                  author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-                  committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-                  body: ${{ env.repo_version }} -> ${{ env.ltn_version }}
-            - name: Merge
-              if: ${{ steps.cpr.outputs.pull-request-number }}
+              id: CaP
               run: |
-                  gh pr merge "${{ steps.cpr.outputs.pull-request-url }}" -r -d
+                  git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git config --local user.name "github-actions[bot]"
+                  git commit -am "${{ env.ltn_version }}"
+                  git push
