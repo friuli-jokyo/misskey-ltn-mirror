@@ -6353,6 +6353,14 @@ export interface Locale extends ILocale {
          * 複数のデバイスで同期したい設定項目が存在する場合は、個別に「複数のデバイスで同期」オプションを有効にしてください。
          */
         "useSyncBetweenDevicesOptionIfYouWantToSyncSetting": string;
+        /**
+         * 同じ名前のプロファイルが既に存在します。
+         */
+        "profileNameAlreadyExists": string;
+        /**
+         * プロファイル「{name}」を読み込みますか？現在の設定は上書きされます。
+         */
+        "confirmLoadProfile": ParameterizedString<"name">;
     };
     "_preferencesBackup": {
         /**

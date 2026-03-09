@@ -1600,6 +1600,8 @@ _preferencesProfile:
   manageProfiles: "プロファイルの管理"
   shareSameProfileBetweenDevicesIsNotRecommended: "複数のデバイスで同一のプロファイルを共有することは推奨しません。"
   useSyncBetweenDevicesOptionIfYouWantToSyncSetting: "複数のデバイスで同期したい設定項目が存在する場合は、個別に「複数のデバイスで同期」オプションを有効にしてください。"
+  profileNameAlreadyExists: "同じ名前のプロファイルが既に存在します。"
+  confirmLoadProfile: "プロファイル「{name}」を読み込みますか？現在の設定は上書きされます。"
 
 _preferencesBackup:
   autoBackup: "自動バックアップ"

@@ -19,5 +19,11 @@ const __dirname = import.meta.dirname;
 	fs.rmSync(__dirname + '/../packages/misskey-js/built', { recursive: true, force: true });
 	fs.rmSync(__dirname + '/../packages/misskey-reversi/built', { recursive: true, force: true });
 	fs.rmSync(__dirname + '/../packages/misskey-bubble-game/built', { recursive: true, force: true });
-	fs.rmSync(__dirname + '/../built', { recursive: true, force: true });
+
+	// Note: built/_frontend_vite_, built/_frontend_embed_vite_, built/_sw_dist_ は残す
+	// これらは実行中のサーバーが使用している可能性があるため
+	// 古いファイルの削除は clean-old-dist スクリプトを使用してください
+	fs.rmSync(__dirname + '/../built/meta.json', { force: true });
+	fs.rmSync(__dirname + '/../built/_frontend_dist_', { recursive: true, force: true });
 })();
+
