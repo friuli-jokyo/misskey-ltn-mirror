@@ -4,10 +4,11 @@
  */
 
 import cluster from 'node:cluster';
-import type { INestApplicationContext } from '@nestjs/common';
 import { envOption } from '@/env.js';
 import { loadConfig } from '@/config.js';
+import { QueueModule } from '@/core/QueueModule.js';
 import { jobQueue, server } from './common.js';
+import type { INestApplicationContext } from '@nestjs/common';
 
 /**
  * Init worker process
@@ -40,6 +41,9 @@ export async function workerMain() {
 	let jobQueueApp: INestApplicationContext | undefined;
 	if (envOption.onlyServer) {
 		serverApp = await server();
+		if (cluster.worker?.id === 1) {
+			serverApp.get(QueueModule).startQueueEventListeners();
+		}
 	} else if (envOption.onlyQueue) {
 		jobQueueApp = await jobQueue();
 	} else {
@@ -48,7 +52,7 @@ export async function workerMain() {
 
 	if (cluster.isWorker) {
 		// Send a 'ready' message to parent process
-		process.send!('ready');
+		if (process.send) process.send('ready');
 	}
 	return {
 		server: serverApp,

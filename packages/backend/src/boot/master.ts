@@ -14,6 +14,7 @@ import { loadConfig } from '@/config.js';
 import type { Config } from '@/config.js';
 import { showMachineInfo } from '@/misc/show-machine-info.js';
 import { envOption } from '@/env.js';
+import { QueueModule } from '@/core/QueueModule.js';
 import { jobQueue, server } from './common.js';
 
 const logger = new Logger('core', 'cyan');
@@ -118,6 +119,10 @@ export async function masterMain() {
 			serverApp = await server();
 			jobQueueApp = await jobQueue();
 		}
+	}
+
+	if (serverApp) {
+		serverApp.get(QueueModule).startQueueEventListeners();
 	}
 
 	if (envOption.onlyQueue) {
