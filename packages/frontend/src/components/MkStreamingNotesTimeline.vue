@@ -201,7 +201,7 @@ function isTop() {
 	if (scrollContainer == null) return true;
 	if (rootEl.value == null) return true;
 	const scrollTop = scrollContainer.scrollTop;
-	const tlTop = rootEl.value.offsetTop - scrollContainer.offsetTop;
+	const tlTop = rootEl.value.offsetTop - scrollContainer.offsetTop + 14;
 	return scrollTop <= tlTop;
 }
 
@@ -480,8 +480,8 @@ defineExpose({
 	top: calc(24px + var(--MI-stickyTop, 0px) - var(--gapFill));
 	z-index: 1000;
 	width: 100%;
+	height: 0;
 	box-sizing: border-box;
-	padding: calc(10px + var(--gapFill)) 0 10px 0;
 	transform: translateY(-24px);
 }
 
@@ -491,48 +491,47 @@ defineExpose({
 .newBg3,
 .newBg4,
 .newBg5 {
-  position: absolute;
-  inset: 0;
+	position: absolute;
+	inset: 0;
 	height: 28px;
-  pointer-events: none;
-  -webkit-backdrop-filter: blur(var(--blur));
-  backdrop-filter: blur(var(--blur));
-  background-color: rgba(0, 0, 0, var(--bg-opacity));
+	pointer-events: none;
+	-webkit-backdrop-filter: blur(var(--blur));
+	backdrop-filter: blur(var(--blur));
 }
 
 .newBg1 {
 	--blur: .5px;
-	--bg-opacity: 0.03125;
-	-webkit-mask-image: linear-gradient(to top, transparent 20px, black 28px);
-	mask-image: linear-gradient(to top, transparent 20px, black 28px);
+	--bg-opacity: .03125;
+	-webkit-mask-image: linear-gradient(to top, black 0, transparent 16px);
+	mask-image: linear-gradient(to top, black 0, transparent 16px);
 }
 
 .newBg2 {
 	--blur: 1.5px;
 	--bg-opacity: 0.0625;
-	-webkit-mask-image: linear-gradient(to top, transparent 12px, black 20px, transparent 28px);
-	mask-image: linear-gradient(to top, transparent 12px, black 20px, transparent 28px);
+	-webkit-mask-image: linear-gradient(to top, transparent 8px, black 14px, transparent 20px);
+	mask-image: linear-gradient(to top, transparent 8px, black 14px, transparent 20px);
 }
 
 .newBg3 {
 	--blur: 4px;
 	--bg-opacity: 0.125;
-	-webkit-mask-image: linear-gradient(to top, transparent 8px, black 12px, black 16px, transparent 24px);
-	mask-image: linear-gradient(to top, transparent 8px, black 12px, black 16px, transparent 24px);
+	-webkit-mask-image: linear-gradient(to top, transparent 12px, black 18px, transparent 24px);
+	mask-image: linear-gradient(to top, transparent 12px, black 18px, transparent 24px);
 }
 
 .newBg4 {
 	--blur: 8px;
 	--bg-opacity: 0.25;
-	-webkit-mask-image: linear-gradient(to top, transparent 0, black 4px, black 8px, transparent 16px);
-	mask-image: linear-gradient(to top, transparent 0, black 4px, black 8px, transparent 16px);
+	-webkit-mask-image: linear-gradient(to top, transparent 18px, black 24px, transparent 28px);
+	mask-image: linear-gradient(to top, transparent 18px, black 24px, transparent 28px);
 }
 
 .newBg5 {
 	--blur: 12px;
 	--bg-opacity: 0.5;
-	-webkit-mask-image: linear-gradient(to top, black 0, transparent 8px);
-	mask-image: linear-gradient(to top, black 0, transparent 8px);
+	-webkit-mask-image: linear-gradient(to top, transparent 22px, black 28px);
+	mask-image: linear-gradient(to top, transparent 22px, black 28px);
 }
 
 .newButton {

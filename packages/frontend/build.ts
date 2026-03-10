@@ -42,8 +42,17 @@ async function buildAllLocale() {
 	}
 }
 
+async function removeOldBuilds() {
+	const manifest = JSON.parse(await fs.readFile(path.join(outputDir, 'manifest.json'), 'utf-8'));
+	const files = new Set(Object.values(manifest).map(entry => entry.file));
+	for await (const file of await fs.readdir(outputDir, { recursive: true, withFileTypes: true })) {
+		if (!file.isFile() || files.has(path.relative(outputDir, path.join(file.parentPath, file.name)))) continue;
+		await fs.rm(path.join(file.parentPath, file.name));
+	}
+}
+
 async function build() {
-	await fs.rm(outputDir, { recursive: true, force: true });
+	await removeOldBuilds();
 	await viteBuild();
 	await buildAllLocale();
 }
