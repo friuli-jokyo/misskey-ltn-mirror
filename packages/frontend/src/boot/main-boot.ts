@@ -21,6 +21,7 @@ import { reactionPicker } from '@/utility/reaction-picker.js';
 import { miLocalStorage } from '@/local-storage.js';
 import { claimAchievement, claimedAchievements } from '@/utility/achievements.js';
 import { initializeSw } from '@/utility/initialize-sw.js';
+import { misskeyApi } from '@/utility/misskey-api.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
 import { mainRouter } from '@/router.js';
 import { makeHotkey } from '@/utility/hotkey.js';
@@ -318,6 +319,15 @@ export async function mainBoot() {
 						window.location.reload();
 					}
 				}
+
+				misskeyApi('ping').then((meta) => {
+					if (!lastVersion || compareVersions(meta.version, lastVersion) > 0) {
+						stream.emit('_update_available_', {
+							currentVersion: lastVersion,
+							upcomingVersion: meta.version,
+						});
+					}
+				});
 			});
 
 			stream.on('emojiAdded', emojiData => {

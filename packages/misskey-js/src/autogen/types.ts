@@ -32708,6 +32708,7 @@ export interface operations {
                 content: {
                     'application/json': {
                         pong: number;
+                        version: string;
                     };
                 };
             };

@@ -22,6 +22,12 @@ type AnyOf<T extends Record<PropertyKey, unknown>> = T[keyof T];
 export type StreamEvents = {
 	_connected_: void;
 	_disconnected_: void;
+	_update_available_: [
+		{
+			currentVersion: string;
+			upcomingVersion: string;
+		},
+	];
 } & BroadcastEvents;
 
 export interface IStream extends EventEmitter<StreamEvents> {
