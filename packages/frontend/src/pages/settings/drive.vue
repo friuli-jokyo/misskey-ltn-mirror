@@ -47,7 +47,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<FormSplit :minWidth="144">
 							<MkKeyValue>
 								<template #key>{{ i18n.ts._poll.duration }}</template>
-								<template #value>{{ hms(uploadBandwidth.duration, { textFormat: 'locale' }) }}</template>
+								<template #value>{{ hours(uploadBandwidth.duration) }}</template>
 							</MkKeyValue>
 							<MkKeyValue>
 								<template #key>{{ i18n.ts.capacity }}</template>
@@ -229,6 +229,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 </SearchMarker>
 </template>
 
+<script lang="ts">
+const durationFormat = Intl.DurationFormat && new Intl.DurationFormat(navigator.language);
+
+function hours(hours: number) {
+	return durationFormat?.format({ hours }) ?? hms(hours * 36e5, { textFormat: 'locale' });
+}
+</script>
+
 <script lang="ts" setup>
 import { computed, defineAsyncComponent, ref } from 'vue';
 import * as Misskey from 'misskey-js';
@@ -258,6 +266,7 @@ import { selectDriveFolder } from '@/utility/drive.js';
 import MkFolder from '@/components/MkFolder.vue';
 import MkButton from '@/components/MkButton.vue';
 import { genId } from '@/utility/id.js';
+import { HoverThenUnhover } from '@/components/MkGalleryPostPreview.stories.impl';
 
 const $i = ensureSignin();
 
