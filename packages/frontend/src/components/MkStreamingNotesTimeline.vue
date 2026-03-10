@@ -502,36 +502,36 @@ defineExpose({
 .newBg1 {
 	--blur: .5px;
 	--bg-opacity: .03125;
-	-webkit-mask-image: linear-gradient(to top, black 0, transparent 16px);
-	mask-image: linear-gradient(to top, black 0, transparent 16px);
+	-webkit-mask-image: linear-gradient(to top, black 0, transparent 4px);
+	mask-image: linear-gradient(to top, black 0, transparent 4px);
 }
 
 .newBg2 {
 	--blur: 1.5px;
 	--bg-opacity: 0.0625;
-	-webkit-mask-image: linear-gradient(to top, transparent 8px, black 14px, transparent 20px);
-	mask-image: linear-gradient(to top, transparent 8px, black 14px, transparent 20px);
+	-webkit-mask-image: linear-gradient(to top, transparent 0, black 4px, transparent 8px);
+	mask-image: linear-gradient(to top, transparent 0, black 4px, transparent 8px);
 }
 
 .newBg3 {
 	--blur: 4px;
 	--bg-opacity: 0.125;
-	-webkit-mask-image: linear-gradient(to top, transparent 12px, black 18px, transparent 24px);
-	mask-image: linear-gradient(to top, transparent 12px, black 18px, transparent 24px);
+	-webkit-mask-image: linear-gradient(to top, transparent 4px, black 8px, transparent 16px);
+	mask-image: linear-gradient(to top, transparent 4px, black 8px, transparent 16px);
 }
 
 .newBg4 {
 	--blur: 8px;
 	--bg-opacity: 0.25;
-	-webkit-mask-image: linear-gradient(to top, transparent 18px, black 24px, transparent 28px);
-	mask-image: linear-gradient(to top, transparent 18px, black 24px, transparent 28px);
+	-webkit-mask-image: linear-gradient(to top, transparent 8px, black 16px, transparent 28px);
+	mask-image: linear-gradient(to top, transparent 8px, black 16px, transparent 28px);
 }
 
 .newBg5 {
 	--blur: 12px;
 	--bg-opacity: 0.5;
-	-webkit-mask-image: linear-gradient(to top, transparent 22px, black 28px);
-	mask-image: linear-gradient(to top, transparent 22px, black 28px);
+	-webkit-mask-image: linear-gradient(to top, transparent 16px, black 28px);
+	mask-image: linear-gradient(to top, transparent 16px, black 28px);
 }
 
 .newButton {

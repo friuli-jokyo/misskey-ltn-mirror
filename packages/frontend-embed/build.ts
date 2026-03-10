@@ -43,10 +43,19 @@ async function buildAllLocale() {
 }
 
 async function removeOldBuilds() {
-	const manifest = JSON.parse(await fs.readFile(path.join(outputDir, 'manifest.json'), 'utf-8'));
-	const files = new Set(Object.values(manifest).map(entry => entry.file));
+	const manifestJson = await fs.readFile(path.join(outputDir, 'manifest.json'), 'utf-8').catch(() => null);
+	if (!manifestJson) {
+		console.log('No manifest found, skipping old build cleanup.');
+		return;
+	}
+	const manifest = JSON.parse(manifestJson);
+	const files = new Set(Object.values(manifest).flatMap(entry => [
+		path.basename(entry.file),
+		...entry.css ? entry.css.map(cssFile => path.basename(cssFile)) : [],
+		...entry.assets ? entry.assets.map(assetFile => path.basename(assetFile)) : [],
+	]));
 	for await (const file of await fs.readdir(outputDir, { recursive: true, withFileTypes: true })) {
-		if (!file.isFile() || files.has(path.relative(outputDir, path.join(file.parentPath, file.name)))) continue;
+		if (!file.isFile() || files.has(path.basename(file.name))) continue;
 		await fs.rm(path.join(file.parentPath, file.name));
 	}
 }
