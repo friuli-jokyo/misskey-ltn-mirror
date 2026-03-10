@@ -114,6 +114,7 @@ const mouseup = (ev: MouseEvent) => {
 	border: dashed 1px var(--MI_THEME-divider);
 	border-radius: 128px;
 	box-shadow: 0 0 8px #0003;
+	opacity: .75;
 }
 
 .dialItem {

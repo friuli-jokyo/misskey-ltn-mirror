@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div v-if="hasDisconnected && prefer.s.serverDisconnectedBehavior === 'quiet'" :class="$style.root" class="_panel _shadow" @click="resetDisconnected">
+<div v-if="hasDisconnected && prefer.s.serverDisconnectedBehavior === 'quiet' || updateAvailability" :class="$style.root" class="_panel _shadow" @click="resetDisconnected">
 	<div v-if="updateAvailability"><i class="ti ti-cloud-download"></i> {{ i18n.ts.misskeyUpdated }}</div>
 	<div v-else><i class="ti ti-alert-triangle"></i> {{ i18n.ts.disconnectedFromServer }}</div>
 	<div :class="$style.command" class="_buttons">
