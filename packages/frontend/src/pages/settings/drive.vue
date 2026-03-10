@@ -232,8 +232,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts">
 const durationFormat = Intl.DurationFormat && new Intl.DurationFormat(navigator.language);
 
-function hours(hours: number) {
-	return durationFormat?.format({ hours }) ?? hms(hours * 36e5, { textFormat: 'locale' });
+function hours(duration: number) {
+	return durationFormat?.format({ hours: duration / 36e5 }) ?? hms(duration, { textFormat: 'locale' });
 }
 </script>
 
@@ -266,7 +266,6 @@ import { selectDriveFolder } from '@/utility/drive.js';
 import MkFolder from '@/components/MkFolder.vue';
 import MkButton from '@/components/MkButton.vue';
 import { genId } from '@/utility/id.js';
-import { HoverThenUnhover } from '@/components/MkGalleryPostPreview.stories.impl';
 
 const $i = ensureSignin();
 
