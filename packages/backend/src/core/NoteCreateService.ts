@@ -389,9 +389,10 @@ export class NoteCreateService implements OnApplicationShutdown {
 			}
 		}
 
+		const channelId = reply?.channelId ?? data.channelId;
 		let channel: MiChannel | null = null;
-		if (data.channelId != null) {
-			channel = await this.channelsRepository.findOneBy({ id: data.channelId, isArchived: false });
+		if (channelId != null) {
+			channel = await this.channelsRepository.findOneBy({ id: channelId, isArchived: false });
 
 			if (channel == null) {
 				throw new IdentifiableError('bfa3905b-25f5-4894-b430-da331a490e4b', 'No such channel');

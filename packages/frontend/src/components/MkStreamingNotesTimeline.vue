@@ -13,10 +13,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<slot name="empty"><MkResult type="empty" :text="i18n.ts.noNotes"/></slot>
 	</div>
 
-	<div v-else ref="rootEl">
+	<div v-else ref="rootEl" :class="$style.rootEl">
 		<div v-if="paginator.queuedAheadItemsCount.value > 0" :class="$style.new">
 			<div :class="$style.newBg1"></div>
 			<div :class="$style.newBg2"></div>
+			<div :class="$style.newBg3"></div>
+			<div :class="$style.newBg4"></div>
+			<div :class="$style.newBg5"></div>
 			<button class="_button" :class="$style.newButton" @click="releaseQueue()"><i class="ti ti-circle-arrow-up"></i> {{ i18n.ts.newNote }}</button>
 		</div>
 		<component
@@ -455,9 +458,15 @@ defineExpose({
 	opacity: 0;
 }
 
+.rootEl {
+	margin: -14px 0 14px;
+	padding: 14px 0 0;
+}
+
 .notes {
 	container-type: inline-size;
 	background: var(--MI_THEME-panel);
+	border-radius: var(--MI-radius) var(--MI-radius) 0 0;
 }
 
 .note:not(:empty) {
@@ -468,66 +477,77 @@ defineExpose({
 	--gapFill: 0.5px; // 上位ヘッダーの高さにフォントの関係などで少数が含まれると、レンダリングエンジンによっては隙間が表示されてしまうため、隙間を隠すために少しずらす
 
 	position: sticky;
-	top: calc(var(--MI-stickyTop, 0px) - var(--gapFill));
+	top: calc(24px + var(--MI-stickyTop, 0px) - var(--gapFill));
 	z-index: 1000;
 	width: 100%;
 	box-sizing: border-box;
 	padding: calc(10px + var(--gapFill)) 0 10px 0;
+	transform: translateY(-24px);
 }
 
 /* 疑似progressive blur */
-.newBg1, .newBg2 {
-	position: absolute;
-	top: 0;
-	left: 0;
-	right: 0;
-	bottom: 0;
+.newBg1,
+.newBg2,
+.newBg3,
+.newBg4,
+.newBg5 {
+  position: absolute;
+  inset: 0;
+	height: 28px;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(var(--blur));
+  backdrop-filter: blur(var(--blur));
+  background-color: rgba(0, 0, 0, var(--bg-opacity));
 }
 
 .newBg1 {
-	height: 100%;
-	-webkit-backdrop-filter: var(--MI-blur, blur(2px));
-	backdrop-filter: var(--MI-blur, blur(2px));
-	mask-image: linear-gradient( /* 疑似Easing Linear Gradients */
-		to top,
-		rgb(0 0 0 / 0%) 0%,
-		rgb(0 0 0 / 4.9%) 7.75%,
-		rgb(0 0 0 / 10.4%) 11.25%,
-		rgb(0 0 0 / 45%) 23.55%,
-		rgb(0 0 0 / 55%) 26.45%,
-		rgb(0 0 0 / 89.6%) 38.75%,
-		rgb(0 0 0 / 95.1%) 42.25%,
-		rgb(0 0 0 / 100%) 50%
-	);
+	--blur: .5px;
+	--bg-opacity: 0.03125;
+	-webkit-mask-image: linear-gradient(to top, transparent 20px, black 28px);
+	mask-image: linear-gradient(to top, transparent 20px, black 28px);
 }
 
 .newBg2 {
-	height: 75%;
-	-webkit-backdrop-filter: var(--MI-blur, blur(4px));
-	backdrop-filter: var(--MI-blur, blur(4px));
-	mask-image: linear-gradient( /* 疑似Easing Linear Gradients */
-		to top,
-		rgb(0 0 0 / 0%) 0%,
-		rgb(0 0 0 / 4.9%) 15.5%,
-		rgb(0 0 0 / 10.4%) 22.5%,
-		rgb(0 0 0 / 45%) 47.1%,
-		rgb(0 0 0 / 55%) 52.9%,
-		rgb(0 0 0 / 89.6%) 77.5%,
-		rgb(0 0 0 / 95.1%) 91.9%,
-		rgb(0 0 0 / 100%) 100%
-	);
+	--blur: 1.5px;
+	--bg-opacity: 0.0625;
+	-webkit-mask-image: linear-gradient(to top, transparent 12px, black 20px, transparent 28px);
+	mask-image: linear-gradient(to top, transparent 12px, black 20px, transparent 28px);
+}
+
+.newBg3 {
+	--blur: 4px;
+	--bg-opacity: 0.125;
+	-webkit-mask-image: linear-gradient(to top, transparent 8px, black 12px, black 16px, transparent 24px);
+	mask-image: linear-gradient(to top, transparent 8px, black 12px, black 16px, transparent 24px);
+}
+
+.newBg4 {
+	--blur: 8px;
+	--bg-opacity: 0.25;
+	-webkit-mask-image: linear-gradient(to top, transparent 0, black 4px, black 8px, transparent 16px);
+	mask-image: linear-gradient(to top, transparent 0, black 4px, black 8px, transparent 16px);
+}
+
+.newBg5 {
+	--blur: 12px;
+	--bg-opacity: 0.5;
+	-webkit-mask-image: linear-gradient(to top, black 0, transparent 8px);
+	mask-image: linear-gradient(to top, black 0, transparent 8px);
 }
 
 .newButton {
 	position: relative;
-	display: block;
+	display: flex;
 	padding: 6px 12px;
 	border-radius: 999px;
 	width: max-content;
-	margin: auto;
+	margin: 0 auto;
 	background: var(--MI_THEME-accent);
 	color: var(--MI_THEME-fgOnAccent);
-	font-size: 90%;
+	font-size: 12px;
+	line-height: 16px;
+	gap: 4px;
+	transform: translateY(10px);
 
 	&:hover {
 		background: hsl(from var(--MI_THEME-accent) h s calc(l + 5));

@@ -8,11 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<div ref="headerEl" :class="$style.header">
 		<slot name="header"></slot>
 	</div>
-	<div
-		:class="$style.body"
-		:data-sticky-container-header-height="headerHeight"
-		:data-sticky-container-footer-height="footerHeight"
-	>
+	<div :class="$style.body">
 		<slot></slot>
 	</div>
 	<div ref="footerEl" :class="$style.footer">
@@ -23,6 +19,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { onMounted, onUnmounted, provide, inject, ref, watch, useTemplateRef } from 'vue';
+import { headerHeights, footerHeights } from '@@/js/scroll.js';
 import { DI } from '@/di.js';
 
 const rootEl = useTemplateRef('rootEl');
@@ -57,6 +54,20 @@ const observer = new ResizeObserver(() => {
 	window.setTimeout(() => {
 		calc();
 	}, 100);
+});
+
+watch(headerHeight, (v) => {
+	const value = parseInt(v!, 10);
+	if (headerEl.value && !Number.isNaN(value)) {
+		headerHeights.set(headerEl.value, value);
+	}
+});
+
+watch(footerHeight, (v) => {
+	const value = parseInt(v!, 10);
+	if (footerEl.value && !Number.isNaN(value)) {
+		footerHeights.set(footerEl.value, value);
+	}
 });
 
 onMounted(() => {

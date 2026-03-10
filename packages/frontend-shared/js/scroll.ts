@@ -5,6 +5,9 @@
 
 type ScrollBehavior = 'auto' | 'smooth' | 'instant';
 
+export const headerHeights = new WeakMap<HTMLElement, number>();
+export const footerHeights = new WeakMap<HTMLElement, number>();
+
 export function getScrollContainer(el: HTMLElement | null): HTMLElement | null {
 	if (el == null || el.tagName === 'HTML') return null;
 	const overflow = window.getComputedStyle(el).getPropertyValue('overflow-y');
@@ -17,16 +20,16 @@ export function getScrollContainer(el: HTMLElement | null): HTMLElement | null {
 
 export function getStickyTop(el: HTMLElement, container: HTMLElement | null = null, top = 0) {
 	if (!el.parentElement) return top;
-	const data = el.dataset.stickyContainerHeaderHeight;
-	const newTop = data ? Number(data) + top : top;
+	const data = headerHeights.get(el) ?? 0;
+	const newTop = data + top;
 	if (el === container) return newTop;
 	return getStickyTop(el.parentElement, container, newTop);
 }
 
 export function getStickyBottom(el: HTMLElement, container: HTMLElement | null = null, bottom = 0) {
 	if (!el.parentElement) return bottom;
-	const data = el.dataset.stickyContainerFooterHeight;
-	const newBottom = data ? Number(data) + bottom : bottom;
+	const data = footerHeights.get(el) ?? 0;
+	const newBottom = data + bottom;
 	if (el === container) return newBottom;
 	return getStickyBottom(el.parentElement, container, newBottom);
 }

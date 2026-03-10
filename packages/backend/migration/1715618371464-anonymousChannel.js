@@ -10,7 +10,6 @@ export class AnonymousChannel1715618371464 {
         await queryRunner.query(`CREATE TYPE "public"."channel_anonymousstrategy_enum" AS ENUM('daily', 'weekly', 'monthly', 'yearly', 'manual')`);
         await queryRunner.query(`ALTER TABLE "channel" ADD "anonymousStrategy" "public"."channel_anonymousstrategy_enum"`);
         await queryRunner.query(`ALTER TABLE "channel" ADD "requirePublicWriteAccess" boolean NOT NULL DEFAULT false`);
-        await queryRunner.query(`ALTER TABLE "note" ADD "anonymousChannelUsername" character varying(128)`);
         await queryRunner.query(`CREATE TABLE "channel_anonymous_salt" ("id" character varying(32) NOT NULL, "channelId" character varying(32) NOT NULL, "since" character varying(32) NOT NULL, "until" character varying(32), "salt" bigint NOT NULL, CONSTRAINT "PK_b918eb2c39bc401382cf4450af3" PRIMARY KEY ("id"))`);
         await queryRunner.query(`CREATE INDEX "IDX_37988dcb4783a496681dcd4b4a" ON "channel_anonymous_salt" ("channelId") `);
         await queryRunner.query(`CREATE INDEX "IDX_b86b095617434a08bd1826489" ON "channel_anonymous_salt" ("since") `);
@@ -26,7 +25,6 @@ export class AnonymousChannel1715618371464 {
         await queryRunner.query(`DROP INDEX "IDX_b86b095617434a08bd1826489"`);
         await queryRunner.query(`DROP INDEX "IDX_37988dcb4783a496681dcd4b4a"`);
         await queryRunner.query(`DROP TABLE "channel_anonymous_salt"`);
-        await queryRunner.query(`ALTER TABLE "note" DROP COLUMN "anonymousChannelUsername"`);
         await queryRunner.query(`ALTER TABLE "channel" DROP COLUMN "requirePublicWriteAccess"`);
         await queryRunner.query(`ALTER TABLE "channel" DROP COLUMN "anonymousStrategy"`);
         await queryRunner.query(`DROP TYPE "public"."channel_anonymousstrategy_enum"`);

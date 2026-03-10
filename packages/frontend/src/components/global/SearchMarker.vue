@@ -9,7 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </div>
 </template>
 
-<script lang="ts" setup>
+<script lang="ts">
 import {
 	onActivated,
 	onDeactivated,
@@ -23,6 +23,10 @@ import {
 } from 'vue';
 import { DI } from '@/di.js';
 
+const markerIds = new Set<string>();
+</script>
+
+<script lang="ts" setup>
 const props = defineProps<{
 	markerId?: string;
 	label?: string;
@@ -43,15 +47,17 @@ const isParentOfTarget = computed(() => props.children?.includes(searchMarkerId.
 
 function checkChildren() {
 	if (isParentOfTarget.value) {
-		const el = window.document.querySelector(`[data-in-app-search-marker-id="${searchMarkerId.value}"]`);
-		highlighted.value = el == null;
+		highlighted.value = !markerIds.has(searchMarkerId.value);
 	}
 }
 
 watch([
 	searchMarkerId,
 	() => props.children,
-], () => {
+], (_newValue, _oldValue, onCleanup) => {
+	const value = searchMarkerId.value;
+	markerIds.add(value);
+	onCleanup(() => markerIds.delete(value));
 	if (props.children != null && props.children.length > 0) {
 		checkChildren();
 	}

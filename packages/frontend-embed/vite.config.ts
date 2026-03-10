@@ -33,7 +33,22 @@ const externalPackages = [
 	},
 ];
 
-const hash = (str: string, seed = 0): number => {
+const hash = (str: string): number => {
+	/**
+	 * AdGuard Filters repeatedly damages non-advertising features due to inappropriate rules.
+	 * Unfortunately, the current workaround is to reseed and periodically change the class name.
+	 *
+	 * Known Issues
+	 * --
+	 * - accidentally hiding the note component next to the ad component
+	 * - assigning `display: none` to elements designated for scroll position restoration and excluding them from the layout causes the scroll restoration functionality to malfunction
+	 * - when notes appear in a list alongside multiple other elements (such as notification panels), the other elements are mistakenly hidden (perhaps mistaken for ads?)
+	 *
+	 * These are known to cause browser crashes in the worst case.
+	 *
+	 * Please note that this service does not deliver any advertisements based on self-interest (such as exclusive contracts or affiliate programs).
+	 */
+	const seed = meta.version.replace(/[^\d]/g, '');
 	let h1 = 0xdeadbeef ^ seed,
 		h2 = 0x41c6ce57 ^ seed;
 	for (let i = 0, ch; i < str.length; i++) {
@@ -87,7 +102,31 @@ export function getConfig(): UserConfig {
 		},
 
 		plugins: [
-			pluginVue(),
+			pluginVue({
+				template: {
+					compilerOptions: {
+						nodeTransforms: [
+							...(true || process.env.NODE_ENV === 'production' ? [
+								(node) => {
+									switch (node.type) {
+										case 1 /* ELEMENT */:
+											node.props = node.props.filter(prop => {
+												switch (prop.type) {
+													case 6 /* ATTRIBUTE */:
+														return !prop.name.startsWith('data-cy-');
+													case 7 /* DIRECTIVE */:
+														return !(prop.name === 'bind' && prop.arg?.type === 4 /* SIMPLE_EXPRESSION */ && typeof prop.arg.content === 'string' && prop.arg.content.startsWith('data-cy-'));
+													default:
+														return true;
+												}
+											});
+									}
+								}
+							] : []),
+						],
+					},
+				},
+			}),
 			pluginRemoveUnrefI18n(),
 			pluginJson5(),
 		],

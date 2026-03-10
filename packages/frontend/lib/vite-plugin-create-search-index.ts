@@ -546,7 +546,7 @@ export class MarkerIdAssigner {
 
 				// markerId attribute を追加
 				const endOfStartTag = findEndOfStartTagAttributes(node);
-				s.appendRight(endOfStartTag, ` markerId="${generatedMarkerId}" data-in-app-search-marker-id="${generatedMarkerId}"`);
+				s.appendRight(endOfStartTag, ` markerId="${generatedMarkerId}"`);
 
 				nodeMarkerId = generatedMarkerId;
 			}
