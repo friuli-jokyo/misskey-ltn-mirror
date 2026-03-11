@@ -1027,7 +1027,7 @@ async function post(ev?: PointerEvent) {
 	)) {
 		const { canceled, result } = await os.actions({
 			type: 'warning',
-			text: i18n.ts.thisPostMayBeAnnoying,
+			text: i18n.ts.thisPostMayBeAnnoyingBecauseYouAreUsingEmphasizedMfm,
 			actions: [{
 				value: 'home',
 				text: i18n.ts.thisPostMayBeAnnoyingHome,
@@ -1038,6 +1038,7 @@ async function post(ev?: PointerEvent) {
 			}, {
 				value: 'ignore',
 				text: i18n.ts.thisPostMayBeAnnoyingIgnore,
+				danger: true,
 			}],
 		});
 
@@ -1045,6 +1046,31 @@ async function post(ev?: PointerEvent) {
 		if (result === 'cancel') return;
 		if (result === 'home') {
 			visibility.value = 'home';
+		}
+	}
+
+	if (localOnly.value && !targetChannel.value && !anonymouslySendToUser.value && (replyTargetNote.value && !replyTargetNote.value.localOnly || renoteTargetNote.value && !renoteTargetNote.value.localOnly)) {
+		const { canceled, result } = await os.actions({
+			type: 'warning',
+			text: i18n.ts.thisPostMayBeAnnoyingBecauseYouAreInteractingWithoutFederationToFederatedNote,
+			actions: [{
+				value: 'federate',
+				text: i18n.ts.thisPostMayBeAnnoyingFederate,
+				primary: true,
+			}, {
+				value: 'cancel',
+				text: i18n.ts.thisPostMayBeAnnoyingCancel,
+			}, {
+				value: 'ignore',
+				text: i18n.ts.thisPostMayBeAnnoyingIgnore,
+				danger: true,
+			}],
+		});
+
+		if (canceled) return;
+		if (result === 'cancel') return;
+		if (result === 'federate') {
+			localOnly.value = false;
 		}
 	}
 

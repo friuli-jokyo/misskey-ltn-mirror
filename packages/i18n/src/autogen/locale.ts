@@ -4389,6 +4389,10 @@ export interface Locale extends ILocale {
      */
     "thisPostMayBeAnnoyingHome": string;
     /**
+     * 連合して投稿
+     */
+    "thisPostMayBeAnnoyingFederate": string;
+    /**
      * やめる
      */
     "thisPostMayBeAnnoyingCancel": string;
@@ -4396,6 +4400,14 @@ export interface Locale extends ILocale {
      * このまま投稿
      */
     "thisPostMayBeAnnoyingIgnore": string;
+    /**
+     * 強調された MFM を使用しているため、この投稿は迷惑になる可能性があります。
+     */
+    "thisPostMayBeAnnoyingBecauseYouAreUsingEmphasizedMfm": string;
+    /**
+     * 連合されたノートに連合なしでインタラクションしているため、この投稿は迷惑になる可能性があります。
+     */
+    "thisPostMayBeAnnoyingBecauseYouAreInteractingWithoutFederationToFederatedNote": string;
     /**
      * リノートのスマート省略
      */

@@ -559,6 +559,10 @@ export class NoteCreateService implements OnApplicationShutdown {
 			data.localOnly = true;
 		}
 
+		if (data.localOnly && data.visibility === 'specified') {
+			throw new Error('Cannot set visibility to specified when localOnly is true');
+		}
+
 		if (data.text) {
 			if (data.text.length > DB_MAX_NOTE_TEXT_LENGTH) {
 				data.text = data.text.slice(0, DB_MAX_NOTE_TEXT_LENGTH);

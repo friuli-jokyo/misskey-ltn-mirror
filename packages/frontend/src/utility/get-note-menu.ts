@@ -633,7 +633,7 @@ export async function getRenoteMenu(props: {
 	const favoritedChannels = await favoritedChannelsCache.fetch();
 	let items = [] as MenuItem[];
 	const configuredVisibility = prefer.s.rememberNoteVisibility ? store.s.visibility : prefer.s.defaultNoteVisibility;
-	const localOnly = prefer.s.rememberNoteVisibility ? store.s.localOnly : prefer.s.defaultNoteLocalOnly;
+	let localOnly = prefer.s.rememberNoteVisibility ? store.s.localOnly : prefer.s.defaultNoteLocalOnly;
 
 	let visibility = appearNote.visibility;
 	visibility = smallerVisibility(visibility, configuredVisibility);
@@ -646,7 +646,32 @@ export async function getRenoteMenu(props: {
 			text: i18n.ts.renote,
 			icon: 'ti ti-repeat',
 			suffixIcon: prefer.s.rememberNoteVisibility ? (visibility === 'public' ? 'ti-world' : visibility === 'home' ? 'ti-home' : visibility === 'followers' ? 'ti-lock' : 'ti-mail') : undefined,
-			action: () => {
+			action: async () => {
+				if (localOnly && !appearNote.localOnly) {
+					const { canceled, result } = await os.actions({
+						type: 'warning',
+						text: i18n.ts.thisPostMayBeAnnoyingBecauseYouAreInteractingWithoutFederationToFederatedNote,
+						actions: [{
+							value: 'federate',
+							text: i18n.ts.thisPostMayBeAnnoyingFederate,
+							primary: true,
+						}, {
+							value: 'cancel',
+							text: i18n.ts.thisPostMayBeAnnoyingCancel,
+						}, {
+							value: 'ignore',
+							text: i18n.ts.thisPostMayBeAnnoyingIgnore,
+							danger: true,
+						}],
+					});
+
+					if (canceled) return;
+					if (result === 'cancel') return;
+					if (result === 'federate') {
+						localOnly = false;
+					}
+				}
+
 				renoteRipple(props.renoteButton);
 
 				if (!props.mock) {
