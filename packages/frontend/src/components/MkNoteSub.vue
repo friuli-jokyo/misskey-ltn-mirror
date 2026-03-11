@@ -60,6 +60,7 @@ import { i18n } from '@/i18n.js';
 import { $i } from '@/i.js';
 import { userPage } from '@/filters/user.js';
 import { checkWordMute } from '@/utility/check-word-mute.js';
+import { prefer } from '@/preferences.js';
 
 const props = withDefaults(defineProps<{
 	note: Misskey.entities.Note | null;

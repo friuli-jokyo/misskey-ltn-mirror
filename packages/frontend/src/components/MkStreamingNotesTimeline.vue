@@ -14,7 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	</div>
 
 	<div v-else ref="rootEl" :class="$style.rootEl">
-		<div v-if="paginator.queuedAheadItemsCount.value > 0" :class="$style.new">
+		<div :class="$style.new" :style="{ opacity: paginator.queuedAheadItemsCount.value, pointerEvents: paginator.queuedAheadItemsCount.value ? 'auto' : 'none' }">
 			<div :class="$style.newBg1"></div>
 			<div :class="$style.newBg2"></div>
 			<div :class="$style.newBg3"></div>
