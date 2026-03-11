@@ -1573,6 +1573,10 @@ export interface Locale extends ILocale {
      */
     "today": string;
     /**
+     * 指定期間
+     */
+    "specified": string;
+    /**
      * {day}日
      */
     "dayX": ParameterizedString<"day">;

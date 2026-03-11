@@ -31,6 +31,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 				>
 				</MkRadios>
 
+				<MkRadios
+					v-model="rangeScope"
+					:options="rangeScopeDef"
+				>
+				</MkRadios>
+
 				<div v-if="instance.federation !== 'none' && searchScope === 'server'" :class="$style.subOptionRoot">
 					<MkInput
 						v-model="hostInput"
@@ -91,7 +97,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					</div>
 				</div>
 
-				<MkFolder :defaultOpen="true">
+				<MkFolder v-if="rangeScope === 'specified'" :defaultOpen="true">
 					<template #label>{{ i18n.ts._poll.duration }}</template>
 					<template v-if="sinceDate || untilDate" #suffix>
 						{{ sinceDate || '...' }} - {{ untilDate || '...' }}
@@ -292,6 +298,8 @@ const searchScope = ref<'all' | 'local' | 'server' | 'user'>((() => {
 
 const targetScope = ref<'all' | 'follows' | 'mentioned' | 'specified'>('all');
 
+const rangeScope = ref<'recent' | 'today' | 'thisMonth' | 'thisYear' | 'specified'>('recent');
+
 const searchScopeDef = computed<MkRadiosOption[]>(() => {
 	const options: MkRadiosOption[] = [];
 
@@ -317,10 +325,20 @@ const targetScopeDef = computed<MkRadiosOption[]>(() => [
 	{ value: 'specified', label: i18n.ts.directNotes },
 ]);
 
+const rangeScopeDef = computed<MkRadiosOption[]>(() => [
+	{ value: 'recent', label: i18n.ts.recentPosts },
+	{ value: 'today', label: i18n.ts.today },
+	{ value: 'thisMonth', label: i18n.ts.thisMonth },
+	{ value: 'thisYear', label: i18n.ts.thisYear },
+	{ value: 'specified', label: i18n.ts.specified },
+]);
+
 type SearchRequestParams = {
 	readonly query: string;
 	readonly host?: string;
 	readonly userId?: string;
+	readonly sinceId?: string;
+	readonly untilId?: string;
 	readonly sinceDate?: number;
 	readonly untilDate?: number;
 	readonly onlyFollows?: boolean;
@@ -355,10 +373,48 @@ const searchParams = computed<SearchRequestParams | null>(() => {
 	const trimmedQuery = searchQuery.value.trim();
 	if (!trimmedQuery) return null;
 
+	let sinceId: string | undefined;
+	let untilId: string | undefined;
+	let sinceDateValue: number | undefined;
+	let untilDateValue: number | undefined;
+
+	const now = new Date();
+	switch (rangeScope.value) {
+		case 'recent': {
+			const since = now.valueOf() - 9466848e5;
+			const until = since + 0x81bf1000;
+			sinceId = since.toString(36).padStart(8, '0').slice(0, 2) + '00000000';
+			untilId = until.toString(36).padStart(8, '0').slice(0, 2) + '00000000';
+			break;
+		}
+
+		case 'today':
+			sinceDateValue = new Date(now.getFullYear(), now.getMonth(), now.getDate()).valueOf();
+			untilDateValue = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).valueOf();
+			break;
+
+		case 'thisMonth':
+			sinceDateValue = new Date(now.getFullYear(), now.getMonth(), 1).valueOf();
+			untilDateValue = new Date(now.getFullYear(), now.getMonth() + 1, 1).valueOf();
+			break;
+
+		case 'thisYear':
+			sinceDateValue = new Date(now.getFullYear(), 0, 1).valueOf();
+			untilDateValue = new Date(now.getFullYear() + 1, 0, 1).valueOf();
+			break;
+
+		case 'specified':
+			sinceDateValue = parseDateFilter(sinceDate.value);
+			untilDateValue = parseDateFilter(untilDate.value) ?? (sinceDate.value ? new Date().valueOf() : undefined);
+			break;
+	}
+
 	const derived = {
 		query: trimmedQuery,
-		sinceDate: parseDateFilter(sinceDate.value),
-		untilDate: parseDateFilter(untilDate.value) ?? (sinceDate.value ? new Date().valueOf() : undefined),
+		sinceId,
+		untilId,
+		sinceDate: sinceDateValue,
+		untilDate: untilDateValue,
 		onlyFollows: targetScope.value === 'follows',
 		onlyMentioned: targetScope.value === 'mentioned',
 		onlySpecified: targetScope.value === 'specified',
