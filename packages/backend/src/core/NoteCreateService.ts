@@ -631,6 +631,43 @@ export class NoteCreateService implements OnApplicationShutdown {
 			throw new Error('cannot send anonymously to non-public note');
 		}
 
+		if (data.localOnly && (data.reply || data.renote || mentionedUsers.length)) {
+			const relatedUserIds = new Set<MiUser['id']>();
+			if (data.reply) relatedUserIds.add(data.reply.userId);
+			if (data.renote) relatedUserIds.add(data.renote.userId);
+			for (const u of mentionedUsers) {
+				relatedUserIds.add(u.id);
+			}
+			relatedUserIds.delete(user.id);
+			if (data.reply || data.renote) {
+				const ids = `(${data.reply ? `'${data.reply.id}'` : ''}${data.reply && data.renote ? ',' : ''}${data.renote ? `'${data.renote.id}'` : ''})`;
+				if (/[^()\da-z,']/.test(ids)) {
+					throw new Error('Invalid note id');
+				}
+				const notes = await this.db.query(`WITH RECURSIVE cte AS (SELECT * FROM "note" WHERE id IN ${ids} UNION ALL SELECT n.* FROM "note" n JOIN cte p ON n.id = p."replyId" OR n.id = p."renoteId") SELECT s.id, s."userId", s."localOnly", u."federationPolicy" FROM (SELECT DISTINCT ON ("userId") * FROM cte ORDER BY "userId", "localOnly") AS s JOIN "user" u ON s."userId" = u.id ORDER BY id`);
+				for (const note of notes) {
+					relatedUserIds.delete(note.userId);
+					if (note.localOnly || note.userId === user.id) {
+						continue;
+					}
+					if (note.federationPolicy === 'strict' || note.federationPolicy === 'lax' && !data.channel && !data.anonymouslySendToUser) {
+						throw new Error('Cannot set localOnly due to federation policy violation');
+					}
+				}
+			}
+			if (relatedUserIds.size) {
+				const relatedUsers = await this.usersRepository.createQueryBuilder()
+					.select('federationPolicy')
+					.where('id IN (:...ids)', { ids: Array.from(relatedUserIds) })
+					.getMany();
+				for (const relatedUser of relatedUsers) {
+					if (relatedUser.federationPolicy === 'strict' || relatedUser.federationPolicy === 'lax' && !data.channel && !data.anonymouslySendToUser) {
+						throw new Error('Cannot set localOnly due to federation policy violation');
+					}
+				}
+			}
+		}
+
 		const note = await this.insertNote(user, data, tags, emojis, mentionedUsers);
 
 		setImmediate('post created', { signal: this.#shutdownController.signal }).then(

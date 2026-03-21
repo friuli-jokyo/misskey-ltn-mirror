@@ -240,6 +240,11 @@ export class MiUser {
 	})
 	public chatScope: 'everyone' | 'followers' | 'following' | 'mutual' | 'none';
 
+	@Column('varchar', {
+		length: 128, default: 'lax',
+	})
+	public federationPolicy: 'none' | 'lax' | 'strict';
+
 	@Index()
 	@Column('varchar', {
 		length: 128, nullable: true,

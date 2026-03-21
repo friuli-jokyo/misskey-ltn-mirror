@@ -131,6 +131,20 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</MkSelect>
 		</SearchMarker>
 
+		<SearchMarker :keywords="['federation']">
+			<MkInfo v-if="profile.federationPolicy === 'none'" warn>{{ i18n.ts.federationMayNotWorkProperly }}</MkInfo>
+			<MkSelect
+				v-model="profile.federationPolicy"
+				:items="[
+					{ label: i18n.ts.strict, value: 'strict' },
+					{ label: i18n.ts.lax, value: 'lax' },
+					{ label: i18n.ts.none, value: 'none' },
+				]"
+			>
+				<template #label><SearchLabel>{{ i18n.ts.federationPolicy }}</SearchLabel></template>
+			</MkSelect>
+		</SearchMarker>
+
 		<SearchMarker>
 			<MkFolder>
 				<template #label><SearchLabel>{{ i18n.ts.advancedSettings }}</SearchLabel></template>
@@ -207,6 +221,7 @@ const profile = reactive({
 	lang: assertVaildLang($i.lang) ? $i.lang : null,
 	isBot: $i.isBot ?? false,
 	isCat: $i.isCat ?? false,
+	federationPolicy: $i.federationPolicy,
 });
 
 watch(() => profile, () => {
@@ -264,6 +279,7 @@ function save() {
 		lang: profile.lang || null,
 		isBot: !!profile.isBot,
 		isCat: !!profile.isCat,
+		federationPolicy: profile.federationPolicy,
 	}, undefined, {
 		'0b3f9f6a-2f4d-4b1f-9fb4-49d3a2fd7191': {
 			title: i18n.ts.yourNameContainsProhibitedWords,

@@ -15,11 +15,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 	<div v-else ref="rootEl" :class="$style.rootEl">
 		<div :class="$style.new" :style="{ opacity: paginator.queuedAheadItemsCount.value, pointerEvents: paginator.queuedAheadItemsCount.value ? 'auto' : 'none' }">
-			<div :class="$style.newBg1"></div>
-			<div :class="$style.newBg2"></div>
-			<div :class="$style.newBg3"></div>
-			<div :class="$style.newBg4"></div>
-			<div :class="$style.newBg5"></div>
 			<button class="_button" :class="$style.newButton" @click="releaseQueue()"><i class="ti ti-circle-arrow-up"></i> {{ i18n.ts.newNote }}</button>
 		</div>
 		<component
@@ -32,8 +27,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 			:moveClass="$style.transition_x_move"
 			tag="div"
 		>
-			<template v-for="(note, i) in paginator.items.value">
-				<div v-if="i > 0 && isSeparatorNeeded(paginator.items.value[i -1].createdAt, note.createdAt)" :key="`0.${note.id}`" :data-scroll-anchor="note.id">
+			<div v-for="(note, i) in paginator.items.value" :key="note.id">
+				<div v-if="i > 0 && isSeparatorNeeded(paginator.items.value[i -1].createdAt, note.createdAt)" :data-scroll-anchor="note.id">
 					<div :class="$style.date">
 						<span><i class="ti ti-chevron-up"></i> {{ getSeparatorInfo(paginator.items.value[i -1].createdAt, note.createdAt)?.prevText }}</span>
 						<span style="height: 1em; width: 1px; background: var(--MI_THEME-divider);"></span>
@@ -41,14 +36,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 					</div>
 					<MkNote :class="$style.note" :note="note" :withHardMute="true"/>
 				</div>
-				<div v-else-if="note._shouldInsertAd_" :key="`1.${note.id}`" :data-scroll-anchor="note.id">
+				<div v-else-if="note._shouldInsertAd_" :data-scroll-anchor="note.id">
 					<MkNote :class="$style.note" :note="note" :withHardMute="true"/>
 					<div :class="$style.ad">
 						<MkAd :preferForms="['horizontal', 'horizontal-big']"/>
 					</div>
 				</div>
-				<MkNote v-else :key="`2.${note.id}`" :class="$style.note" :note="note" :withHardMute="true" :data-scroll-anchor="note.id"/>
-			</template>
+				<MkNote v-else :class="$style.note" :note="note" :withHardMute="true" :data-scroll-anchor="note.id"/>
+			</div>
 		</component>
 		<button v-show="paginator.canFetchOlder.value" key="_more_" v-appear="prefer.s.enableInfiniteScroll ? paginator.fetchOlder : null" :disabled="paginator.fetchingOlder.value" class="_button" :class="$style.more" @click="paginator.fetchOlder">
 			<div v-if="!paginator.fetchingOlder.value">{{ i18n.ts.loadMore }}</div>
@@ -483,55 +478,6 @@ defineExpose({
 	height: 0;
 	box-sizing: border-box;
 	transform: translateY(-24px);
-}
-
-/* 疑似progressive blur */
-.newBg1,
-.newBg2,
-.newBg3,
-.newBg4,
-.newBg5 {
-	position: absolute;
-	inset: 0;
-	height: 28px;
-	pointer-events: none;
-	-webkit-backdrop-filter: blur(var(--blur));
-	backdrop-filter: blur(var(--blur));
-}
-
-.newBg1 {
-	--blur: .5px;
-	--bg-opacity: .03125;
-	-webkit-mask-image: linear-gradient(to top, black 0, transparent 4px);
-	mask-image: linear-gradient(to top, black 0, transparent 4px);
-}
-
-.newBg2 {
-	--blur: 1.5px;
-	--bg-opacity: 0.0625;
-	-webkit-mask-image: linear-gradient(to top, transparent 0, black 4px, transparent 8px);
-	mask-image: linear-gradient(to top, transparent 0, black 4px, transparent 8px);
-}
-
-.newBg3 {
-	--blur: 4px;
-	--bg-opacity: 0.125;
-	-webkit-mask-image: linear-gradient(to top, transparent 4px, black 8px, transparent 16px);
-	mask-image: linear-gradient(to top, transparent 4px, black 8px, transparent 16px);
-}
-
-.newBg4 {
-	--blur: 8px;
-	--bg-opacity: 0.25;
-	-webkit-mask-image: linear-gradient(to top, transparent 8px, black 16px, transparent 28px);
-	mask-image: linear-gradient(to top, transparent 8px, black 16px, transparent 28px);
-}
-
-.newBg5 {
-	--blur: 12px;
-	--bg-opacity: 0.5;
-	-webkit-mask-image: linear-gradient(to top, transparent 16px, black 28px);
-	mask-image: linear-gradient(to top, transparent 16px, black 28px);
 }
 
 .newButton {

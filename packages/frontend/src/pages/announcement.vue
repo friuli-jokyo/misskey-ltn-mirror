@@ -143,6 +143,8 @@ definePage(() => ({
 		width: calc(100% + 32px);
 		margin: -104px -16px;
 		mask-image: linear-gradient(to top, black 0, transparent 100%);
+		pointer-events: none;
+		user-select: none;
 	}
 }
 

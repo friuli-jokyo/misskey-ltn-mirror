@@ -869,6 +869,14 @@ export interface Locale extends ILocale {
      */
     "federation": string;
     /**
+     * 連合ポリシー
+     */
+    "federationPolicy": string;
+    /**
+     * 現在の設定では連合機能が正常に動作しない可能性があります。
+     */
+    "federationMayNotWorkProperly": string;
+    /**
      * サーバー
      */
     "instances": string;
@@ -2444,6 +2452,14 @@ export interface Locale extends ILocale {
      * なし
      */
     "none": string;
+    /**
+     * 通常
+     */
+    "lax": string;
+    /**
+     * 厳格
+     */
+    "strict": string;
     /**
      * ページで表示
      */

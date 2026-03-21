@@ -372,6 +372,11 @@ export const packedUserDetailedNotMeOnlySchema = {
 			nullable: false, optional: false,
 			enum: ['everyone', 'following', 'followers', 'mutual', 'none'],
 		},
+		federationPolicy: {
+			type: 'string',
+			nullable: false, optional: false,
+			enum: ['none', 'lax', 'strict'],
+		},
 		canChat: {
 			type: 'boolean',
 			nullable: false, optional: false,
