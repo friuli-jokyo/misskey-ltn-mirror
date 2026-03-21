@@ -140,8 +140,9 @@ definePage(() => ({
 .content {
 	> img {
 		display: block;
-		max-height: 300px;
-		max-width: 100%;
+		width: calc(100% + 32px);
+		margin: -104px -16px;
+		mask-image: linear-gradient(to top, black 0, transparent 100%);
 	}
 }
 

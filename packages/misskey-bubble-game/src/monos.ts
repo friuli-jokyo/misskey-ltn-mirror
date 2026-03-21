@@ -954,7 +954,7 @@ export const SWEETS_MONOS: Mono[] = [{
 const _10SECARISA_BASE_SIZE = 32;
 
 export const _10SECARISA_MONOS: Mono[] = [{
-	id: '1904602c',
+	id: '1904602c-418f-42d7-ac9e-69ee996044ea',
 	level: 1,
 	sizeX: _10SECARISA_BASE_SIZE * 1.4,
 	sizeY: _10SECARISA_BASE_SIZE * 1.4,
@@ -962,7 +962,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 1,
 	dropCandidate: true,
 }, {
-	id: '2f051890',
+	id: '2f051890-0fa4-470b-b8f7-3782414d7016',
 	level: 2,
 	sizeX: _10SECARISA_BASE_SIZE * 1.6,
 	sizeY: _10SECARISA_BASE_SIZE * 1.6,
@@ -970,7 +970,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 2,
 	dropCandidate: true,
 }, {
-	id: '3e15e087',
+	id: '3e15e087-25c9-4ae8-9e0b-d50269f9c91e',
 	level: 3,
 	sizeX: _10SECARISA_BASE_SIZE * 1.8,
 	sizeY: _10SECARISA_BASE_SIZE * 1.8,
@@ -978,7 +978,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 4,
 	dropCandidate: true,
 }, {
-	id: '4ba4a70f',
+	id: '4ba4a70f-0a87-48b2-8ff7-10bd6248acca',
 	level: 4,
 	sizeX: _10SECARISA_BASE_SIZE * 2.0,
 	sizeY: _10SECARISA_BASE_SIZE * 2.0,
@@ -986,7 +986,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 8,
 	dropCandidate: true,
 }, {
-	id: '5ec29f34',
+	id: '5ec29f34-d1f2-4d47-b333-267b6f25261e',
 	level: 5,
 	sizeX: _10SECARISA_BASE_SIZE * 2.2,
 	sizeY: _10SECARISA_BASE_SIZE * 2.2,
@@ -994,7 +994,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 16,
 	dropCandidate: true,
 }, {
-	id: '6e0861f6',
+	id: '6e0861f6-e971-4066-bcc2-930c196dd307',
 	level: 6,
 	sizeX: _10SECARISA_BASE_SIZE * 2.4,
 	sizeY: _10SECARISA_BASE_SIZE * 2.4,
@@ -1002,7 +1002,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 32,
 	dropCandidate: false,
 }, {
-	id: '7ad2c550',
+	id: '7ad2c550-f634-482a-948a-83dfadcffdc3',
 	level: 7,
 	sizeX: _10SECARISA_BASE_SIZE * 2.6,
 	sizeY: _10SECARISA_BASE_SIZE * 2.6,
@@ -1010,7 +1010,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 64,
 	dropCandidate: false,
 }, {
-	id: '872441e1',
+	id: '872441e1-fefe-43d2-9693-d8d7bf8fb685',
 	level: 8,
 	sizeX: _10SECARISA_BASE_SIZE * 2.8,
 	sizeY: _10SECARISA_BASE_SIZE * 2.8,
@@ -1018,7 +1018,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 128,
 	dropCandidate: false,
 }, {
-	id: '9428fd5f',
+	id: '9428fd5f-a97b-42c9-84bc-5b589decab29',
 	level: 9,
 	sizeX: _10SECARISA_BASE_SIZE * 3.0,
 	sizeY: _10SECARISA_BASE_SIZE * 3.0,
@@ -1026,7 +1026,7 @@ export const _10SECARISA_MONOS: Mono[] = [{
 	score: 256,
 	dropCandidate: false,
 }, {
-	id: 'ac23eaf4',
+	id: 'ac23eaf4-ff7a-4848-9071-4133b963c16a',
 	level: 10,
 	sizeX: _10SECARISA_BASE_SIZE * 4.0,
 	sizeY: _10SECARISA_BASE_SIZE * 4.0,

@@ -862,6 +862,8 @@ export class NoteCreateService implements OnApplicationShutdown {
 		if (!noteObj.user) throw new Error('noteObj.user is undefined');
 		const nm = new NotificationManager(this.mutingsRepository, this.notificationService, noteObj.user, note);
 
+		await this.createMentionedEvents(mentionedUsers, note, nm);
+
 		// If has in reply to note
 		if (data.reply) {
 				// 通知
