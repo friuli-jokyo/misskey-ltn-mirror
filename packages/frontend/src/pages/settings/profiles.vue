@@ -12,7 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<MkFolder v-for="backup in backups" :key="backup.name">
 			<template #label>{{ backup.name }}</template>
 			<div class="_gaps_s">
-				<MkButton primary @click="load(backup)">{{ i18n.ts.load }}</MkButton>
+				<MkButton primary @click="load(backup)">{{ i18n.ts.apply }}</MkButton>
 				<MkButton danger @click="del(backup)">{{ i18n.ts.delete }}</MkButton>
 			</div>
 		</MkFolder>
