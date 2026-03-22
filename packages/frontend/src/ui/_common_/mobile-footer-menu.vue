@@ -26,6 +26,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</button>
 
+	<button :class="$style.item" class="_button" @click="mainRouter.push('/chat')">
+		<div :class="$style.itemInner">
+			<i :class="$style.itemIcon" class="ti ti-message-2"></i><span v-if="$i?.hasUnreadChatMessages" :class="$style.itemIndicator" class="_blink"><i class="_indicatorCircle"></i></span>
+		</div>
+	</button>
+
 	<button :class="$style.item" class="_button" @click="widgetsShowing = true">
 		<div :class="$style.itemInner">
 			<i :class="$style.itemIcon" class="ti ti-apps"></i>
@@ -56,7 +62,7 @@ const rootEl = useTemplateRef('rootEl');
 
 const menuIndicated = computed(() => {
 	for (const def in navbarItemDef) {
-		if (def === 'notifications') continue; // 通知は下にボタンとして表示されてるから
+		if (def === 'notifications' || def === 'chat') continue; // 通知は下にボタンとして表示されてるから
 		const indicatedRef = navbarItemDef[def].indicated;
 		if (indicatedRef && (typeof indicatedRef === 'boolean' ? indicatedRef : indicatedRef.value)) return true;
 	}
@@ -85,7 +91,7 @@ watch(rootEl, () => {
 	z-index: 1;
 	padding-bottom: env(safe-area-inset-bottom, 0px);
 	display: grid;
-	grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+	grid-template-columns: repeat(6, 1fr);
 	width: 100%;
 	box-sizing: border-box;
 	background: var(--MI_THEME-navBg);

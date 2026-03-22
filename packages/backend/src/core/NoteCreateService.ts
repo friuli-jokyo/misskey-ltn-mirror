@@ -657,7 +657,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 			}
 			if (relatedUserIds.size) {
 				const relatedUsers = await this.usersRepository.createQueryBuilder()
-					.select('federationPolicy')
+					.select('"federationPolicy"')
 					.where('id IN (:...ids)', { ids: Array.from(relatedUserIds) })
 					.getMany();
 				for (const relatedUser of relatedUsers) {
