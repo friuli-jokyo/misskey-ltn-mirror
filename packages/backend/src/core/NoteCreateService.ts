@@ -656,10 +656,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 				}
 			}
 			if (relatedUserIds.size) {
-				const relatedUsers = await this.usersRepository.createQueryBuilder()
-					.select('"federationPolicy"')
-					.where('id IN (:...ids)', { ids: Array.from(relatedUserIds) })
-					.getMany();
+				const relatedUsers = (mentionedUsers as MiUser[]).filter(u => relatedUserIds.has(u.id));
 				for (const relatedUser of relatedUsers) {
 					if (relatedUser.federationPolicy === 'strict' || relatedUser.federationPolicy === 'lax' && !data.channel && !data.anonymouslySendToUser) {
 						throw new Error('Cannot set localOnly due to federation policy violation');

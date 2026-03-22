@@ -477,7 +477,7 @@ defineExpose({
 	width: 100%;
 	height: 0;
 	box-sizing: border-box;
-	transform: translateY(-24px);
+	contain: size;
 }
 
 .newButton {
@@ -492,7 +492,7 @@ defineExpose({
 	font-size: 12px;
 	line-height: 16px;
 	gap: 4px;
-	transform: translateY(10px);
+	transform: translateY(-14px);
 
 	&:hover {
 		background: hsl(from var(--MI_THEME-accent) h s calc(l + 5));
