@@ -11,9 +11,9 @@
 		<div v-else :class="$style.name">{{ nameSuffix ?? i18n.ts.nothing }}</div>
 		<template v-if="events[0]">
 			<div v-if="events[0].schedule.beginAt && events[0].schedule.endAt" :class="$style.progress"><span :class="$style.pad">{{ progress ? '0'.repeat(7 - progress.length) : '---.---' }}</span>{{ progress }}<span :class="$style.unit">%</span></div>
-			<div v-if="events[0].schedule.beginAt" :class="$style.time"><i class="ti ti-arrow-bar-right"></i><MkTime :time="events[0].schedule.beginAt" mode="absolute"/></div>
-			<div v-if="events[0].schedule.boostBeginAt" :class="$style.time"><i class="ti ti-arrows-right"></i><MkTime :time="events[0].schedule.boostBeginAt" mode="absolute"/></div>
-			<div v-if="events[0].schedule.endAt" :class="$style.time"><i class="ti ti-arrow-bar-to-right"></i><MkTime :time="events[0].schedule.endAt" mode="absolute"/></div>
+			<div v-if="events[0].schedule.beginAt" :class="$style.time"><i class="ti ti-arrow-bar-right"></i><MkTime :time="events[0].schedule.beginAt" mode="absolute" showWeekday/></div>
+			<div v-if="events[0].schedule.boostBeginAt" :class="$style.time"><i class="ti ti-arrows-right"></i><MkTime :time="events[0].schedule.boostBeginAt" mode="absolute" showWeekday/></div>
+			<div v-if="events[0].schedule.endAt" :class="$style.time"><i class="ti ti-arrow-bar-to-right"></i><MkTime :time="events[0].schedule.endAt" mode="absolute" showWeekday/></div>
 			<div v-if="events[0].schedule.endAt" :class="$style.remaining">({{ remaining }})</div>
 		</template>
 		<div :class="$style.credit">Powered by matsurihi.me</div>

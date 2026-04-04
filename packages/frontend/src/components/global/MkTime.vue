@@ -16,7 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 import isChromatic from 'chromatic/isChromatic';
 import { computed } from 'vue';
 import { i18n } from '@/i18n.js';
-import { dateTimeFormat } from '@@/js/intl-const.js';
+import { dateTimeFormat, dateTimeWithWeekdayFormat } from '@@/js/intl-const.js';
 import { useLowresTime } from '@/composables/use-lowres-time.js';
 
 const props = withDefaults(defineProps<{
@@ -24,9 +24,11 @@ const props = withDefaults(defineProps<{
 	origin?: Date | null;
 	mode?: 'relative' | 'absolute' | 'detail';
 	colored?: boolean;
+	showWeekday?: boolean;
 }>(), {
 	origin: isChromatic() ? () => new Date('2023-04-01T00:00:00Z') : null,
 	mode: 'relative',
+	showWeekday: false,
 });
 
 function getDateSafe(n: Date | string | number) {
@@ -45,7 +47,9 @@ function getDateSafe(n: Date | string | number) {
 // eslint-disable-next-line vue/no-setup-props-reactivity-loss
 const _time = props.time == null ? NaN : getDateSafe(props.time).getTime();
 const invalid = Number.isNaN(_time);
-const absolute = !invalid ? dateTimeFormat.format(_time) : i18n.ts._ago.invalid;
+const absolute = !invalid
+	? (props.showWeekday ? dateTimeWithWeekdayFormat : dateTimeFormat).format(_time)
+	: i18n.ts._ago.invalid;
 
 const actualNow = useLowresTime();
 const now = computed(() => (props.origin ? props.origin.getTime() : actualNow.value));

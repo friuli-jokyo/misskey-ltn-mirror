@@ -34,6 +34,34 @@ try {
 }
 export const dateTimeFormat = _dateTimeFormat;
 
+let _dateTimeWithWeekdayFormat: Intl.DateTimeFormat;
+try {
+	_dateTimeWithWeekdayFormat = new Intl.DateTimeFormat(versatileLang, {
+		weekday: 'short',
+		year: 'numeric',
+		month: 'numeric',
+		day: 'numeric',
+		hour: 'numeric',
+		minute: 'numeric',
+		second: 'numeric',
+	});
+} catch (err) {
+	console.warn(err);
+	if (_DEV_) console.log('[Intl] Fallback to en-US');
+
+	// Fallback to en-US
+	_dateTimeWithWeekdayFormat = new Intl.DateTimeFormat('en-US', {
+		weekday: 'short',
+		year: 'numeric',
+		month: 'numeric',
+		day: 'numeric',
+		hour: 'numeric',
+		minute: 'numeric',
+		second: 'numeric',
+	});
+}
+export const dateTimeWithWeekdayFormat = _dateTimeWithWeekdayFormat;
+
 export const timeZone = dateTimeFormat.resolvedOptions().timeZone;
 
 export const hemisphere = /^(australia|pacific|antarctica|indian)\//i.test(timeZone) ? 'S' : 'N';
