@@ -14,6 +14,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 					</SearchMarker>
 				</div>
 			</div>
+			<SearchMarker :keywords="['pinned', 'gallery', 'post']">
+				<MkButton :disabled="!hasPinnedGalleryPost" primary rounded :class="$style.galleryPostRemove" @click="removePinnedGalleryPost"><SearchLabel>{{ i18n.ts.unpin }} ({{ i18n.ts.gallery }})</SearchLabel></MkButton>
+			</SearchMarker>
 			<div :class="$style.avatarContainer">
 				<MkAvatar :class="$style.avatar" :user="$i" forceShowDecoration @click="changeAvatar"/>
 				<div class="_buttonsCenter">
@@ -29,10 +32,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkInput v-model="profile.name" :max="30" manualSave :mfmAutocomplete="['emoji']">
 				<template #label><SearchLabel>{{ i18n.ts._profile.name }}</SearchLabel></template>
 			</MkInput>
-		</SearchMarker>
-
-		<SearchMarker :keywords="['pinned', 'gallery', 'post']">
-			<MkButton :disabled="!hasPinnedGalleryPost" primary rounded :class="$style.galleryPostRemove" @click="removePinnedGalleryPost"><SearchLabel>{{ i18n.ts.unpin }} ({{ i18n.ts.gallery }})</SearchLabel></MkButton>
 		</SearchMarker>
 
 		<SearchMarker :keywords="['description', 'bio']">
