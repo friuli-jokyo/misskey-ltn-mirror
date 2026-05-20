@@ -48,7 +48,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { computed, ref, useTemplateRef, watch } from 'vue';
-import { supported } from '@github/webauthn-json/browser-ponyfill';
+import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { $i } from '@/i.js';
 import { instance } from '@/instance.js';
 import * as os from '@/os.js';
@@ -66,7 +66,7 @@ const menuIndicated = computed(() => {
 		const indicatedRef = navbarItemDef[def].indicated;
 		if (indicatedRef && (typeof indicatedRef === 'boolean' ? indicatedRef : indicatedRef.value)) return true;
 	}
-	if ($i && (!$i.securityKeys && supported() || instance.enableEmail && !$i.emailVerified || !$i.twoFactorEnabled)) return true;
+	if ($i && (!$i.securityKeys && browserSupportsWebAuthn() || instance.enableEmail && !$i.emailVerified || !$i.twoFactorEnabled)) return true;
 	return false;
 });
 

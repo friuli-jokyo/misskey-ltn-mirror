@@ -15,8 +15,6 @@ import type { INestApplicationContext } from '@nestjs/common';
 import Logger from '@/logger.js';
 import { ServerService } from '@/server/ServerService.js';
 import { envOption } from '../env.js';
-import { masterMain } from './master.js';
-import { workerMain } from './worker.js';
 import { readyRef } from './ready.js';
 
 import 'reflect-metadata';
@@ -75,6 +73,7 @@ let jobQueue: INestApplicationContext | undefined;
 if (!envOption.disableClustering) {
 	if (cluster.isPrimary) {
 		logger.info(`Start main process... pid: ${process.pid}`);
+		const { masterMain } = await import('./master.js');
 		const apps = await masterMain();
 		if (apps.server) {
 			server = apps.server;
@@ -85,6 +84,7 @@ if (!envOption.disableClustering) {
 		ev.mount();
 	} else if (cluster.isWorker) {
 		logger.info(`Start worker process... pid: ${process.pid}`);
+		const { workerMain } = await import('./worker.js');
 		const apps = await workerMain();
 		if (apps.server) {
 			server = apps.server;
@@ -98,6 +98,7 @@ if (!envOption.disableClustering) {
 } else {
 	// 非clusterの場合はMasterのみが起動するため、Workerの処理は行わない(cluster.isWorker === trueの状態でこのブロックに来ることはない)
 	logger.info(`Start main process... pid: ${process.pid}`);
+	const { masterMain } = await import('./master.js');
 	const apps = await masterMain();
 	if (apps.server) {
 		server = apps.server;

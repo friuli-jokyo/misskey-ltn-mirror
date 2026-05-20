@@ -4473,6 +4473,10 @@ export interface Locale extends ILocale {
      */
     "disableFederationOk": string;
     /**
+     * 連合なし機能は将来的に廃止される予定です。連合なし機能で作成されたノートは将来的に一部機能がご利用いただけなくなる場合があります。
+     */
+    "disableFederationDeprecationWarning": string;
+    /**
      * 現在このサーバーは招待制です。招待コードをお持ちの方のみ登録できます。
      */
     "invitationRequiredToRegister": string;
@@ -5016,6 +5020,10 @@ export interface Locale extends ILocale {
      * 投稿の通知を解除
      */
     "unnotifyNotes": string;
+    /**
+     * 投稿通知を設定したユーザー
+     */
+    "notifyUsers": string;
     /**
      * 認証
      */
@@ -5783,6 +5791,18 @@ export interface Locale extends ILocale {
      * 設定項目はありません
      */
     "nothingToConfigure": string;
+    /**
+     * リノート先のチャンネルを見る
+     */
+    "viewRenotedChannel": string;
+    /**
+     * テーマのプレビュー中
+     */
+    "previewingTheme": string;
+    /**
+     * 元に戻す
+     */
+    "previewingThemeRestore": string;
     "_imageEditing": {
         "_vars": {
             /**
@@ -8329,6 +8349,10 @@ export interface Locale extends ILocale {
              * 翻訳機能の利用
              */
             "canUseTranslator": string;
+            /**
+             * チャンネルの作成
+             */
+            "canCreateChannel": string;
             /**
              * アイコンデコレーションの最大取付個数
              */

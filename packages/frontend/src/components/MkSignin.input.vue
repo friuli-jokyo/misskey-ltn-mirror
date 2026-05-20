@@ -59,8 +59,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
 import { toUnicode } from 'punycode.js';
-import { supported as webAuthnSupported, get as webAuthnRequest, parseRequestOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
-import type { AuthenticationPublicKeyCredential } from '@github/webauthn-json/browser-ponyfill';
+import { browserSupportsWebAuthn, startAuthentication } from '@simplewebauthn/browser';
+import type { AuthenticationResponseJSON } from '@simplewebauthn/browser';
 
 import { query, extractDomain } from '@@/js/url.js';
 import { host as configHost } from '@@/js/config.js';
@@ -89,7 +89,7 @@ const emit = defineEmits<{
 	(ev: 'usernameSubmitted', v: string): void;
 	(ev: 'passwordProvided', v: string): void;
 	(ev: 'passkeyClick', v: PointerEvent): void;
-	(ev: 'done', v: { context: string, credential: AuthenticationPublicKeyCredential }): void;
+	(ev: 'done', v: { context: string, credential: AuthenticationResponseJSON }): void;
 }>();
 
 const host = toUnicode(configHost);
@@ -98,20 +98,13 @@ const username = ref(props.initialUsername ?? '');
 const abortController = new AbortController();
 
 onMounted(() => {
-	if (!props.useConditionalMediation || !webAuthnSupported()) return;
+	if (!props.useConditionalMediation || !browserSupportsWebAuthn()) return;
 
 	misskeyApi('signin-with-passkey', {}, undefined, abortController.signal)
 		.then((response) => {
 			if (abortController.signal.aborted) return;
 
-			const options = parseRequestOptionsFromJSON({
-				mediation: 'conditional',
-				// @ts-expect-error TODO: misskey-js由来の型（@simplewebauthn/types）とフロントエンド由来の型（@github/webauthn-json）が合わない
-				publicKey: response.option,
-				abortSignal: abortController.signal,
-			});
-
-			webAuthnRequest(options)
+			startAuthentication({ optionsJSON: response.option, useBrowserAutofill: true })
 				.then(credential => {
 					emit('done', {
 						context: response.context,

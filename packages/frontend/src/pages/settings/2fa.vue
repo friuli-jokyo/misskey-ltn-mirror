@@ -75,8 +75,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { defineAsyncComponent, computed, onMounted } from 'vue';
-import { supported as webAuthnSupported, create as webAuthnCreate, parseCreationOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
+import { computed, onMounted } from 'vue';
+import { browserSupportsWebAuthn as webAuthnSupported, startRegistration } from '@simplewebauthn/browser';
 import * as Misskey from 'misskey-js';
 import MkButton from '@/components/MkButton.vue';
 import MkInfo from '@/components/MkInfo.vue';
@@ -201,12 +201,9 @@ async function addSecurityKey() {
 		const auth = await os.authenticateDialog();
 		if (auth.canceled) return;
 
-		const registrationOptions = parseCreationOptionsFromJSON({
-			// @ts-expect-error misskey-js側に型がない
-			publicKey: await os.apiWithDialog('i/2fa/register-key', {
-				password: auth.result.password,
-				token: auth.result.token,
-			}),
+		const registrationOptions = await os.apiWithDialog('i/2fa/register-key', {
+			password: auth.result.password,
+			token: auth.result.token,
 		});
 
 		const name = await os.inputText({
@@ -220,7 +217,7 @@ async function addSecurityKey() {
 		if (name.canceled) return;
 
 		const credential = await os.promiseDialog(
-			webAuthnCreate(registrationOptions).then(created => {
+			startRegistration({ optionsJSON: registrationOptions }).then(created => {
 				if (!created) throw new Error(i18n.ts.somethingHappened);
 				return created;
 			}),
@@ -241,8 +238,7 @@ async function addSecurityKey() {
 			password: auth2.result.password,
 			token: auth2.result.token,
 			name: keyName,
-			// @ts-expect-error misskey-js側に型がない
-			credential: credential.toJSON(),
+			credential: credential,
 		});
 	} catch (error) {
 		os.alert({

@@ -23,6 +23,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 			<MkButton type="submit" large primary rounded style="margin: 0 auto;">{{ i18n.ts.continue }} <i class="ti ti-arrow-right"></i></MkButton>
 		</form>
+
+		<MkButton v-if="hasPasskey" transparent rounded style="margin: 0 auto;" @click="emit('usePasskey')">{{ i18n.ts.useSecurityKey }}</MkButton>
 	</div>
 </div>
 </template>
@@ -35,8 +37,13 @@ import { i18n } from '@/i18n.js';
 import MkButton from '@/components/MkButton.vue';
 import MkInput from '@/components/MkInput.vue';
 
+const props = defineProps<{
+	hasPasskey?: boolean;
+}>();
+
 const emit = defineEmits<{
 	(ev: 'totpSubmitted', token: string): void;
+	(ev: 'usePasskey'): void;
 }>();
 
 const token = ref('');

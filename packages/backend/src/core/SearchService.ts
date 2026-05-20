@@ -18,8 +18,8 @@ import { CacheService } from '@/core/CacheService.js';
 import { QueryService } from '@/core/QueryService.js';
 import { IdService } from '@/core/IdService.js';
 import { LoggerService } from '@/core/LoggerService.js';
+import type { Index, Meilisearch } from 'meilisearch';
 import postgresqlParser from '../../node_modules/node-sql-parser/build/postgresql.js';
-import type { Index, MeiliSearch } from 'meilisearch';
 
 type K = string;
 type V = string | number | boolean;
@@ -123,7 +123,7 @@ export class SearchService {
 		private redisClient: Redis.Redis,
 
 		@Inject(DI.meilisearch)
-		private meilisearch: MeiliSearch | null,
+		private meilisearch: Meilisearch | null,
 
 		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
@@ -276,7 +276,7 @@ export class SearchService {
 					return this.searchNoteByLike(q, me, opts, pagination);
 				}
 
-				return this.searchNoteByMeiliSearch(q, me, opts, pagination);
+				return this.searchNoteByMeilisearch(q, me, opts, pagination);
 			}
 			default: {
 				const _: never = this.provider;
@@ -567,14 +567,14 @@ export class SearchService {
 	}
 
 	@bindThis
-	private async searchNoteByMeiliSearch(
+	private async searchNoteByMeilisearch(
 		q: string,
 		me: MiUser | null,
 		opts: SearchOpts,
 		pagination: SearchPagination,
 	): Promise<MiNote[]> {
 		if (!this.meilisearch || !this.meilisearchNoteIndex) {
-			throw new Error('MeiliSearch is not available');
+			throw new Error('Meilisearch is not available');
 		}
 
 		const filter: Q = {

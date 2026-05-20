@@ -28,7 +28,7 @@ import { LoggerService } from '@/core/LoggerService.js';
 import { FastifyReplyError } from '@/misc/fastify-reply-error.js';
 import { RateLimiterService } from './RateLimiterService.js';
 import { SigninService } from './SigninService.js';
-import type { AuthenticationResponseJSON } from '@simplewebauthn/types';
+import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 @Injectable()
@@ -300,10 +300,12 @@ export class SigninApiService {
 					id: '932c904e-9460-45b7-9ce6-7ed33be7eb2c',
 				});
 			} else {
+				const authRequest = securityKeysAvailable ? await this.webAuthnService.initiateAuthentication(user.id, 'discouraged') : undefined;
 				reply.code(200);
 				return {
 					finished: false,
 					next: 'totp',
+					authRequest,
 				} satisfies Misskey.entities.SigninFlowResponse;
 			}
 		}

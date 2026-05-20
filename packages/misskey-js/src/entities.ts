@@ -10,7 +10,12 @@ import {
 	User,
 	UserDetailedNotMe,
 } from './autogen/models.js';
-import type { AuthenticationResponseJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/types';
+import type {
+	AuthenticationResponseJSON,
+	RegistrationResponseJSON,
+	PublicKeyCredentialCreationOptionsJSON,
+	PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/browser';
 
 export * from './autogen/entities.js';
 export * from './autogen/models.js';
@@ -306,7 +311,11 @@ export type SigninFlowResponse = {
 	publicKey?: PublicKeyCredentialCreationOptionsJSON;
 } | {
 	finished: false;
-	next: 'captcha' | 'password' | 'totp';
+	next: 'captcha' | 'password';
+} | {
+	finished: false;
+	next: 'totp';
+	authRequest?: PublicKeyCredentialRequestOptionsJSON;
 } | {
 	finished: false;
 	next: 'passkey';
@@ -330,6 +339,21 @@ export type SigninWithPasskeyInitResponse = {
 
 export type SigninWithPasskeyResponse = {
 	signinResponse: SigninFlowResponse & { finished: true };
+} | {
+	signinResponse: {
+		finished: false;
+		next: 'password';
+		user: UserDetailedNotMe;
+	};
+};
+
+export type I2faRegisterKeyResponse = PublicKeyCredentialCreationOptionsJSON;
+
+export type I2faKeyDoneRequest = {
+	password: string;
+	token?: string | null;
+	name: string;
+	credential: RegistrationResponseJSON;
 };
 
 type Values<T extends Record<PropertyKey, unknown>> = T[keyof T];

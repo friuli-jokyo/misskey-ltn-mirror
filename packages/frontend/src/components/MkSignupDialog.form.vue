@@ -62,7 +62,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<span v-if="passwordRetypeState == 'not-match'" style="color: var(--MI_THEME-error)"><i class="ti ti-alert-triangle ti-fw"></i> {{ i18n.ts.passwordNotMatched }}</span>
 				</template>
 			</MkInput>
-			<MkInput v-if="!instance.emailRequiredForSignup && supported()" v-model="securityKeyName">
+			<MkInput v-if="!instance.emailRequiredForSignup && browserSupportsWebAuthn()" v-model="securityKeyName">
 				<template #label>{{ i18n.ts._2fa.securityKeyName }}</template>
 				<template #prefix><i class="ti ti-password-fingerprint"></i></template>
 				<template #caption>
@@ -87,7 +87,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { create, parseCreationOptionsFromJSON, supported } from '@github/webauthn-json/browser-ponyfill';
+import { browserSupportsWebAuthn, startRegistration } from '@simplewebauthn/browser';
 import { ref, computed, onMounted } from 'vue';
 import { toUnicode } from 'punycode.js';
 import * as Misskey from 'misskey-js';
@@ -142,7 +142,7 @@ const usernameAbortController = ref<null | AbortController>(null);
 const emailAbortController = ref<null | AbortController>(null);
 
 onMounted(() => {
-	if (!instance.emailRequiredForSignup && supported()) {
+	if (!instance.emailRequiredForSignup && browserSupportsWebAuthn()) {
 		nameKey().then(name => {
 			securityKeyName.value = name || 'My First Device';
 		});
@@ -312,22 +312,18 @@ async function onSubmit(): Promise<void> {
 
 			emit('signup', resJson);
 
-			if (supported() && securityKeyName.value) {
+			if (browserSupportsWebAuthn() && securityKeyName.value) {
 				try {
 					const publicKey = await misskeyApi('i/2fa/register-key', {
 						password: password.value,
 					}, resJson.token);
 
-					const registration = await create(parseCreationOptionsFromJSON({
-						// @ts-expect-error -- ...
-						publicKey,
-					}));
+					const registration = await startRegistration({ optionsJSON: publicKey });
 
 					await misskeyApi('i/2fa/key-done', {
 						password: password.value,
 						name: securityKeyName.value,
-						// @ts-expect-error -- ...
-						credential: registration.toJSON(),
+						credential: registration,
 					}, resJson.token);
 				} catch (err) {
 					console.error(err);

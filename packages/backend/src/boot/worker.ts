@@ -7,7 +7,7 @@ import cluster from 'node:cluster';
 import { envOption } from '@/env.js';
 import { loadConfig } from '@/config.js';
 import { QueueModule } from '@/core/QueueModule.js';
-import { jobQueue, server } from './common.js';
+import { initExtraThreadPool, jobQueue, server } from './common.js';
 import type { INestApplicationContext } from '@nestjs/common';
 
 /**
@@ -15,6 +15,8 @@ import type { INestApplicationContext } from '@nestjs/common';
  */
 export async function workerMain() {
 	const config = loadConfig();
+
+	initExtraThreadPool(config);
 
 	if (config.sentryForBackend) {
 		const Sentry = await import('@sentry/node');

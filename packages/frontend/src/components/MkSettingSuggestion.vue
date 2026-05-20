@@ -13,7 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { supported as webAuthnSupported } from '@github/webauthn-json/browser-ponyfill';
+import { browserSupportsWebAuthn as webAuthnSupported } from '@simplewebauthn/browser';
 import { ref } from 'vue';
 import { $i } from '@/i.js';
 import MkInfo from '@/components/MkInfo.vue';

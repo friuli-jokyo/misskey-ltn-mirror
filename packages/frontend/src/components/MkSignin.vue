@@ -46,8 +46,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<XTotp
 			v-else-if="page === 'totp'"
 			key="totp"
+			:hasPasskey="totpPageAuthRequest != null"
 
 			@totpSubmitted="onTotpSubmitted"
+			@usePasskey="onSwitchToPasskey"
 		/>
 
 		<!-- 4. パスキー -->
@@ -71,8 +73,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef } from 'vue';
 import * as Misskey from 'misskey-js';
-import { create as webAuthnCreate, get as webAuthnRequest, supported as webAuthnSupported, parseRequestOptionsFromJSON } from '@github/webauthn-json/browser-ponyfill';
-import type { AuthenticationPublicKeyCredential } from '@github/webauthn-json/browser-ponyfill';
+import { browserSupportsWebAuthn, startAuthentication, startRegistration, browserSupportsWebAuthnAutofill } from '@simplewebauthn/browser';
+import type { AuthenticationResponseJSON, RegistrationResponseJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
 import type { OpenOnRemoteOptions } from '@/utility/please-login.js';
 import type { PwResponse } from '@/components/MkSignin.password.vue';
 import { misskeyApi } from '@/utility/misskey-api.js';
@@ -112,18 +114,19 @@ const useConditionalMediation = ref(false);
 
 const userInfo = ref<null | Misskey.entities.UserDetailed>(null);
 const password = ref('');
-const credential = ref<null | AuthenticationPublicKeyCredential>(null);
+const credential = ref<null | AuthenticationResponseJSON>(null);
 
 //#region Passkey Passwordless
-const credentialRequest = shallowRef<CredentialRequestOptions | null>(null);
+const credentialRequest = shallowRef<PublicKeyCredentialRequestOptionsJSON | null>(null);
+const totpPageAuthRequest = shallowRef<PublicKeyCredentialRequestOptionsJSON | null>(null);
 const passkeyContext = ref('');
 const doingPasskeyFromInputPage = ref(false);
 
 const abortController = new AbortController();
 
-if (webAuthnSupported()) {
-	;(window.PublicKeyCredential?.getClientCapabilities?.().then(capabilities => capabilities.conditionalMediation) ?? window.PublicKeyCredential?.isConditionalMediationAvailable?.())
-		?.then(available => {
+if (browserSupportsWebAuthn()) {
+	browserSupportsWebAuthnAutofill()
+		.then(available => {
 			if (!available) return;
 			useConditionalMediation.value = true;
 			misskeyApi('signin-with-passkey', {}, null, abortController.signal)
@@ -133,18 +136,11 @@ if (webAuthnSupported()) {
 						return;
 					}
 
-					const options = parseRequestOptionsFromJSON({
-						mediation: 'conditional',
-						// @ts-expect-error -- ...
-						publicKey: response.option,
-						abortSignal: abortController.signal,
-					});
-
-					webAuthnRequest(options)
-						.then(credential => {
+					startAuthentication({ optionsJSON: response.option, useBrowserAutofill: true })
+						.then((credential: AuthenticationResponseJSON) => {
 							onConditionalMediationDone({ context: response.context, credential });
 						})
-						.catch(err => {
+						.catch((err: unknown) => {
 							useConditionalMediation.value = false;
 							console.error(err);
 							os.alert({
@@ -153,7 +149,7 @@ if (webAuthnSupported()) {
 							});
 						});
 				})
-				.catch(err => {
+				.catch((err: unknown) => {
 					useConditionalMediation.value = false;
 					console.error(err);
 				});
@@ -161,16 +157,13 @@ if (webAuthnSupported()) {
 }
 
 function onPasskeyLogin(): void {
-	if (webAuthnSupported()) {
+	if (browserSupportsWebAuthn()) {
 		doingPasskeyFromInputPage.value = true;
 		waiting.value = true;
 		misskeyApi('signin-with-passkey', {}, null, abortController.signal)
 			.then((res) => {
 				passkeyContext.value = res.context ?? '';
-				credentialRequest.value = parseRequestOptionsFromJSON({
-					// @ts-expect-error TODO: misskey-js由来の型（@simplewebauthn/types）とフロントエンド由来の型（@github/webauthn-json）が合わない
-					publicKey: res.option,
-				});
+				credentialRequest.value = res.option;
 
 				page.value = 'passkey';
 				waiting.value = false;
@@ -179,19 +172,18 @@ function onPasskeyLogin(): void {
 	}
 }
 
-function onConditionalMediationDone(response: { context: string, credential: AuthenticationPublicKeyCredential }): void {
+function onConditionalMediationDone(response: { context: string, credential: AuthenticationResponseJSON }): void {
 	doingPasskeyFromInputPage.value = true;
 	passkeyContext.value = response.context;
 	onPasskeyDone(response.credential);
 }
 
-function onPasskeyDone(response: AuthenticationPublicKeyCredential): void {
+function onPasskeyDone(response: AuthenticationResponseJSON): void {
 	waiting.value = true;
 
 	if (doingPasskeyFromInputPage.value) {
 		misskeyApi('signin-with-passkey', {
-			// @ts-expect-error -- ...
-			credential: response.toJSON(),
+			credential: response,
 			context: passkeyContext.value,
 		}).then(async (res) => {
 			if (res.signinResponse == null) {
@@ -202,9 +194,9 @@ function onPasskeyDone(response: AuthenticationPublicKeyCredential): void {
 				emit('login', res.signinResponse);
 				await onLoginSucceeded(res.signinResponse);
 			} else {
-				userInfo.value = res.signinResponse.user;
+				userInfo.value = res.signinResponse.user as Misskey.entities.UserDetailed;
 				credential.value = response;
-				page.value = res.signinResponse.next;
+				page.value = res.signinResponse.next as 'input' | 'password' | 'totp' | 'passkey';
 				waiting.value = false;
 			}
 		}).catch(onSigninApiError);
@@ -212,14 +204,19 @@ function onPasskeyDone(response: AuthenticationPublicKeyCredential): void {
 		tryLogin({
 			username: userInfo.value.username,
 			password: password.value,
-			// @ts-expect-error TODO: misskey-js由来の型（@simplewebauthn/types）とフロントエンド由来の型（@github/webauthn-json）が合わない
-			credential: response.toJSON(),
+			credential: response,
 		});
 	}
 }
 
 function onUseTotp(): void {
 	page.value = 'totp';
+}
+
+function onSwitchToPasskey(): void {
+	if (totpPageAuthRequest.value == null) return;
+	credentialRequest.value = totpPageAuthRequest.value;
+	page.value = 'passkey';
 }
 //#endregion
 
@@ -261,8 +258,7 @@ async function onPasswordSubmitted(pw: PwResponse) {
 			'g-recaptcha-response': pw.captcha.reCaptchaResponse,
 			'turnstile-response': pw.captcha.turnstileResponse,
 			'testcaptcha-response': pw.captcha.testcaptchaResponse,
-			// @ts-expect-error -- ...
-			credential: credential.value ? credential.value.toJSON() : undefined,
+			credential: credential.value ?? undefined,
 		});
 	}
 }
@@ -283,8 +279,7 @@ async function onTotpSubmitted(token: string) {
 			username: userInfo.value.username,
 			password: password.value,
 			token,
-			// @ts-expect-error -- ...
-			credential: credential.value ? credential.value.toJSON() : undefined,
+			credential: credential.value ?? undefined,
 		});
 	}
 }
@@ -307,24 +302,17 @@ async function tryLogin(req: Partial<Misskey.entities.SigninFlowRequest>): Promi
 	return await misskeyApi('signin-flow', _req).then(async (res) => {
 		if (res.finished) {
 			if (res.state && res.publicKey) {
-				await os.promiseDialog(webAuthnCreate({
-					// @ts-expect-error -- ...
-					publicKey: res.publicKey,
-				}).then(async newCredential => {
-					if (!newCredential) return;
+				await os.promiseDialog(startRegistration({ optionsJSON: res.publicKey })
+					.then(async (newCredential: RegistrationResponseJSON) => {
+						const name = await nameKey(newCredential.response.attestationObject);
 
-					const credentialJson = newCredential.toJSON();
-
-					const name = await nameKey(credentialJson.response.attestationObject);
-
-					return await misskeyApi('i/2fa/key-done', {
-						password: password.value,
-						state: res.state,
-						name: name ?? 'Auto-upgraded Passkey',
-						// @ts-expect-error -- ...
-						credential: credentialJson,
-					}, res.i);
-				}).catch(() => null), null, () => {});
+						return await misskeyApi('i/2fa/key-done', {
+							password: password.value,
+							state: res.state,
+							name: name ?? 'Auto-upgraded Passkey',
+							credential: newCredential,
+						}, res.i);
+					}).catch(() => null), null, () => {});
 			}
 			emit('login', res);
 			await onLoginSucceeded(res);
@@ -341,15 +329,13 @@ async function tryLogin(req: Partial<Misskey.entities.SigninFlowRequest>): Promi
 					break;
 				}
 				case 'totp': {
+					totpPageAuthRequest.value = res.authRequest ?? null;
 					page.value = 'totp';
 					break;
 				}
 				case 'passkey': {
-					if (webAuthnSupported()) {
-						credentialRequest.value = parseRequestOptionsFromJSON({
-							// @ts-expect-error TODO: misskey-js由来の型（@simplewebauthn/types）とフロントエンド由来の型（@github/webauthn-json）が合わない
-							publicKey: res.authRequest,
-						});
+					if (browserSupportsWebAuthn()) {
+						credentialRequest.value = res.authRequest;
 						page.value = 'passkey';
 					} else {
 						page.value = 'totp';
