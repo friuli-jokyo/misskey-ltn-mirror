@@ -30602,6 +30602,8 @@ export interface operations {
                     withRenotes?: boolean;
                     /** @default false */
                     withReplies?: boolean;
+                    /** @default false */
+                    withPromotes?: boolean;
                 };
             };
         };
@@ -30672,6 +30674,8 @@ export interface operations {
                     withRenotes?: boolean;
                     /** @default false */
                     withReplies?: boolean;
+                    /** @default false */
+                    withPromotes?: boolean;
                     /** @default 10 */
                     limit?: number;
                     /** Format: misskey:id */

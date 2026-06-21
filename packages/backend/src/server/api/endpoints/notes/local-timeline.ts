@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Brackets } from 'typeorm';
+import * as Redis from 'ioredis';
+import { Brackets, In } from 'typeorm';
 import { Inject, Injectable } from '@nestjs/common';
 import type { MiMeta, NotesRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
@@ -52,6 +53,7 @@ export const paramDef = {
 		withFiles: { type: 'boolean', default: false },
 		withRenotes: { type: 'boolean', default: true },
 		withReplies: { type: 'boolean', default: false },
+		withPromotes: { type: 'boolean', default: false },
 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
 		sinceId: { type: 'string', format: 'misskey:id' },
 		untilId: { type: 'string', format: 'misskey:id' },
@@ -67,6 +69,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 	constructor(
 		@Inject(DI.meta)
 		private serverSettings: MiMeta,
+
+		@Inject(DI.redis)
+		private redis: Redis.Redis,
 
 		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
@@ -130,6 +135,45 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					withReplies: ps.withReplies,
 				}, me),
 			});
+
+			if (ps.withPromotes && timeline.length) {
+				const first = this.idService.parse(timeline[0].id).date.valueOf();
+				const last = this.idService.parse(timeline[timeline.length - 1].id).date.valueOf();
+				const isAscending = first < last;
+				const until = untilId ? this.idService.parse(untilId).date.valueOf() : Date.now();
+				const since = sinceId ? this.idService.parse(sinceId).date.valueOf() : isAscending ? first : last;
+				const promoted = isAscending ?
+					await this.redis.zrange('circulation:stream', since, until, 'BYSCORE', 'WITHSCORES') :
+					await this.redis.zrange('circulation:stream', until, since, 'BYSCORE', 'REV', 'WITHSCORES');
+				const mapped = promoted.flatMap((v, i, w) => i % 2 ? [[w[i - 1], this.idService.gen(parseInt(v, 10), true)]] as const : [] as const);
+				const resolved = await this.notesRepository.findBy({ id: In(mapped.map(([id]) => id)) });
+				const promotedNotes = await this.noteEntityService.packMany(resolved, me);
+				const splicing: Parameters<typeof Array.prototype.splice>[] = [];
+				if (mapped.length) {
+					let index = 0;
+					for (let i = 0; i < timeline.length; i++) {
+						while (index < mapped.length && (isAscending ? mapped[index][1] < timeline[i].id : mapped[index][1] > timeline[i].id)) {
+							const [id, promoted] = mapped[index++];
+							const note = promotedNotes.find((n) => n.id === id);
+							if (note) {
+								(note as any).promoted = promoted;
+								splicing.push([i, 0, note]);
+							}
+						}
+					}
+					while (index < mapped.length) {
+						const [id, promoted] = mapped[index++];
+						const note = promotedNotes.find((n) => n.id === id);
+						if (note) {
+							(note as any).promoted = promoted;
+							splicing.push([timeline.length, 0, note]);
+						}
+					}
+					for (let i = splicing.length - 1; i >= 0; i--) {
+						timeline.splice(...splicing[i]);
+					}
+				}
+			}
 
 			process.nextTick(() => {
 				if (me) {

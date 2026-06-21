@@ -54,7 +54,7 @@ export class LocalTimelineChannel extends Channel {
 	}
 
 	@bindThis
-	private async onNote(note: Packed<'Note'>) {
+	private async forward(type: 'note' | 'promote', note: Packed<'Note'>) {
 		if (note.anonymouslySendToUserId || note.anonymousChannelUsername) return;
 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
 
@@ -90,14 +90,17 @@ export class LocalTimelineChannel extends Channel {
 			}
 		}
 
-		this.send('note', note);
+		this.send(type, note);
 	}
 
 	@bindThis
-	private onPromote(note: Packed<'Note'>) {
-		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0) || note.user.requireSigninToViewContents && this.user == null || this.isNoteMutedOrBlocked(note)) return;
+	private async onNote(note: Packed<'Note'>) {
+		await this.forward('note', note);
+	}
 
-		this.send('promote', note);
+	@bindThis
+	private async onPromote(note: Packed<'Note'>) {
+		await this.forward('promote', note);
 	}
 
 	@bindThis

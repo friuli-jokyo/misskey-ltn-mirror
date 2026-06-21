@@ -54,17 +54,18 @@ export class CirculationService {
 
 	@bindThis
 	protected async promote(note: MiNote, user: MiUser): Promise<void> {
-		const totalLastHour = await this.notesChart.getChartRaw('hour', 2, null);
+		const [totalLastHour, { write }] = await Promise.all([
+			this.notesChart.getChartRaw('hour', 2, null),
+			this.activeUsersChart.getChartRaw('day', 2, null),
+		]);
 		const totalCurrentHour =
 			// @ts-expect-error
 			this.notesChart.buffer
 				.reduce((a, c) => a + (c.diff['local.inc'] ?? 0) + (c.diff.promote ?? 0), 0);
 		const total = totalLastHour['local.inc'][0] + totalLastHour['local.inc'][1] + totalLastHour.promote[0] + totalLastHour.promote[1] + totalCurrentHour;
-		const { write } = await this.activeUsersChart.getChartRaw('hour', 2, null);
-		let p = Math.max(0, 1 - PHI ** (1 - await this.emaOf(user) * (write[0] + write[1]) / total / 60));
-		for (let i = 1; Math.random() < p; i++) {
+		let p = 1 - PHI ** (1 / PHI - await this.emaOf(user) * (write[0] + write[1]) / total / 19.2);
+		for (let i = 1; Math.random() < (p /= Math.E); i++) {
 			await this.draw(this.periodOf(note), total / i);
-			p /= Math.E;
 		}
 	}
 
@@ -77,7 +78,7 @@ export class CirculationService {
 			this.notesChart.getChartRaw('day', 2, null),
 			this.activeUsersChart.getChartRaw('day', 2, null),
 		]);
-		if (notes['local.inc'][1] / activeUsers['write'][1] < await this.emaOf(user)) {
+		if (notes['local.inc'][1] / activeUsers['write'][1] / await this.emaOf(user) < Math.random()) {
 			return;
 		}
 		const stockKey = `circulation:stock:${this.periodOf(note)}`;
@@ -106,9 +107,13 @@ export class CirculationService {
 			const targetStockKey = `circulation:stock:${period - targetIndex - 2}`;
 			const noteId = await this.redis.srandmember(targetStockKey);
 			if (noteId) {
-				const note = await this.noteEntityService.pack(noteId);
+				const note = await this.noteEntityService.pack(noteId, null, { skipHide: true });
 				setTimeout(() => {
 					this.globalEventService.publishCirculationStream(note);
+					const multi = this.redis.multi()
+					multi.zadd('circulation:stream', Date.now(), note.id);
+					multi.zremrangebyscore('circulation:stream', 0, Date.now() - 864e5);
+					multi.exec();
 				}, Math.min(6e4, 36e5 / pressure * Math.random()));
 				this.notesChart.promote();
 				this.perUserNotesChart.promote({ id: note.userId });
@@ -120,16 +125,20 @@ export class CirculationService {
 				pipeline.scard(`circulation:stock:${period - i}`);
 			}
 			const [weights, stockCounts] = await Promise.all([
-				this.notesChart.getChartRaw('hour', account.length + 1, new Date((period - 2) * 36e5)).then((chart) => chart['local.inc']),
+				this.notesChart.getChartRaw('hour', account.length + 1, new Date((period - 2) * 36e5)).then((chart) => chart['local.inc'].toReversed()),
 				pipeline.exec().then((res) => res?.map(([err, res]) => err ? 0 : res as number) ?? Array.from({ length: account.length + 1 }, () => 1)),
 			]);
-			const average = weights.reduce((a, c) => a + c, 0) / weights.length;
-			if (!(average > 0)) {
+			const weightAverage = weights.reduce((a, c) => a + c, 0) / weights.length;
+			if (!(weightAverage > 0)) {
+				return;
+			}
+			const stockCountAverage = stockCounts.reduce((a, c) => a + c, 0) / stockCounts.length;
+			if (!(stockCountAverage > 0)) {
 				return;
 			}
 			const multi = this.redis.multi();
 			multi.del('circulation:pool:account');
-			multi.rpush('circulation:pool:account', ...Array.from({ length: weights.length }, (_, i) => Math.ceil(weights[i] / average * stockCounts[i])));
+			multi.lpush('circulation:pool:account', ...Array.from({ length: weights.length }, (_, i) => Math.ceil(2 ** i * weights[i] / weightAverage * stockCounts[i] / stockCountAverage)));
 			await multi.exec();
 		}
 	}
