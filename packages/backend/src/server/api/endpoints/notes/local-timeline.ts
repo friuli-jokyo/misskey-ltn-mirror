@@ -13,11 +13,16 @@ import ActiveUsersChart from '@/core/chart/charts/active-users.js';
 import { DI } from '@/di-symbols.js';
 import { RoleService } from '@/core/RoleService.js';
 import { IdService } from '@/core/IdService.js';
+import { CacheService } from '@/core/CacheService.js';
 import { QueryService } from '@/core/QueryService.js';
 import { MiLocalUser } from '@/models/User.js';
 import { FanoutTimelineEndpointService } from '@/core/FanoutTimelineEndpointService.js';
 import { ChannelMutingService } from '@/core/ChannelMutingService.js';
 import { ApiError } from '../../error.js';
+import { isChannelRelated } from '@/misc/is-channel-related.js';
+import { isInstanceMuted } from '@/misc/is-instance-muted.js';
+import { isRenote, isQuote } from '@/misc/is-renote.js';
+import { isUserRelated } from '@/misc/is-user-related.js';
 
 export const meta = {
 	tags: ['notes'],
@@ -80,6 +85,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private roleService: RoleService,
 		private activeUsersChart: ActiveUsersChart,
 		private idService: IdService,
+		private cacheService: CacheService,
 		private fanoutTimelineEndpointService: FanoutTimelineEndpointService,
 		private queryService: QueryService,
 		private channelMutingService: ChannelMutingService,
@@ -147,6 +153,33 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					await this.redis.zrange('circulation:stream', until, since, 'BYSCORE', 'REV', 'WITHSCORES');
 				const mapped = promoted.flatMap((v, i, w) => i % 2 ? [[w[i - 1], this.idService.gen(parseInt(v, 10), true)]] as const : [] as const);
 				const resolved = await this.notesRepository.findBy({ id: In(mapped.map(([id]) => id)) });
+				if (me) {
+					const [
+						userIdsWhoMeMuting,
+						userIdsWhoMeMutingRenotes,
+						userIdsWhoBlockingMe,
+						userMutedInstances,
+						userMutedChannels,
+					] = await Promise.all([
+						this.cacheService.userMutingsCache.fetch(me.id),
+						this.cacheService.renoteMutingsCache.fetch(me.id),
+						this.cacheService.userBlockedCache.fetch(me.id),
+						this.cacheService.userProfileCache.fetch(me.id).then(p => new Set(p.mutedInstances)),
+						this.channelMutingService.mutingChannelsCache.fetch(me.id),
+					]);
+					for (let i = resolved.length - 1; i >= 0; i--) {
+						const note = resolved[i];
+						if (isUserRelated(note, userIdsWhoBlockingMe, !!note.anonymousChannelUsername)
+							|| isUserRelated(note, userIdsWhoMeMuting, !!note.anonymousChannelUsername)
+							|| isUserRelated(note.renote, userIdsWhoBlockingMe, !!note.renote?.anonymousChannelUsername)
+							|| isUserRelated(note.renote, userIdsWhoMeMuting, !!note.renote?.anonymousChannelUsername)
+							|| !note.anonymousChannelUsername && isRenote(note) && !isQuote(note) && userIdsWhoMeMutingRenotes.has(note.userId)
+							|| isInstanceMuted(note, userMutedInstances)
+							|| (isChannelRelated(note, userMutedChannels))) {
+							resolved.splice(i, 1);
+						}
+					}
+				}
 				const promotedNotes = await this.noteEntityService.packMany(resolved, me);
 				const splicing: Parameters<typeof Array.prototype.splice>[] = [];
 				if (mapped.length) {
