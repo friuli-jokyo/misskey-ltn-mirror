@@ -15,6 +15,7 @@ export const schema = {
 	'diffs.reply': { range: 'small' },
 	'diffs.renote': { range: 'small' },
 	'diffs.withFile': { range: 'small' },
+	'promote': { range: 'small' },
 } as const;
 
 export const entity = Chart.schemaToEntity(name, schema, true);

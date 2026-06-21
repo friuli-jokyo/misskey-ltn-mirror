@@ -11,7 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<MkLoading v-if="fetching"/>
 		<div v-if="!fetching && files.length > 0" class="_gaps_s">
 			<div :class="$style.stream">
-				<MkNoteMediaGrid v-for="entry in files" :key="entry.file.id" :file="entry.file" :to="entry.to"/>
+				<MkNoteMediaGrid v-for="entry in files" :key="entry.file.id" :note="entry.note" :file="entry.file" :to="entry.to"/>
 			</div>
 			<MkButton rounded full @click="emit('showMore')">{{ i18n.ts.showMore }} <i class="ti ti-arrow-right"></i></MkButton>
 		</div>
@@ -41,6 +41,7 @@ const emit = defineEmits<{
 const fetching = ref(true);
 const files = ref<{
 	to: string;
+	note?: Misskey.entities.Note;
 	file: Misskey.entities.DriveFile;
 }[]>([]);
 
@@ -64,6 +65,7 @@ onMounted(() => {
 			for (const file of note.files ?? []) {
 				files.value.push({
 					to: notePage(note),
+					note,
 					file,
 				});
 			}

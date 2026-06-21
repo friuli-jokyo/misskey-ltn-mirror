@@ -180,14 +180,14 @@ export class Paginator<
 	private getNewestId(): string | null | undefined {
 		// 様々な要因により並び順は保証されないのでソートが必要
 		if (this.aheadQueue.length > 0) {
-			return this.aheadQueue.map(x => x.id).sort().at(-1);
+			return this.aheadQueue.filter(x => !(x as any).promoted).map(x => x.id).sort().at(-1);
 		}
-		return this.items.value.map(x => x.id).sort().at(-1);
+		return this.items.value.filter(x => !(x as any).promoted).map(x => x.id).sort().at(-1);
 	}
 
 	private getOldestId(): string | null | undefined {
 		// 様々な要因により並び順は保証されないのでソートが必要
-		return this.items.value.map(x => x.id).sort().at(0);
+		return this.items.value.filter(x => !(x as any).promoted).map(x => x.id).sort().at(0);
 	}
 
 	public async init(): Promise<void> {
@@ -371,7 +371,7 @@ export class Paginator<
 
 	public unshiftItems(newItems: T[], trim = true): void {
 		if (newItems.length === 0) return; // これやらないと余計なre-renderが走る
-		this.items.value.unshift(...newItems.filter(x => !this.items.value.some(y => y.id === x.id))); // ストリーミングやポーリングのタイミングによっては重複することがあるため
+		this.items.value.unshift(...newItems.filter(x => !this.items.value.some(y => y.id === x.id && !(y as any).promoted))); // ストリーミングやポーリングのタイミングによっては重複することがあるため
 		if (trim) this.trim(true);
 		if (this.useShallowRef) triggerRef(this.items);
 	}
@@ -383,7 +383,7 @@ export class Paginator<
 	}
 
 	public prepend(item: T): void {
-		if (this.items.value.some(x => x.id === item.id)) return;
+		if (this.items.value.some(x => x.id === item.id && !(x as any).promoted)) return;
 		this.items.value.unshift(item);
 		this.trim(false);
 		if (this.useShallowRef) triggerRef(this.items);
@@ -407,7 +407,7 @@ export class Paginator<
 	public removeItem(id: string): void {
 		// TODO: queueからも消す
 
-		const index = this.items.value.findIndex(x => x.id === id);
+		const index = this.items.value.findIndex(x => x.id === id && !(x as any).promoted);
 		if (index !== -1) {
 			this.items.value.splice(index, 1);
 			if (this.useShallowRef) triggerRef(this.items);
@@ -417,7 +417,7 @@ export class Paginator<
 	public updateItem(id: string, updater: (item: T) => T): void {
 		// TODO: queueのも更新
 
-		const index = this.items.value.findIndex(x => x.id === id);
+		const index = this.items.value.findIndex(x => x.id === id && !(x as any).promoted);
 		if (index !== -1) {
 			const item = this.items.value[index]!;
 			this.items.value[index] = updater(item);

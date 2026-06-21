@@ -22,6 +22,7 @@ export const schema = {
 	'remote.diffs.reply': {},
 	'remote.diffs.renote': {},
 	'remote.diffs.withFile': {},
+	'promote': {},
 } as const;
 
 export const entity = Chart.schemaToEntity(name, schema);

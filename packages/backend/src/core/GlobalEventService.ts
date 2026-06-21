@@ -330,6 +330,10 @@ export type GlobalEvents = {
 		name: `adminStream:${MiUser['id']}`;
 		payload: EventTypesToEventPayload<AdminEventTypes>;
 	};
+	circulation: {
+		name: 'circulationStream';
+		payload: Serialized<Packed<'Note'>>;
+	};
 	notes: {
 		name: 'notesStream';
 		payload: Serialized<Packed<'Note'>>;
@@ -435,6 +439,11 @@ export class GlobalEventService {
 	@bindThis
 	public publishRoleTimelineStream<K extends keyof RoleTimelineEventTypes>(roleId: MiRole['id'], type: K, value?: RoleTimelineEventTypes[K]): void {
 		this.publish(`roleTimelineStream:${roleId}`, type, typeof value === 'undefined' ? null : value);
+	}
+
+	@bindThis
+	public publishCirculationStream(note: Packed<'Note'>): void {
+		this.publish('circulationStream', null, note);
 	}
 
 	@bindThis

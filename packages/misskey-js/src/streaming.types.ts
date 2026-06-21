@@ -82,9 +82,11 @@ export type Channels = {
 			withRenotes?: boolean;
 			withReplies?: boolean;
 			withFiles?: boolean;
+			withPromotes?: boolean;
 		};
 		events: {
 			note: (payload: Note) => void;
+			promote: (payload: Note) => void;
 		};
 		receives: null;
 	};
@@ -93,9 +95,11 @@ export type Channels = {
 			withRenotes?: boolean;
 			withReplies?: boolean;
 			withFiles?: boolean;
+			withPromotes?: boolean;
 		};
 		events: {
 			note: (payload: Note) => void;
+			promote: (payload: Note) => void;
 		};
 		receives: null;
 	};

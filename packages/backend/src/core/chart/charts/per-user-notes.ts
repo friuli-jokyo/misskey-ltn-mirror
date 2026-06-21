@@ -63,4 +63,11 @@ export default class PerUserNotesChart extends Chart<typeof schema> { // eslint-
 			'diffs.withFile': note.fileIds.length > 0 ? (isAdditional ? 1 : -1) : 0,
 		}, user.id);
 	}
+
+	@bindThis
+	public promote(user: { id: MiUser['id'] }): void {
+		this.commit({
+			promote: 1,
+		}, user.id);
+	}
 }

@@ -101,6 +101,10 @@ export interface Locale extends ILocale {
      */
     "anonymouslySendToUser": ParameterizedString<"user">;
     /**
+     * サーキュレーションによるプロモート
+     */
+    "promotedBecauseOfCirculation": string;
+    /**
      * ノートはありません
      */
     "noNotes": string;
@@ -3113,6 +3117,14 @@ export interface Locale extends ILocale {
      */
     "confirmToUnclipAlreadyClippedNote": ParameterizedString<"name">;
     /**
+     * このアンテナから削除
+     */
+    "removeFromAntenna": string;
+    /**
+     * 「{name}」からこのノートを削除しますか？
+     */
+    "removeNoteFromAntennaConfirm": ParameterizedString<"name">;
+    /**
      * パブリック
      */
     "public": string;
@@ -5803,6 +5815,30 @@ export interface Locale extends ILocale {
      * 元に戻す
      */
     "previewingThemeRestore": string;
+    /**
+     * アクセストークン
+     */
+    "accessToken": string;
+    /**
+     * 絵文字パレットを選択
+     */
+    "chooseEmojiPalette": string;
+    /**
+     * 絵文字パレットに追加
+     */
+    "addToEmojiPalette": string;
+    /**
+     * この絵文字はすでにこの絵文字パレットに含まれています。追加しなおしますか？
+     */
+    "emojiPaletteAlreadyAddedConfirm": string;
+    /**
+     * 末尾に追加
+     */
+    "append": string;
+    /**
+     * 先頭に追加
+     */
+    "prepend": string;
     "_imageEditing": {
         "_vars": {
             /**
@@ -7943,6 +7979,16 @@ export interface Locale extends ILocale {
                  */
                 "description": string;
             };
+            "_aFleetingDream": {
+                /**
+                 * 泡沫夢幻
+                 */
+                "title": string;
+                /**
+                 * 儚く消え去る夢のような体験をした
+                 */
+                "description": string;
+            };
             "_passedSinceAccountCreated1": {
                 /**
                  * 一周年
@@ -8285,6 +8331,10 @@ export interface Locale extends ILocale {
              * リバースプロキシやCDNなど、前段で別の設定値が存在する場合があります。
              */
             "maxFileSize_caption": string;
+            /**
+             * サーバー全体の最大ファイルサイズ設定は {max} です。これより大きいファイルをアップロードできるようにするには、Misskeyの設定ファイルからこの設定を緩和してください。
+             */
+            "maxFileSize_caption2": ParameterizedString<"max">;
             /**
              * ファイルにNSFWを常に付与
              */
@@ -12729,6 +12779,14 @@ export interface Locale extends ILocale {
          * 例: misskey.example.com
          */
         "serverHostPlaceholder": string;
+        /**
+         * 投稿日時from
+         */
+        "postFrom": string;
+        /**
+         * 投稿日時to
+         */
+        "postTo": string;
     };
     "_serverSetupWizard": {
         /**

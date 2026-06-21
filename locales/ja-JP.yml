@@ -22,6 +22,7 @@ enterUsername: "ユーザー名を入力"
 renotedBy: "{user}がリノート"
 renotedByChannel: "{user}が{channel}にリノート"
 anonymouslySendToUser: "{user}宛のパブリックレター"
+promotedBecauseOfCirculation: "サーキュレーションによるプロモート"
 noNotes: "ノートはありません"
 noNotifications: "通知はありません"
 instance: "サーバー"
@@ -775,6 +776,8 @@ optional: "任意"
 createNewClip: "新しいクリップを作成"
 unclip: "クリップ解除"
 confirmToUnclipAlreadyClippedNote: "このノートはすでにクリップ「{name}」に含まれています。ノートをこのクリップから除外しますか？"
+removeFromAntenna: "このアンテナから削除"
+removeNoteFromAntennaConfirm: "「{name}」からこのノートを削除しますか？"
 public: "パブリック"
 private: "非公開"
 i18nInfo: "Misskeyは有志によって様々な言語に翻訳されています。{link}で翻訳に協力できます。"
@@ -1447,6 +1450,12 @@ nothingToConfigure: "設定項目はありません"
 viewRenotedChannel: "リノート先のチャンネルを見る"
 previewingTheme: "テーマのプレビュー中"
 previewingThemeRestore: "元に戻す"
+accessToken: "アクセストークン"
+chooseEmojiPalette: "絵文字パレットを選択"
+addToEmojiPalette: "絵文字パレットに追加"
+emojiPaletteAlreadyAddedConfirm: "この絵文字はすでにこの絵文字パレットに含まれています。追加しなおしますか？"
+append: "末尾に追加"
+prepend: "先頭に追加"
 
 _imageEditing:
   _vars:
@@ -2056,6 +2065,9 @@ _achievements:
     _setNameToSyuilo:
       title: "神様コンプレックス"
       description: "名前を syuilo に設定した"
+    _aFleetingDream:
+      title: "泡沫夢幻"
+      description: "儚く消え去る夢のような体験をした"
     _passedSinceAccountCreated1:
       title: "一周年"
       description: "アカウント作成から1年経過した"
@@ -2149,6 +2161,7 @@ _role:
     selfAssignability: "ロール自己アサイン設定"
     maxFileSize: "アップロード可能な最大ファイルサイズ"
     maxFileSize_caption: "リバースプロキシやCDNなど、前段で別の設定値が存在する場合があります。"
+    maxFileSize_caption2: "サーバー全体の最大ファイルサイズ設定は {max} です。これより大きいファイルをアップロードできるようにするには、Misskeyの設定ファイルからこの設定を緩和してください。"
     alwaysMarkNsfw: "ファイルにNSFWを常に付与"
     canUpdateBioMedia: "アイコンとバナーの更新を許可"
     pinMax: "ノートのピン留めの最大数"
@@ -3402,6 +3415,8 @@ _search:
   pleaseEnterServerHost: "サーバーのホストを入力してください"
   pleaseSelectUser: "ユーザーを選択してください"
   serverHostPlaceholder: "例: misskey.example.com"
+  postFrom: "投稿日時from"
+  postTo: "投稿日時to"
 
 _serverSetupWizard:
   installCompleted: "Misskeyのインストールが完了しました！"

@@ -273,6 +273,10 @@ export function createPostgresDataSource(config: Config, long = false) {
 			statement_timeout: long ? 0 : 32768,
 			...config.db.extra,
 		},
+		invalidWhereValuesBehavior: {
+			null: 'ignore',
+			undefined: 'ignore',
+		},
 		...(config.dbReplications ? {
 			replication: {
 				master: {

@@ -753,6 +753,7 @@ function clear() {
 		visibility.value = props.initialVisibility ?? prefer.s.rememberNoteVisibility ? store.s.visibility : prefer.s.defaultNoteVisibility;
 		anonymouslySendToUser.value = null;
 	}
+	uploader.reset();
 }
 
 function onKeydown(ev: KeyboardEvent) {

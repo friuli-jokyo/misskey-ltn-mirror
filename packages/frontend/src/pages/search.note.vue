@@ -19,6 +19,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<template #header>{{ i18n.ts.options }}</template>
 
 			<div class="_gaps_m">
+				<div style="display: none; gap: 8px;">
+					<MkInput v-model="rangeStartAt" type="datetime-local">
+						<template #label>{{ i18n.ts._search.postFrom }}</template>
+					</MkInput>
+					<MkInput v-model="rangeEndAt" type="datetime-local">
+						<template #label>{{ i18n.ts._search.postTo }}</template>
+					</MkInput>
+				</div>
+
 				<MkRadios
 					v-model="searchScope"
 					:options="searchScopeDef"
@@ -252,6 +261,8 @@ const paginator = shallowRef<Paginator<'notes/search'> | null>(null);
 
 const searchQuery = ref(toRef(props, 'query').value);
 const hostInput = ref(toRef(props, 'host').value);
+const rangeStartAt = ref<string | null>(null);
+const rangeEndAt = ref<string | null>(null);
 const sinceDate = ref('');
 const untilDate = ref('');
 const minRepliesCount = ref<number | null>(null);
@@ -337,6 +348,8 @@ type SearchRequestParams = {
 	readonly query: string;
 	readonly host?: string;
 	readonly userId?: string;
+	readonly rangeStartAt?: number | null;
+	readonly rangeEndAt?: number | null;
 	readonly sinceId?: string;
 	readonly untilId?: string;
 	readonly sinceDate?: number;
@@ -367,6 +380,13 @@ const parseDateFilter = (value: string): number | undefined => {
 const fixHostIfLocal = (target: string | null | undefined) => {
 	if (!target || target === localHost) return '.';
 	return target;
+};
+
+const searchRange = () => {
+	return {
+		rangeStartAt: rangeStartAt.value ? new Date(rangeStartAt.value).getTime() : null,
+		rangeEndAt: rangeEndAt.value ? new Date(rangeEndAt.value).getTime() : null,
+	};
 };
 
 const searchParams = computed<SearchRequestParams | null>(() => {
@@ -413,8 +433,8 @@ const searchParams = computed<SearchRequestParams | null>(() => {
 		query: trimmedQuery,
 		sinceId,
 		untilId,
-		sinceDate: sinceDateValue,
-		untilDate: untilDateValue,
+		rangeStartAt: sinceDateValue,
+		rangeEndAt: untilDateValue,
 		onlyFollows: targetScope.value === 'follows',
 		onlyMentioned: targetScope.value === 'mentioned',
 		onlySpecified: targetScope.value === 'specified',
@@ -432,6 +452,7 @@ const searchParams = computed<SearchRequestParams | null>(() => {
 			...derived,
 			host: fixHostIfLocal(user.value.host),
 			userId: user.value.id,
+			...searchRange(),
 		};
 	}
 
@@ -446,6 +467,7 @@ const searchParams = computed<SearchRequestParams | null>(() => {
 		return {
 			...derived,
 			host: fixHostIfLocal(trimmedHost),
+			...searchRange(),
 		};
 	}
 
@@ -453,10 +475,12 @@ const searchParams = computed<SearchRequestParams | null>(() => {
 		return {
 			...derived,
 			host: '.',
+			...searchRange(),
 		};
 	}
 
 	return {
+		...searchRange(),
 		...derived,
 	};
 });

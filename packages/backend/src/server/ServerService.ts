@@ -243,16 +243,16 @@ export class ServerService implements OnApplicationShutdown {
 
 		this.streamingApiServerService.attach(fastify.server);
 
-		fastify.server.on('error', err => {
-			switch ((err as any).code) {
+		const handleListenError = (err: unknown): void => {
+			switch ((err as NodeJS.ErrnoException).code) {
 				case 'EACCES':
-					this.logger.error(`You do not have permission to listen on port ${this.config.port}.`);
+					this.logger.error(`You do not have permission to listen on ${this.config.socket ?? `port ${this.config.port}`}.`);
 					break;
 				case 'EADDRINUSE':
-					this.logger.error(`Port ${this.config.port} is already in use by another process.`);
+					this.logger.error(`${this.config.socket ?? `Port ${this.config.port}`} is already in use by another process.`);
 					break;
 				default:
-					this.logger.error(err);
+					this.logger.error(err as Error);
 					break;
 			}
 
@@ -262,7 +262,7 @@ export class ServerService implements OnApplicationShutdown {
 				// disableClustering
 				process.exit(1);
 			}
-		});
+		}
 	}
 
 	@bindThis

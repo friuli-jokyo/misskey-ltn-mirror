@@ -9,7 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<MkPagination v-slot="{items}" :paginator="paginator" withControl>
 			<div :class="$style.stream">
 				<template v-for="note in items" :key="note.id">
-					<MkNoteMediaGrid v-for="file in note.files ?? []" :key="file.id" :file="file" :to="notePage(note)" square/>
+					<MkNoteMediaGrid v-for="file in note.files ?? []" :key="file.id" :note="note" :file="file" :to="notePage(note)" square/>
 				</template>
 			</div>
 		</MkPagination>

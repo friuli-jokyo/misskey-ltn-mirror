@@ -27,8 +27,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 			:moveClass="$style.transition_x_move"
 			tag="div"
 		>
-			<div v-for="(note, i) in paginator.items.value" :key="note.id" :data-scroll-anchor="note.id">
-				<div v-if="i > 0 && isSeparatorNeeded(paginator.items.value[i -1].createdAt, note.createdAt)">
+			<div v-for="(note, i) in paginator.items.value" :key="note.id + (note as any).promoted" :data-scroll-anchor="note.id">
+				<div v-if="i > 0 && isSeparatorNeeded(paginator.items.value[i -1].createdAt, note.createdAt) && !(note as any).promoted">
 					<div :class="$style.date">
 						<span><i class="ti ti-chevron-up"></i> {{ getSeparatorInfo(paginator.items.value[i -1].createdAt, note.createdAt)?.prevText }}</span>
 						<span style="height: 1em; width: 1px; background: var(--MI_THEME-divider);"></span>
@@ -87,11 +87,13 @@ const props = withDefaults(defineProps<{
 	customSound?: SoundStore | null;
 	withRenotes?: boolean;
 	withReplies?: boolean;
+	withPromotes?: boolean;
 	withSensitive?: boolean;
 	onlyFiles?: boolean;
 }>(), {
 	withRenotes: true,
 	withReplies: false,
+	withPromotes: true,
 	withSensitive: true,
 	onlyFiles: false,
 	sound: false,
@@ -269,6 +271,12 @@ useGlobalEvent('noteDeleted', (noteId) => {
 	paginator.removeItem(noteId);
 });
 
+useGlobalEvent('noteRemovedFromAntenna', (antennaId, noteId) => {
+	if (props.src === 'antenna' && props.antenna === antennaId) {
+		paginator.removeItem(noteId);
+	}
+});
+
 function releaseQueue() {
 	paginator.releaseQueue();
 	scrollToTop(rootEl.value!);
@@ -294,6 +302,10 @@ function prepend(note: Misskey.entities.Note & MisskeyEntity) {
 			sound.playMisskeySfx($i && (note.userId === $i.id) ? 'noteMy' : 'note');
 		}
 	}
+}
+
+function prependPromote(note: Misskey.entities.Note & MisskeyEntity) {
+	prepend({ promoted: Math.random(), ...note } as Misskey.entities.Note & MisskeyEntity);
 }
 
 const stream = store.s.realtimeMode ? useStream() : null;
@@ -330,15 +342,19 @@ function connectChannel() {
 			withRenotes: props.withRenotes,
 			withReplies: props.withReplies,
 			withFiles: props.onlyFiles ? true : undefined,
+			withPromotes: props.withPromotes,
 		});
 		connections.localTimeline.on('note', prepend);
+		if (props.withPromotes) connections.localTimeline.on('promote', prependPromote);
 	} else if (props.src === 'social') {
 		connections.hybridTimeline = stream.useChannel('hybridTimeline', {
 			withRenotes: props.withRenotes,
 			withReplies: props.withReplies,
 			withFiles: props.onlyFiles ? true : undefined,
+			withPromotes: props.withPromotes,
 		});
 		connections.hybridTimeline.on('note', prepend);
+		if (props.withPromotes) connections.hybridTimeline.on('promote', prependPromote);
 	} else if (props.src === 'global') {
 		connections.globalTimeline = stream.useChannel('globalTimeline', {
 			withRenotes: props.withRenotes,

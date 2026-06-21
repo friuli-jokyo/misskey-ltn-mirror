@@ -7,6 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <div
 	v-if="isHiding(file)"
 	:class="[$style.filePreview, { [$style.square]: square }]"
+	:data-scroll-anchor="`${note?.id}:${file.id}`"
 	@click="reveal(file)"
 >
 	<MkDriveFileThumbnail
@@ -25,7 +26,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</div>
 </div>
-<MkA v-else :class="[$style.filePreview, { [$style.square]: square }]" :to="to">
+<MkA v-else :class="[$style.filePreview, { [$style.square]: square }]" :data-scroll-anchor="`${note?.id}:${file.id}`" :to="to">
 	<MkDriveFileThumbnail
 		:file="file"
 		fit="cover"
@@ -47,6 +48,7 @@ import bytes from '@/filters/bytes.js';
 import MkDriveFileThumbnail from '@/components/MkDriveFileThumbnail.vue';
 
 defineProps<{
+	note?: Misskey.entities.Note;
 	file: Misskey.entities.DriveFile;
 	to: string;
 	square?: boolean;

@@ -155,6 +155,7 @@ import { QueueModule } from './QueueModule.js';
 import { QueueService } from './QueueService.js';
 import { LoggerService } from './LoggerService.js';
 import type { Provider } from '@nestjs/common';
+import { CirculationService } from './CirculationService.js';
 
 //#region 文字列ベースでのinjection用(循環参照対応のため)
 const $LoggerService: Provider = { provide: 'LoggerService', useExisting: LoggerService };
@@ -168,6 +169,7 @@ const $AntennaService: Provider = { provide: 'AntennaService', useExisting: Ante
 const $AchievementService: Provider = { provide: 'AchievementService', useExisting: AchievementService };
 const $AvatarDecorationService: Provider = { provide: 'AvatarDecorationService', useExisting: AvatarDecorationService };
 const $CaptchaService: Provider = { provide: 'CaptchaService', useExisting: CaptchaService };
+const $CirculationService: Provider = { provide: 'CirculationService', useExisting: CirculationService };
 const $CustomEmojiService: Provider = { provide: 'CustomEmojiService', useExisting: CustomEmojiService };
 const $DeleteAccountService: Provider = { provide: 'DeleteAccountService', useExisting: DeleteAccountService };
 const $DownloadService: Provider = { provide: 'DownloadService', useExisting: DownloadService };
@@ -321,6 +323,7 @@ const $ApQuestionService: Provider = { provide: 'ApQuestionService', useExisting
 		AchievementService,
 		AvatarDecorationService,
 		CaptchaService,
+		CirculationService,
 		CustomEmojiService,
 		DeleteAccountService,
 		DownloadService,
@@ -471,6 +474,7 @@ const $ApQuestionService: Provider = { provide: 'ApQuestionService', useExisting
 		$AchievementService,
 		$AvatarDecorationService,
 		$CaptchaService,
+		$CirculationService,
 		$CustomEmojiService,
 		$DeleteAccountService,
 		$DownloadService,
@@ -621,6 +625,7 @@ const $ApQuestionService: Provider = { provide: 'ApQuestionService', useExisting
 		AchievementService,
 		AvatarDecorationService,
 		CaptchaService,
+		CirculationService,
 		CustomEmojiService,
 		DeleteAccountService,
 		DownloadService,
@@ -770,6 +775,7 @@ const $ApQuestionService: Provider = { provide: 'ApQuestionService', useExisting
 		$AchievementService,
 		$AvatarDecorationService,
 		$CaptchaService,
+		$CirculationService,
 		$CustomEmojiService,
 		$DeleteAccountService,
 		$DownloadService,

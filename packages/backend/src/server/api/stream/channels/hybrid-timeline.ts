@@ -24,6 +24,7 @@ export class HybridTimelineChannel extends Channel {
 	private withRenotes: boolean;
 	private withReplies: boolean;
 	private withFiles: boolean;
+	private withPromotes: boolean;
 
 	constructor(
 		@Inject(REQUEST)
@@ -46,9 +47,11 @@ export class HybridTimelineChannel extends Channel {
 		this.withRenotes = !!(params.withRenotes ?? true);
 		this.withReplies = !!(params.withReplies ?? false);
 		this.withFiles = !!(params.withFiles ?? false);
+		this.withPromotes = !!(params.withPromotes ?? true);
 
 		// Subscribe events
 		this.subscriber.on('notesStream', this.onNote);
+		if (this.withPromotes) this.subscriber.on('circulationStream', this.onPromote);
 	}
 
 	@bindThis
@@ -120,8 +123,16 @@ export class HybridTimelineChannel extends Channel {
 	}
 
 	@bindThis
+	private onPromote(note: Packed<'Note'>) {
+		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0) || note.user.requireSigninToViewContents && this.user == null || this.isNoteMutedOrBlocked(note)) return;
+
+		this.send('promote', note);
+	}
+
+	@bindThis
 	public dispose(): void {
 		// Unsubscribe events
 		this.subscriber.off('notesStream', this.onNote);
+		if (this.withPromotes) this.subscriber.off('circulationStream', this.onPromote);
 	}
 }

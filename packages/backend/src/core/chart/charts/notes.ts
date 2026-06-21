@@ -66,4 +66,11 @@ export default class NotesChart extends Chart<typeof schema> { // eslint-disable
 			[`${prefix}.diffs.withFile`]: note.fileIds.length > 0 ? (isAdditional ? 1 : -1) : 0,
 		});
 	}
+
+	@bindThis
+	public promote(): void {
+		this.commit({
+			promote: 1,
+		});
+	}
 }

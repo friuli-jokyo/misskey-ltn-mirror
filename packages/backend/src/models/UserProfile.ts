@@ -341,6 +341,7 @@ export const ACHIEVEMENT_TYPES = [
 	'login800',
 	'login900',
 	'login1000',
+	'aFleetingDream',
 	'passedSinceAccountCreated1',
 	'passedSinceAccountCreated2',
 	'passedSinceAccountCreated3',
