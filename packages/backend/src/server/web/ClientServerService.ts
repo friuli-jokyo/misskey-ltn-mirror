@@ -293,7 +293,7 @@ export class ClientServerService {
 		});
 
 		fastify.get('/favicon.png', async (request, reply) => {
-			return reply.sendFile('/favicon.png', staticAssets);
+			return reply.sendFile('/favicon.png', this.staticAssets);
 		});
 
 		fastify.get('/apple-touch-icon.png', async (request, reply) => {

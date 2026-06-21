@@ -159,6 +159,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<template #footer>
 		<div v-if="isEditMode" :class="$style.footer">
 			<MkButton primary rounded @click="moveFilesBulk()"><i class="ti ti-folder-symlink"></i> {{ i18n.ts.move }}...</MkButton>
+			<MkButton danger rounded @click="deleteFilesBulk()"><i class="ti ti-trash"></i> {{ i18n.ts.delete }} {{ selectedFiles.length }}x</MkButton>
 		</div>
 	</template>
 </MkStickyContainer>
@@ -596,6 +597,35 @@ async function moveFilesBulk() {
 		folderId: folders[0] ? folders[0].id : null,
 		folder: folders[0] ?? null,
 	})));
+}
+
+async function deleteFilesBulk() {
+	if (selectedFiles.value.length === 0) return;
+
+	const { canceled } = await os.confirm({
+		type: 'warning',
+		text: i18n.ts.deleteAllFilesConfirm,
+	});
+
+	if (canceled) return;
+
+	const done = os.waiting();
+	try {
+		for (const file of selectedFiles.value) {
+			await misskeyApi('drive/files/delete', {
+				fileId: file.id,
+			});
+			globalEvents.emit('driveFilesDeleted', [file]);
+		}
+		done({ success: true });
+	} catch (err) {
+		done({ success: false });
+		await os.alert({
+			type: 'error',
+			title: i18n.ts.somethingHappened,
+			text: err instanceof Error ? err.message : String(err),
+		});
+	}
 }
 
 function goRoot() {

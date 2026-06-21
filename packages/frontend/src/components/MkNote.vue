@@ -16,6 +16,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<div v-if="(note as any).promoted" :class="$style.renote">
 		<i class="ti ti-car-fan" style="margin-right: 4px;"></i>
 		<span :class="$style.renoteText">{{ i18n.ts.promotedBecauseOfCirculation }}</span>
+		<div :class="$style.renoteInfo">
+			<button v-if="appearNote.clippedCount" ref="clippedCount" :class="$style.renoteTime" class="_button" :title="i18n.ts.clips" @mousedown.prevent="showClipsList()">
+				<i class="ti ti-paperclip"></i>
+				<p :class="$style.footerButtonCount">{{ number(appearNote.clippedCount) }}</p>
+			</button>
+		</div>
 	</div>
 	<div v-if="isRenote" :class="$style.renote">
 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
@@ -325,6 +331,7 @@ const renoteButton = useTemplateRef('renoteButton');
 const renoteTime = useTemplateRef('renoteTime');
 const reactButton = useTemplateRef('reactButton');
 const clipButton = useTemplateRef('clipButton');
+const clippedCount = useTemplateRef('clippedCount');
 const galleryEl = useTemplateRef('galleryEl');
 const isMyRenote = $i && ($i.id === note.userId);
 const showContent = ref(appearNote.cw != null && prefer.s.autoOpenCws.some((word) => appearNote.cw!.includes(word)));
@@ -743,6 +750,22 @@ async function showRenoteMenu() {
 			...((note.anonymouslySendToUser || note.anonymousChannelUsername || $i?.isModerator || $i?.isAdmin) ? [getUnrenote()] : []),
 		], renoteTime.value);
 	}
+}
+
+async function showClipsList() {
+	if (props.mock) {
+		return;
+	}
+
+	os.popupMenu(await misskeyApi('notes/clips', {
+		noteId: note.id,
+	}).then((clips) => clips.map((clip) => ({
+		type: 'link',
+		to: `/clips/${clip.id}`,
+		text: clip.name,
+		caption: clip.description,
+		avatar: clip.user,
+	}))), clippedCount.value);
 }
 
 function focus() {
