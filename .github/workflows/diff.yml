@@ -1,4 +1,5 @@
 name: diff
+permissions: {}
 on:
     workflow_dispatch:
     schedule:
@@ -10,15 +11,17 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
-        env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         steps:
             - name: Checkout
-              uses: actions/checkout@v6
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
             - name: Check repo version
               id: set_repo_version
+              env:
+                  WORKSPACE: ${{ github.workspace }}
               run: |
-                  repo_version=$(cat ${{ github.workspace }}/package.json | jq -r '.version')
+                  repo_version=$(jq -r '.version' "$WORKSPACE/package.json")
                   echo "repo_version=$repo_version" >> $GITHUB_ENV
                   echo "repo_version=$repo_version"
             - name: Check LTN version
@@ -29,23 +32,28 @@ jobs:
                   echo "ltn_version=$ltn_version"
             - name: Fetch and extract new files
               if: env.repo_version != env.ltn_version
+              env:
+                  WORKSPACE: ${{ github.workspace }}
+                  LTN_VERSION: ${{ env.ltn_version }}
               run: |
                   find . -type f -not \( -path './.git/*' -o -path './.github/workflows/*' -o -path ./.gitignore \) | xargs rm -rf
                   cd ~
-                  curl -sL 'https://live-theater.net/tarball/misskey-${{ env.ltn_version }}.tar.gz' > '${{ env.ltn_version }}.tar.gz'
-                  mkdir '${{ env.ltn_version }}' && tar -xf '${{ env.ltn_version }}.tar.gz' -C '${{ env.ltn_version }}' && cd '${{ env.ltn_version }}'
+                  curl -sL "https://live-theater.net/tarball/misskey-${LTN_VERSION}.tar.gz" > "${LTN_VERSION}.tar.gz"
+                  mkdir "${LTN_VERSION}" && tar -xf "${LTN_VERSION}.tar.gz" -C "${LTN_VERSION}" && cd "${LTN_VERSION}"
                   rm -rf .git
                   mv .github/workflows .github/workflows_orig || echo 'No workflows file'
                   mv .github/dependabot.yml .github/dependabot_orig.yml || echo 'No dependabot file'
                   shopt -s dotglob
-                  cp -r * -t '${{ github.workspace }}'
-                  cd '${{ github.workspace }}'
+                  cp -r * -t "$WORKSPACE"
+                  cd "$WORKSPACE"
             - name: Commit and Push
               if: env.repo_version != env.ltn_version
               id: CaP
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
                   git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
                   git config --local user.name "github-actions[bot]"
                   git add -A
-                  git commit -m "${{ env.ltn_version }}"
-                  git push
+                  git commit -m "$ltn_version"
+                  git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:${GITHUB_REF_NAME}
