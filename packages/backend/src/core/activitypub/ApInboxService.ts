@@ -4,7 +4,7 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { In } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import * as Redis from 'ioredis';
 import { DI } from '@/di-symbols.js';
 import type { Config } from '@/config.js';
@@ -16,6 +16,8 @@ import { UserBlockingService } from '@/core/UserBlockingService.js';
 import { NoteDeleteService } from '@/core/NoteDeleteService.js';
 import { NoteCreateService } from '@/core/NoteCreateService.js';
 import { acquireApObjectLock } from '@/misc/distributed-lock.js';
+import { isQuote, isRenote } from '@/misc/is-renote.js';
+import { recordDeletedNotes } from '@/misc/note-dependents.js';
 import { concat, toArray, toSingle, unique } from '@/misc/prelude/array.js';
 import type Logger from '@/logger.js';
 import { IdService } from '@/core/IdService.js';
@@ -24,14 +26,16 @@ import { UtilityService } from '@/core/UtilityService.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { QueueService } from '@/core/QueueService.js';
-import type { UsersRepository, NotesRepository, FollowingsRepository, AbuseUserReportsRepository, FollowRequestsRepository, MiMeta } from '@/models/_.js';
+import type { UsersRepository, FollowingsRepository, AbuseUserReportsRepository, FollowRequestsRepository, MiMeta } from '@/models/_.js';
 import { bindThis } from '@/decorators.js';
 import type { MiRemoteUser } from '@/models/User.js';
+import type { MiNote } from '@/models/Note.js';
 import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { AbuseReportService } from '@/core/AbuseReportService.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
+import { synonymousUris } from './misc/check-against-url.js';
 import { getApHrefNullable, getApId, getApIds, getApType, isAccept, isActor, isAdd, isAnnounce, isBlock, isCollection, isCollectionOrOrderedCollection, isCreate, isDelete, isFlag, isFollow, isLike, isMove, isPost, isReject, isRemove, isTombstone, isUndo, isUpdate, validActor, validPost } from './type.js';
-import { ApNoteService } from './models/ApNoteService.js';
+import { ApNoteService, unfetchableObjectErrorIds } from './models/ApNoteService.js';
 import { ApLoggerService } from './ApLoggerService.js';
 import { ApDbResolverService } from './ApDbResolverService.js';
 import { ApResolverService } from './ApResolverService.js';
@@ -39,7 +43,7 @@ import { ApAudienceService } from './ApAudienceService.js';
 import { ApPersonService } from './models/ApPersonService.js';
 import { ApQuestionService } from './models/ApQuestionService.js';
 import type { Resolver } from './ApResolverService.js';
-import type { IAccept, IAdd, IAnnounce, IBlock, ICreate, IDelete, IFlag, IFollow, ILike, IObject, IReject, IRemove, IUndo, IUpdate, IMove, IPost } from './type.js';
+import type { IAccept, IAdd, IAnnounce, IBlock, ICreate, IDelete, IFlag, IFollow, ILike, IObject, IReject, IRemove, IUndo, IUpdate, IMove } from './type.js';
 
 @Injectable()
 export class ApInboxService {
@@ -52,11 +56,11 @@ export class ApInboxService {
 		@Inject(DI.redis)
 		private redisClient: Redis.Redis,
 
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
-
-		@Inject(DI.notesRepository)
-		private notesRepository: NotesRepository,
 
 		@Inject(DI.followingsRepository)
 		private followingsRepository: FollowingsRepository,
@@ -208,6 +212,8 @@ export class ApInboxService {
 		} catch (err) {
 			if (err instanceof IdentifiableError && err.id === '51c42bb4-931a-456b-bff7-e5a8a70dd298') {
 				return 'skip: already reacted';
+			} else if (err instanceof IdentifiableError && err.id === 'a149b3de-783e-433e-9ee6-d2642d817af4') {
+				return `skip: target note not found ${targetUri}`;
 			} else {
 				throw err;
 			}
@@ -250,7 +256,7 @@ export class ApInboxService {
 		// relay
 		const match = activity.id?.match(/follow-relay\/(\w+)/);
 		if (match) {
-			return await this.relayService.relayAccepted(match[1]);
+			return await this.relayService.relayAccepted(match[1], actor);
 		}
 
 		await this.userFollowingService.acceptFollowRequest(actor, follower);
@@ -287,82 +293,76 @@ export class ApInboxService {
 		resolver ??= await this.apResolverService.createResolver();
 
 		if (!activity.object) return 'skip: activity has no object property';
-		const targetUri = getApId(activity.object);
-		if (targetUri.startsWith('bear:')) return 'skip: bearcaps url not supported.';
+		const targetUri = typeof activity.object === 'string' ? activity.object : typeof activity.object.id === 'string' ? activity.object.id : null;
+		if (targetUri?.startsWith('bear:')) return 'skip: bearcaps url not supported.';
+		if (typeof activity.object === 'object' && !isPost(activity.object)) return `skip: unknown object type ${getApType(activity.object)}`;
+		if (activity.published && !this.idService.isSafeT(new Date(activity.published).valueOf())) return 'skip: malformed createdAt';
 
-		const target = await resolver.resolve(activity.object).catch(e => {
-			this.logger.error(`Resolution failed: ${e}`);
-			throw e;
-		});
+		// リレーからのAnnounceはリノートを作成せず、ノートを直接公開する
+		if (await this.relayService.isRelayActor(actor)) return await this.announceFromRelay(activity, targetUri, resolver);
 
-		if (isPost(target)) return await this.announceNote(actor, activity, target);
+		const announced = await this.apDbResolverService.getNoteReferenceFromApId(uri);
+		if (announced.note != null || announced.formerId != null) return;
 
-		return `skip: unknown object type ${getApType(target)}`;
+		const target = await this.apNoteService.resolveParent(activity.object, resolver, uri, new URL(uri));
+		switch (target.type) {
+			case 'note': {
+				if (isRenote(target.note) && !isQuote(target.note)) return 'skip: announce target is a pure renote';
+				if (!await this.noteEntityService.isVisibleForMe(target.note, actor.id)) return 'skip: invalid actor for this activity';
+				return await this.createRenote(actor, activity, { renote: target.note }, resolver);
+			}
+			case 'former': return await this.createRenote(actor, activity, { renoteFormerId: target.formerId }, resolver);
+			case 'waiting': return await this.createRenote(actor, activity, { unresolvedRenoteUri: target.uri }, resolver);
+			case 'gone': return await this.createRenote(actor, activity, { unlinkableRenote: true }, resolver);
+			case 'rejected': return `skip: announce target ${targetUri} is rejected - ${target.reason}`;
+		}
 	}
 
 	@bindThis
-	private async announceNote(actor: MiRemoteUser, activity: IAnnounce, target: IPost, resolver?: Resolver): Promise<string | void> {
+	private async announceFromRelay(activity: IAnnounce, targetUri: string | null, resolver: Resolver): Promise<string | void> {
+		const candidates = targetUri != null && URL.canParse(targetUri) ? unique([targetUri, ...synonymousUris(targetUri)]) : [];
+		for (const candidate of candidates) {
+			if ((await this.apDbResolverService.getNoteReferenceFromApId(candidate)).note != null) return;
+		}
+
+		const uri = getApId(activity);
+		const target = await this.apNoteService.resolveParent(activity.object, resolver, uri, new URL(uri));
+		if (target.type === 'former') return 'skip: announce target was deleted';
+		if (target.type === 'rejected') return `skip: announce target ${targetUri} is rejected - ${target.reason}`;
+		if (target.type !== 'note') return 'skip: announce target is unresolvable';
+
+		this.logger.info(`Publishing relay-delivered note: ${targetUri}`);
+		const noteObj = await this.noteEntityService.pack(target.note, null, { skipHide: true, withReactionAndUserPairCache: true });
+		this.globalEventService.publishNotesStream(noteObj);
+	}
+
+	@bindThis
+	private async createRenote(actor: MiRemoteUser, activity: IAnnounce, target: { renote: MiNote } | { renoteFormerId: MiNote['id'] } | { unresolvedRenoteUri: string } | { unlinkableRenote: true }, resolver: Resolver): Promise<string | void> {
 		if (actor.isSuspended) {
 			return;
 		}
 
-		// リレーからのAnnounceかチェック
-		const fromRelay = await this.relayService.isRelayActor(actor);
-		const uri = getApId(fromRelay ? target : activity);
+		const uri = getApId(activity);
 
 		// アナウンス先が許可されているかチェック
 		if (!this.utilityService.isFederationAllowedUri(uri)) return;
 
-		const activityUri = getApId(activity);
-		const unlock = await acquireApObjectLock(this.redisClient, activityUri);
+		const unlock = await acquireApObjectLock(this.redisClient, uri);
 
 		try {
 			// 既に同じURIを持つものが登録されていないかチェック
-			const exist = await this.apNoteService.fetchNote(uri);
-			if (exist) {
+			const exist = await this.apDbResolverService.getNoteReferenceFromApId(uri);
+			if (exist.note != null || exist.formerId != null) {
 				return;
-			}
-
-			// Announce対象をresolve
-			let renote;
-			try {
-				renote = await this.apNoteService.resolveNote(target, { resolver });
-				if (renote == null) return 'announce target is null';
-			} catch (err) {
-				// 対象が4xxならスキップ
-				if (err instanceof StatusError) {
-					if (!err.isRetryable) {
-						return `Ignored announce target ${target.id} - ${err.statusCode}`;
-					}
-					return `Error in announce target ${target.id} - ${err.statusCode}`;
-				}
-				throw err;
-			}
-
-			// リレーからのAnnounceはリノートを作成せず、ノートを直接公開する
-			if (fromRelay) {
-				this.logger.info(`Publishing relay-delivered note: ${uri}`);
-				const noteObj = await this.noteEntityService.pack(renote, null, { skipHide: true, withReactionAndUserPairCache: true });
-				this.globalEventService.publishNotesStream(noteObj);
-				return;
-			}
-
-			if (!await this.noteEntityService.isVisibleForMe(renote, actor.id)) {
-				return 'skip: invalid actor for this activity';
 			}
 
 			this.logger.info(`Creating the (Re)Note: ${uri}`);
 
 			const activityAudience = await this.apAudienceService.parseAudience(actor, activity.to, activity.cc, resolver);
-			const createdAt = activity.published ? new Date(activity.published) : null;
-
-			if (createdAt && createdAt < this.idService.parse(renote.id).date) {
-				return 'skip: malformed createdAt';
-			}
 
 			await this.noteCreateService.create(actor, {
-				createdAt,
-				renote,
+				createdAt: activity.published ? new Date(activity.published) : null,
+				...target,
 				visibility: activityAudience.visibility,
 				visibleUsers: activityAudience.visibleUsers,
 				uri,
@@ -456,8 +456,9 @@ export class ApInboxService {
 		const unlock = await acquireApObjectLock(this.redisClient, uri);
 
 		try {
-			const exist = await this.apNoteService.fetchNote(note);
-			if (exist) return 'skip: note exists';
+			const reference = await this.apDbResolverService.getNoteReferenceFromApId(note);
+			if (reference.note != null) return 'skip: note exists';
+			if (reference.formerId != null) return 'skip: note was deleted';
 
 			await this.apNoteService.createNote(note, actor, resolver, silent);
 			return 'ok';
@@ -522,11 +523,13 @@ export class ApInboxService {
 			return `skip: delete actor ${actor.uri} !== ${uri}`;
 		}
 
-		if (!(await this.usersRepository.update({ id: actor.id, isDeleted: false }, { isDeleted: true })).affected) {
+		if (!(await this.usersRepository.existsBy({ id: actor.id, isDeleted: false }))) {
 			return 'skip: already deleted or actor not found';
 		}
 
 		const job = await this.queueService.createDeleteAccountJob(actor);
+
+		await this.usersRepository.update({ id: actor.id, isDeleted: false }, { isDeleted: true });
 
 		this.globalEventService.publishInternalEvent('remoteUserUpdated', { id: actor.id });
 
@@ -619,7 +622,7 @@ export class ApInboxService {
 		// relay
 		const match = activity.id?.match(/follow-relay\/(\w+)/);
 		if (match) {
-			return await this.relayService.relayRejected(match[1]);
+			return await this.relayService.relayRejected(match[1], actor);
 		}
 
 		await this.userFollowingService.remoteReject(actor, follower);
@@ -659,16 +662,22 @@ export class ApInboxService {
 		// eslint-disable-next-line no-param-reassign
 		resolver ??= await this.apResolverService.createResolver();
 
-		const object = await resolver.resolve(activity.object).catch(e => {
+		let object: IObject;
+		try {
+			object = await resolver.resolve(activity.object);
+		} catch (e) {
 			this.logger.error(`Resolution failed: ${e}`);
-			throw e;
-		});
+			if (typeof activity.object !== 'string' || this.utilityService.extractDbHost(activity.object) !== this.utilityService.extractDbHost(actor.uri)) throw e;
+			const unfetchable = (e instanceof StatusError && !e.isRetryable) || (e instanceof IdentifiableError && unfetchableObjectErrorIds.includes(e.id));
+			if (!unfetchable && !resolver.isLastAttempt()) throw e;
+			return await this.undoAnnounce(actor, activity.object, true);
+		}
 
 		// don't queue because the sender may attempt again when timeout
 		if (isFollow(object)) return await this.undoFollow(actor, object);
 		if (isBlock(object)) return await this.undoBlock(actor, object);
 		if (isLike(object)) return await this.undoLike(actor, object);
-		if (isAnnounce(object)) return await this.undoAnnounce(actor, object);
+		if (isAnnounce(object)) return await this.undoAnnounce(actor, getApId(object), object.actor != null ? getApId(object.actor) === actor.uri : typeof activity.object === 'string');
 		if (isAccept(object)) return await this.undoAccept(actor, object);
 
 		return `skip: unknown object type ${getApType(object)}`;
@@ -697,18 +706,43 @@ export class ApInboxService {
 	}
 
 	@bindThis
-	private async undoAnnounce(actor: MiRemoteUser, activity: IAnnounce): Promise<string> {
-		const uri = getApId(activity);
+	private async undoAnnounce(actor: MiRemoteUser, uri: string, claimedByActor: boolean): Promise<string> {
+		const unlock = await acquireApObjectLock(this.redisClient, uri);
 
-		const note = await this.notesRepository.findOneBy({
-			uri,
-			userId: actor.id,
+		try {
+			const reference = await this.apDbResolverService.getNoteReferenceFromApId(uri);
+			let note = reference.note;
+
+			if (note == null && reference.formerId == null) {
+				const announcedByActor = this.utilityService.extractDbHost(uri) === this.utilityService.extractDbHost(actor.uri) && claimedByActor;
+				if (!announcedByActor) return 'skip: no such Announce';
+
+				if (await this.recordUndoneAnnounce(uri, this.idService.gen())) return 'ok: recorded';
+
+				note = await this.apDbResolverService.getNoteFromApId(uri);
+			}
+
+			if (!note || note.userId !== actor.id) return 'skip: no such Announce';
+
+			await this.noteDeleteService.delete(actor, note);
+			return 'ok: deleted';
+		} finally {
+			unlock();
+		}
+	}
+
+	@bindThis
+	private async recordUndoneAnnounce(uri: string, formerId: MiNote['id']): Promise<boolean> {
+		return await this.db.transaction(async transactionalEntityManager => {
+			const recorded: unknown[] = await transactionalEntityManager.query(
+				'INSERT INTO "note_uri" ("uri", "noteId") VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING "noteId"',
+				[uri, formerId],
+			);
+			if (recorded.length === 0) return false;
+
+			await recordDeletedNotes(transactionalEntityManager, [{ id: formerId, uri: null }]);
+			return true;
 		});
-
-		if (!note) return 'skip: no such Announce';
-
-		await this.noteDeleteService.delete(actor, note);
-		return 'ok: deleted';
 	}
 
 	@bindThis

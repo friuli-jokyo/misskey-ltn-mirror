@@ -4,7 +4,7 @@
  */
 
 import { Inject, Injectable, Scope } from '@nestjs/common';
-import { IsNull, Not } from 'typeorm';
+import { DataSource, EntityNotFoundError, IsNull, Not } from 'typeorm';
 import type { MiLocalUser, MiRemoteUser } from '@/models/User.js';
 import type {
 	FollowRequestsRepository,
@@ -23,6 +23,7 @@ import { LoggerService } from '@/core/LoggerService.js';
 import type Logger from '@/logger.js';
 import { SystemAccountService } from '@/core/SystemAccountService.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
+import { findNoteReactionById } from '@/misc/note-reaction-lookup.js';
 import type { ICollection, IObject, IOrderedCollection } from './type.js';
 import { isCollectionOrOrderedCollection } from './type.js';
 import { ApDbResolverService } from './ApDbResolverService.js';
@@ -37,6 +38,7 @@ export class Resolver {
 	private user?: MiLocalUser;
 	private logger: Logger;
 	private recursionLimit = 256;
+	private lastAttempt = false;
 
 	constructor(
 		@Inject(DI.config)
@@ -56,6 +58,9 @@ export class Resolver {
 
 		@Inject(DI.noteReactionsRepository)
 		private noteReactionsRepository: NoteReactionsRepository,
+
+		@Inject(DI.db)
+		private db: DataSource,
 
 		@Inject(DI.followRequestsRepository)
 		private followRequestsRepository: FollowRequestsRepository,
@@ -80,6 +85,16 @@ export class Resolver {
 	@bindThis
 	public getRecursionLimit(): number {
 		return this.recursionLimit;
+	}
+
+	@bindThis
+	public isLastAttempt(): boolean {
+		return this.lastAttempt;
+	}
+
+	@bindThis
+	public markLastAttempt(): void {
+		this.lastAttempt = true;
 	}
 
 	@bindThis
@@ -150,6 +165,7 @@ export class Resolver {
 	private resolveLocal(url: string): Promise<IObject> {
 		const parsed = this.apDbResolverService.parseUri(url);
 		if (!parsed.local) throw new IdentifiableError('02b40cd0-fa92-4b0c-acc9-fb2ada952ab8', 'resolveLocal: not local');
+		if (!parsed.id) throw new EntityNotFoundError(parsed.type, { id: parsed.id });
 
 		switch (parsed.type) {
 			case 'notes':
@@ -173,8 +189,14 @@ export class Resolver {
 				])
 					.then(([note, poll]) => this.apRendererService.renderQuestion({ id: note.userId }, note, poll));
 			case 'likes':
-				return this.noteReactionsRepository.findOneByOrFail({ id: parsed.id }).then(async reaction =>
-					this.apRendererService.addContext(await this.apRendererService.renderLike(reaction, { uri: null })));
+				if (parsed.rest != null) {
+					return this.noteReactionsRepository.findOneByOrFail({ noteId: parsed.id, id: parsed.rest }).then(async reaction =>
+						this.apRendererService.addContext(await this.apRendererService.renderLike(reaction, { uri: null })));
+				}
+				return findNoteReactionById(this.db, parsed.id).then(async reaction => {
+					if (reaction == null) throw new EntityNotFoundError(this.noteReactionsRepository.metadata.target, { id: parsed.id });
+					return this.apRendererService.addContext(await this.apRendererService.renderLike(reaction, { uri: null }));
+				});
 			case 'follows':
 				return this.followRequestsRepository.findOneBy({ id: parsed.id })
 					.then(async followRequest => {

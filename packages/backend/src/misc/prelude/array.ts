@@ -57,6 +57,14 @@ export function unique<T>(xs: T[]): T[] {
 	return [...new Set(xs)];
 }
 
+export function chunk<T>(xs: T[], size: number): T[][] {
+	const result: T[][] = [];
+	for (let i = 0; i < xs.length; i += size) {
+		result.push(xs.slice(i, i + size));
+	}
+	return result;
+}
+
 export function sum(xs: number[]): number {
 	return xs.reduce((a, b) => a + b, 0);
 }

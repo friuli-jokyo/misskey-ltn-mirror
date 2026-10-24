@@ -30,9 +30,11 @@ import type {
 	GalleryPostsRepository,
 	MiFollowing,
 	MiMeta,
+	MiNote,
 	MiUserNotePining,
 	MiUserProfile,
 	MutingsRepository,
+	NotesRepository,
 	RenoteMutingsRepository,
 	UserMemoRepository,
 	UserNotePiningsRepository,
@@ -49,6 +51,7 @@ import type { AnnouncementService } from '@/core/AnnouncementService.js';
 import type { CustomEmojiService } from '@/core/CustomEmojiService.js';
 import { AvatarDecorationService } from '@/core/AvatarDecorationService.js';
 import { ChatService } from '@/core/ChatService.js';
+import { groupByPrefix } from '@/misc/partition.js';
 import type { OnModuleInit } from '@nestjs/common';
 import type { NoteEntityService } from './NoteEntityService.js';
 import type { PageEntityService } from './PageEntityService.js';
@@ -134,6 +137,9 @@ export class UserEntityService implements OnModuleInit {
 
 		@Inject(DI.userNotePiningsRepository)
 		private userNotePiningsRepository: UserNotePiningsRepository,
+
+		@Inject(DI.notesRepository)
+		private notesRepository: NotesRepository,
 
 		@Inject(DI.userProfilesRepository)
 		private userProfilesRepository: UserProfilesRepository,
@@ -409,6 +415,15 @@ export class UserEntityService implements OnModuleInit {
 		return `${this.config.url}/users/${userId}`;
 	}
 
+	@bindThis
+	private async findPinnedNotes(pins: MiUserNotePining[]): Promise<Map<MiNote['id'], MiNote>> {
+		const notes = new Map<MiNote['id'], MiNote>();
+		for (const ids of groupByPrefix(pins.map(pin => pin.noteId)).values()) {
+			for (const note of await this.notesRepository.findBy({ id: In(ids) })) notes.set(note.id, note);
+		}
+		return notes;
+	}
+
 	public async pack<S extends 'MeDetailed' | 'UserDetailedNotMe' | 'UserDetailed' | 'UserLite' = 'UserLite'>(
 		src: MiUser['id'] | MiUser,
 		me?: { id: MiUser['id']; } | null | undefined,
@@ -463,9 +478,17 @@ export class UserEntityService implements OnModuleInit {
 			} else {
 				pins = await this.userNotePiningsRepository.createQueryBuilder('pin')
 					.where('pin.userId = :userId', { userId: user.id })
-					.innerJoinAndSelect('pin.note', 'note')
 					.orderBy('pin.id', 'DESC')
 					.getMany();
+
+				if (pins.length > 0) {
+					const pinnedNotes = await this.findPinnedNotes(pins);
+
+					for (const pin of pins) {
+						pin.note = pinnedNotes.get(pin.noteId) ?? null;
+					}
+					pins = pins.filter(pin => pin.note != null);
+				}
 			}
 		}
 
@@ -568,7 +591,6 @@ export class UserEntityService implements OnModuleInit {
 				followersVisibility: profile!.followersVisibility,
 				followingVisibility: profile!.followingVisibility,
 				chatScope: user.chatScope,
-				federationPolicy: user.federationPolicy,
 				canChat: this.roleService.getUserPolicies(user.id).then(r => r.chatAvailability === 'available'),
 				roles: this.roleService.getUserRoles(user.id).then(roles => roles.filter(role => role.isPublic).sort((a, b) => b.displayOrder - a.displayOrder).map(role => ({
 					id: role.id,
@@ -604,6 +626,8 @@ export class UserEntityService implements OnModuleInit {
 				autoSensitive: profile!.autoSensitive,
 				carefulBot: profile!.carefulBot,
 				autoAcceptFollowed: profile!.autoAcceptFollowed,
+				followApprovalLocalSeconds: profile!.followApprovalLocalSeconds,
+				followApprovalRemoteSeconds: profile!.followApprovalRemoteSeconds,
 				noCrawle: profile!.noCrawle,
 				preventAiLearning: profile!.preventAiLearning,
 				isExplorable: user.isExplorable,
@@ -706,8 +730,15 @@ export class UserEntityService implements OnModuleInit {
 					userRelations = await this.getRelations(meId, _userIds);
 					pinNotes = await this.userNotePiningsRepository.createQueryBuilder('pin')
 						.where('pin.userId IN (:...userIds)', { userIds: _userIds })
-						.innerJoinAndSelect('pin.note', 'note')
 						.getMany()
+						.then(async pins => {
+							if (pins.length === 0) return pins;
+							const pinnedNotes = await this.findPinnedNotes(pins);
+							for (const pin of pins) {
+								pin.note = pinnedNotes.get(pin.noteId) ?? null;
+							}
+							return pins.filter(pin => pin.note != null);
+						})
 						.then(pinsNotes => {
 							const map = new Map<MiUser['id'], MiUserNotePining[]>();
 							for (const note of pinsNotes) {

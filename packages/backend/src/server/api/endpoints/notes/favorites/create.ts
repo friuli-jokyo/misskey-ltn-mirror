@@ -5,12 +5,14 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import ms from 'ms';
-import type { NoteFavoritesRepository } from '@/models/_.js';
+import { DataSource } from 'typeorm';
+import type { NoteFavoritesRepository, MiNoteFavorite } from '@/models/_.js';
 import { IdService } from '@/core/IdService.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { GetterService } from '@/server/api/GetterService.js';
 import { DI } from '@/di-symbols.js';
 import { AchievementService } from '@/core/AchievementService.js';
+import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { ApiError } from '../../../error.js';
 
 export const meta = {
@@ -52,12 +54,16 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.noteFavoritesRepository)
 		private noteFavoritesRepository: NoteFavoritesRepository,
 
 		private idService: IdService,
 		private getterService: GetterService,
 		private achievementService: AchievementService,
+		private noteEntityService: NoteEntityService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			// Get favoritee
@@ -65,6 +71,11 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				if (err.id === '9725d0ce-ba28-4dde-95a7-2cbb2c15de24') throw new ApiError(meta.errors.noSuchNote);
 				throw err;
 			});
+
+			// check visibility
+			if (!await this.noteEntityService.isVisibleForMe(note, me.id)) {
+				throw new ApiError(meta.errors.noSuchNote);
+			}
 
 			// if already favorited
 			const exist = await this.noteFavoritesRepository.exists({
@@ -79,11 +90,17 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 
 			// Create favorite
-			await this.noteFavoritesRepository.insert({
-				id: this.idService.gen(),
-				noteId: note.id,
-				userId: me.id,
+			const inserted: { id: MiNoteFavorite['id'] }[] = await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+				await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [me.id]);
+				return await transactionalEntityManager.query(
+					'WITH "target" AS (SELECT "id" FROM "note" WHERE "id" = $3 FOR KEY SHARE) INSERT INTO "note_favorite" ("id", "noteId", "userId") SELECT $1, "id", $2 FROM "target" RETURNING "id"',
+					[this.idService.gen(), me.id, note.id],
+				);
 			});
+
+			if (inserted.length === 0) {
+				throw new ApiError(meta.errors.noSuchNote);
+			}
 
 			if (note.userHost == null && note.userId !== me.id) {
 				this.achievementService.create(note.userId, 'myNoteFavorited1');

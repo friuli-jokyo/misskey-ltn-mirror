@@ -4,6 +4,7 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { DI } from '@/di-symbols.js';
 import type { EmojisRepository, NoteReactionsRepository, UsersRepository, NotesRepository, MiMeta } from '@/models/_.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
@@ -73,6 +74,9 @@ export class ReactionService {
 		@Inject(DI.meta)
 		private meta: MiMeta,
 
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
 
@@ -140,7 +144,9 @@ export class ReactionService {
 					});
 
 				if (emoji) {
-					if (emoji.roleIdsThatCanBeUsedThisEmojiAsReaction.length === 0 || (await this.roleService.getUserRoles(user.id)).some(r => emoji.roleIdsThatCanBeUsedThisEmojiAsReaction.includes(r.id))) {
+					const canUseLocalOnlyEmoji = note.userHost === reacterHost && (note.renoteUserHost == null || note.renoteUserHost === reacterHost);
+
+					if ((!emoji.localOnly || canUseLocalOnlyEmoji) && (emoji.roleIdsThatCanBeUsedThisEmojiAsReaction.length === 0 || (await this.roleService.getUserRoles(user.id)).some(r => emoji.roleIdsThatCanBeUsedThisEmojiAsReaction.includes(r.id)))) {
 						reaction = reacterHost ? `:${name}@${reacterHost}:` : `:${name}:`;
 
 						// センシティブ
@@ -172,7 +178,7 @@ export class ReactionService {
 		};
 
 		try {
-			await this.noteReactionsRepository.insert(record);
+			await this.insertReaction(record);
 		} catch (e) {
 			if (isDuplicateKeyValueError(e)) {
 				const exists = await this.noteReactionsRepository.findOneByOrFail({
@@ -183,7 +189,7 @@ export class ReactionService {
 				if (exists.reaction !== reaction) {
 					// 別のリアクションがすでにされていたら置き換える
 					await this.delete(user, note);
-					await this.noteReactionsRepository.insert(record);
+					await this.insertReaction(record);
 				} else {
 					// 同じリアクションがすでにされていたらエラー
 					throw new IdentifiableError('51c42bb4-931a-456b-bff7-e5a8a70dd298');
@@ -197,15 +203,15 @@ export class ReactionService {
 		if (this.meta.enableReactionsBuffering) {
 			await this.reactionsBufferingService.create(note.id, user.id, reaction, note.reactionAndUserPairCache);
 		} else {
-			const sql = `jsonb_set("reactions", '{${reaction}}', (COALESCE("reactions"->>'${reaction}', '0')::int + 1)::text::jsonb)`;
 			await this.notesRepository.createQueryBuilder().update()
 				.set({
-					reactions: () => sql,
+					reactions: () => `jsonb_set("reactions", ARRAY[:reaction], (COALESCE("reactions"->>:reaction, '0')::int + 1)::text::jsonb)`,
 					...(note.reactionAndUserPairCache.length < PER_NOTE_REACTION_USER_PAIR_CACHE_MAX ? {
-						reactionAndUserPairCache: () => `array_append("reactionAndUserPairCache", '${user.id}/${reaction}')`,
+						reactionAndUserPairCache: () => `array_append("reactionAndUserPairCache", :pair)`,
 					} : {}),
 				})
 				.where('id = :id', { id: note.id })
+				.setParameters({ reaction, pair: `${user.id}/${reaction}` })
 				.execute();
 		}
 
@@ -287,6 +293,23 @@ export class ReactionService {
 	}
 
 	@bindThis
+	private async insertReaction(record: MiNoteReaction): Promise<void> {
+		await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+			const users: unknown[] = await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [record.userId]);
+			if (users.length === 0) throw new IdentifiableError('cc7e1130-6bf7-4105-adeb-25f799da854f', 'No such user.');
+
+			const inserted: { id: MiNoteReaction['id'] }[] = await transactionalEntityManager.query(
+				'WITH "target" AS (SELECT "id" FROM "note" WHERE "id" = $4 FOR KEY SHARE) INSERT INTO "note_reaction" ("id", "noteId", "userId", "reaction") SELECT $1, "id", $2, $3 FROM "target" RETURNING "id"',
+				[record.id, record.userId, record.reaction, record.noteId],
+			);
+
+			if (inserted.length === 0) {
+				throw new IdentifiableError('a149b3de-783e-433e-9ee6-d2642d817af4', 'No such note.');
+			}
+		});
+	}
+
+	@bindThis
 	public async delete(user: { id: MiUser['id']; host: MiUser['host']; isBot: MiUser['isBot']; }, note: MiNote) {
 		// if already unreacted
 		const exist = await this.noteReactionsRepository.findOneBy({
@@ -299,7 +322,7 @@ export class ReactionService {
 		}
 
 		// Delete reaction
-		const result = await this.noteReactionsRepository.delete(exist.id);
+		const result = await this.noteReactionsRepository.delete({ id: exist.id, noteId: exist.noteId });
 
 		if (result.affected !== 1) {
 			throw new IdentifiableError('60527ec9-b4cb-4a88-a6bd-32d3ad26817d', 'not reacted');
@@ -309,13 +332,13 @@ export class ReactionService {
 		if (this.meta.enableReactionsBuffering) {
 			await this.reactionsBufferingService.delete(note.id, user.id, exist.reaction);
 		} else {
-			const sql = `jsonb_set("reactions", '{${exist.reaction}}', (COALESCE("reactions"->>'${exist.reaction}', '0')::int - 1)::text::jsonb)`;
 			await this.notesRepository.createQueryBuilder().update()
 				.set({
-					reactions: () => sql,
-					reactionAndUserPairCache: () => `array_remove("reactionAndUserPairCache", '${user.id}/${exist.reaction}')`,
+					reactions: () => `jsonb_set("reactions", ARRAY[:reaction], (COALESCE("reactions"->>:reaction, '0')::int - 1)::text::jsonb)`,
+					reactionAndUserPairCache: () => `array_remove("reactionAndUserPairCache", :pair)`,
 				})
 				.where('id = :id', { id: note.id })
+				.setParameters({ reaction: exist.reaction, pair: `${user.id}/${exist.reaction}` })
 				.execute();
 		}
 

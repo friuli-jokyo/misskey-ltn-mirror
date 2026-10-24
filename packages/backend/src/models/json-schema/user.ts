@@ -372,11 +372,6 @@ export const packedUserDetailedNotMeOnlySchema = {
 			nullable: false, optional: false,
 			enum: ['everyone', 'following', 'followers', 'mutual', 'none'],
 		},
-		federationPolicy: {
-			type: 'string',
-			nullable: false, optional: false,
-			enum: ['none', 'lax', 'strict'],
-		},
 		canChat: {
 			type: 'boolean',
 			nullable: false, optional: false,
@@ -508,6 +503,14 @@ export const packedMeDetailedOnlySchema = {
 		autoAcceptFollowed: {
 			type: 'boolean',
 			nullable: false, optional: false,
+		},
+		followApprovalLocalSeconds: {
+			type: 'number',
+			nullable: true, optional: false,
+		},
+		followApprovalRemoteSeconds: {
+			type: 'number',
+			nullable: true, optional: false,
 		},
 		noCrawle: {
 			type: 'boolean',

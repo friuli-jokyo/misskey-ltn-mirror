@@ -48,7 +48,6 @@ export class FileServerProxyHandler {
 			return;
 		}
 
-		// Check banned media domains
 		try {
 			const parsed = new URL(url);
 			for (const domain of this.meta.bannedMediaDomains) {

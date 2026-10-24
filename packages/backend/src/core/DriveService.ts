@@ -7,12 +7,13 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
 import sharp from 'sharp';
+import type { Sharp } from 'sharp';
 import { sharpBmp } from '@misskey-dev/sharp-read-bmp';
 import * as Redis from 'ioredis';
-import { In, IsNull } from 'typeorm';
+import { DataSource, In, IsNull } from 'typeorm';
 import { DeleteObjectCommandInput, PutObjectCommandInput, NoSuchKey } from '@aws-sdk/client-s3';
 import { DI } from '@/di-symbols.js';
-import type { DriveFilesRepository, UsersRepository, DriveFoldersRepository, UserProfilesRepository, MiMeta } from '@/models/_.js';
+import type { DriveFilesRepository, DriveFileMd5sRepository, UsersRepository, DriveFoldersRepository, UserProfilesRepository, MiMeta } from '@/models/_.js';
 import type { Config } from '@/config.js';
 import Logger from '@/logger.js';
 import type { MiRemoteUser, MiUser } from '@/models/User.js';
@@ -102,6 +103,9 @@ export class DriveService {
 		@Inject(DI.meta)
 		private meta: MiMeta,
 
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.redis)
 		private redisClient: Redis.Redis,
 
@@ -113,6 +117,9 @@ export class DriveService {
 
 		@Inject(DI.driveFilesRepository)
 		private driveFilesRepository: DriveFilesRepository,
+
+		@Inject(DI.driveFileMd5sRepository)
+		private driveFileMd5sRepository: DriveFileMd5sRepository,
 
 		@Inject(DI.driveFoldersRepository)
 		private driveFoldersRepository: DriveFoldersRepository,
@@ -304,7 +311,7 @@ export class DriveService {
 			};
 		}
 
-		let img: sharp.Sharp | null = null;
+		let img: Sharp | null = null;
 		let satisfyWebpublic: boolean;
 		let isAnimated: boolean;
 
@@ -501,10 +508,13 @@ export class DriveService {
 
 		if (user && !force) {
 		// Check if there is a file with the same hash
-			const matched = await this.driveFilesRepository.findOneBy({
+			const md5Lookup = await this.driveFileMd5sRepository.findOneBy({
 				md5: info.md5,
 				userId: user.id,
 			});
+			const matched = md5Lookup
+				? await this.driveFilesRepository.findOneBy({ id: md5Lookup.fileId })
+				: null;
 
 			if (matched) {
 				this.registerLogger.info(`file with same hash is found: ${matched.id}`);
@@ -761,11 +771,16 @@ export class DriveService {
 			userId: userId,
 		}) : null;
 
-		await this.driveFilesRepository.update({
-			id: In(fileIds),
-			userId: userId,
-		}, {
-			folderId: folder ? folder.id : null,
+		await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+			const files: Pick<MiDriveFile, 'id' | 'folderId'>[] = await transactionalEntityManager.query('SELECT "id", "folderId" FROM "drive_file" WHERE "id" = ANY($1) AND "userId" = $2 ORDER BY "id" FOR NO KEY UPDATE', [fileIds, userId]);
+			if (files.length === 0) return;
+			const folderIds = [...new Set([...files.map(file => file.folderId), folder ? folder.id : null])].filter(id => id != null);
+			await transactionalEntityManager.query('SELECT 1 FROM "drive_folder" WHERE "id" = ANY($1) ORDER BY "id" FOR NO KEY UPDATE', [folderIds]);
+			await transactionalEntityManager.update(MiDriveFile, {
+				id: In(files.map(file => file.id)),
+			}, {
+				folderId: folder ? folder.id : null,
+			});
 		});
 	}
 

@@ -4,15 +4,19 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import type { UserProfilesRepository, NoteReactionsRepository } from '@/models/_.js';
+import { DataSource, In } from 'typeorm';
+import type { UserProfilesRepository, NotesRepository, UsersRepository } from '@/models/_.js';
+import type { MiNoteReaction } from '@/models/NoteReaction.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { QueryService } from '@/core/QueryService.js';
 import { NoteReactionEntityService } from '@/core/entities/NoteReactionEntityService.js';
 import { DI } from '@/di-symbols.js';
 import { CacheService } from '@/core/CacheService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
+import { IdService } from '@/core/IdService.js';
 import { RoleService } from '@/core/RoleService.js';
 import { isUserRelated } from '@/misc/is-user-related.js';
+import { findUserNoteReactions } from '@/misc/note-reaction-lookup.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -62,16 +66,23 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.usersRepository)
+		private usersRepository: UsersRepository,
+
 		@Inject(DI.userProfilesRepository)
 		private userProfilesRepository: UserProfilesRepository,
 
-		@Inject(DI.noteReactionsRepository)
-		private noteReactionsRepository: NoteReactionsRepository,
+		@Inject(DI.db)
+		private db: DataSource,
+
+		@Inject(DI.notesRepository)
+		private notesRepository: NotesRepository,
 
 		private cacheService: CacheService,
 		private userEntityService: UserEntityService,
 		private noteReactionEntityService: NoteReactionEntityService,
 		private queryService: QueryService,
+		private idService: IdService,
 		private roleService: RoleService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
@@ -92,27 +103,56 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				if (userIdsWhoBlockingMe.has(ps.userId)) {
 					return [];
 				}
+			} else if (!await this.usersRepository.existsBy({ id: ps.userId })) {
+				return [];
 			}
+
+			const visible = this.notesRepository.createQueryBuilder('note');
+			this.queryService.generateVisibilityQuery(visible, me);
+			if (this.queryService.isAlwaysEmpty(visible)) return [];
 
 			const userIdsWhoMeMuting = me ? await this.cacheService.userMutingsCache.fetch(me.id) : new Set<string>();
 
-			const query = this.queryService.makePaginationQuery(this.noteReactionsRepository.createQueryBuilder('reaction'),
-				ps.sinceId, ps.untilId, ps.sinceDate, ps.untilDate)
-				.andWhere('reaction.userId = :userId', { userId: ps.userId })
-				.leftJoinAndSelect('reaction.note', 'note')
-				.leftJoinAndSelect('note.user', 'user')
-				.leftJoinAndSelect('note.reply', 'reply')
-				.leftJoinAndSelect('note.renote', 'renote')
-				.leftJoinAndSelect('reply.user', 'replyUser')
-				.leftJoinAndSelect('renote.user', 'renoteUser');
+			const byId = ps.sinceId != null || ps.untilId != null;
+			let sinceId = byId ? ps.sinceId : ps.sinceDate ? this.idService.gen(ps.sinceDate, true) : undefined;
+			let untilId = byId ? ps.untilId : ps.untilDate ? this.idService.gen(ps.untilDate, true) : undefined;
+			const ascending = sinceId != null && untilId == null;
 
-			this.queryService.generateVisibilityQuery(query, me);
-			this.queryService.generateBlockedHostQueryForNote(query);
-			this.queryService.generateSuspendedUserQueryForNote(query);
+			const hydratedReactions: MiNoteReaction[] = [];
 
-			const reactions = (await query
-				.limit(ps.limit)
-				.getMany()).filter(reaction => {
+			for (;;) {
+				const page = await findUserNoteReactions(this.db, ps.userId, { sinceId, untilId, ascending, limit: ps.limit }, this.idService.gen(Date.now(), true));
+				if (page.length === 0) break;
+
+				const cursor = page[page.length - 1].id;
+				if (ascending) {
+					sinceId = cursor;
+				} else {
+					untilId = cursor;
+				}
+
+				const notesQuery = this.notesRepository.createQueryBuilder('note')
+					.where({ id: In(page.map(reaction => reaction.noteId)) })
+					.innerJoinAndSelect('note.user', 'user');
+
+				this.queryService.generateVisibilityQuery(notesQuery, me);
+				this.queryService.generateBlockedHostQueryForNote(notesQuery);
+				this.queryService.generateSuspendedUserQueryForNote(notesQuery);
+
+				const fetchedNotes = await notesQuery.getMany();
+				await this.queryService.attachReplyAndRenote(fetchedNotes);
+				const notes = new Map(fetchedNotes.map(note => [note.id, note]));
+
+				for (const reaction of page) {
+					reaction.note = notes.get(reaction.noteId) ?? null;
+				}
+
+				hydratedReactions.push(...page.filter(reaction => reaction.note != null));
+
+				if (hydratedReactions.length >= ps.limit || page.length < ps.limit) break;
+			}
+
+			const reactions = hydratedReactions.slice(0, ps.limit).filter(reaction => {
 				if (reaction.note?.userId === ps.userId) return true; // we can see reactions to note of requesting user
 				if (me && isUserRelated(reaction.note, userIdsWhoBlockingMe)) return false;
 				if (me && isUserRelated(reaction.note, userIdsWhoMeMuting)) return false;

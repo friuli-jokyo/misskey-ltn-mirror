@@ -109,7 +109,6 @@ const MIGRATIONS = [
 			prefer.commit('mediaListWithOneImageAppearance', store.s.mediaListWithOneImageAppearance);
 			prefer.commit('notificationPosition', store.s.notificationPosition);
 			prefer.commit('notificationStackAxis', store.s.notificationStackAxis);
-			prefer.commit('enableCondensedLine', store.s.enableCondensedLine);
 			prefer.commit('keepScreenOn', store.s.keepScreenOn);
 			prefer.commit('useGroupedNotifications', store.s.useGroupedNotifications);
 			prefer.commit('dataSaver', {
@@ -170,8 +169,6 @@ export function migrateOldSettings(lastVersion: string | null) {
 		return;
 	}
 
-	// lastVersion < migrationVersion <= currentVersion の場合のみ実行
-	// （前回のバージョンより新しく、現在のバージョン以下のマイグレーションのみ）
 	const pendingMigrations = MIGRATIONS.filter(({ version }) =>
 		compareVersions(lastVersion, version) < 0 &&
 		compareVersions(version, currentVersion) <= 0,

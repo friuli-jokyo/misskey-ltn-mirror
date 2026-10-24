@@ -5,6 +5,7 @@
 
 import { describe, expect, test, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
+import * as Redis from 'ioredis';
 import ms from 'ms';
 import {
 	type MiNote,
@@ -12,6 +13,7 @@ import {
 	type NotesRepository,
 	type NoteFavoritesRepository,
 	type NoteReactionsRepository,
+	type NoteRelationsRepository,
 	type UserNotePiningsRepository,
 	type UsersRepository,
 	type UserProfilesRepository,
@@ -20,6 +22,7 @@ import {
 import { CleanRemoteNotesProcessorService } from '@/queue/processors/CleanRemoteNotesProcessorService.js';
 import { DI } from '@/di-symbols.js';
 import { IdService } from '@/core/IdService.js';
+import { PartitionMigrationStateService } from '@/core/PartitionMigrationStateService.js';
 import { QueueLoggerService } from '@/queue/QueueLoggerService.js';
 import { GlobalModule } from '@/GlobalModule.js';
 import { secureRndstr } from '@/misc/secure-rndstr.js';
@@ -29,11 +32,13 @@ describe('CleanRemoteNotesProcessorService', () => {
 	let service: CleanRemoteNotesProcessorService;
 	let idService: IdService;
 	let notesRepository: NotesRepository;
+	let noteRelationsRepository: NoteRelationsRepository;
 	let noteFavoritesRepository: NoteFavoritesRepository;
 	let noteReactionsRepository: NoteReactionsRepository;
 	let userNotePiningsRepository: UserNotePiningsRepository;
 	let usersRepository: UsersRepository;
 	let userProfilesRepository: UserProfilesRepository;
+	let redisClient: Redis.Redis;
 
 	// Local user
 	let alice: MiUser;
@@ -43,6 +48,8 @@ describe('CleanRemoteNotesProcessorService', () => {
 	let carol: MiUser;
 
 	const meta = new MiMeta();
+
+	const CURSOR_REDIS_KEY = 'cleanRemoteNotes:cursor';
 
 	// Mock job object
 	const createMockJob = () => ({
@@ -81,6 +88,13 @@ describe('CleanRemoteNotesProcessorService', () => {
 				...data,
 			})
 			.then(x => notesRepository.findOneByOrFail(x.identifiers[0]));
+		if (note.replyId != null && note.id > note.replyId) {
+			await noteRelationsRepository.insert({ childId: note.id, parentId: note.replyId, kind: 0 });
+		}
+		if (note.renoteId != null && note.id > note.renoteId) {
+			const isQuote = note.text != null || note.cw != null || note.replyId != null || note.hasPoll || note.fileIds.length > 0;
+			await noteRelationsRepository.insert({ childId: note.id, parentId: note.renoteId, kind: isQuote ? 1 : 2 });
+		}
 		return note;
 	}
 
@@ -93,6 +107,10 @@ describe('CleanRemoteNotesProcessorService', () => {
 				providers: [
 					CleanRemoteNotesProcessorService,
 					IdService,
+					{
+						provide: PartitionMigrationStateService,
+						useValue: { isPhaseFinished: async () => true },
+					},
 					{
 						provide: QueueLoggerService,
 						useFactory: () => ({
@@ -113,11 +131,13 @@ describe('CleanRemoteNotesProcessorService', () => {
 		service = app.get(CleanRemoteNotesProcessorService);
 		idService = app.get(IdService);
 		notesRepository = app.get(DI.notesRepository);
+		noteRelationsRepository = app.get(DI.noteRelationsRepository);
 		noteFavoritesRepository = app.get(DI.noteFavoritesRepository);
 		noteReactionsRepository = app.get(DI.noteReactionsRepository);
 		userNotePiningsRepository = app.get(DI.userNotePiningsRepository);
 		usersRepository = app.get(DI.usersRepository);
 		userProfilesRepository = app.get(DI.userProfilesRepository);
+		redisClient = app.get(DI.redis);
 
 		alice = await createUser({ username: 'alice', host: null });
 		bob = await createUser({ username: 'bob', host: 'remote1.example.com' });
@@ -126,9 +146,12 @@ describe('CleanRemoteNotesProcessorService', () => {
 		app.enableShutdownHooks();
 	});
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		// Reset mocks
 		vi.clearAllMocks();
+
+		// Reset cursor in Redis
+		await redisClient.del(CURSOR_REDIS_KEY);
 
 		// Set default meta values
 		meta.enableRemoteNotesCleaning = true;
@@ -140,6 +163,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 		// Clean up test data
 		await Promise.all([
 			notesRepository.createQueryBuilder().delete().execute(),
+			noteRelationsRepository.createQueryBuilder().delete().execute(),
 			userNotePiningsRepository.createQueryBuilder().delete().execute(),
 			noteFavoritesRepository.createQueryBuilder().delete().execute(),
 			noteReactionsRepository.createQueryBuilder().delete().execute(),
@@ -161,6 +185,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 				deletedCount: 0,
 				oldest: null,
 				newest: null,
+				cursor: null,
 				skipped: true,
 				transientErrors: 0,
 			});
@@ -176,6 +201,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 				deletedCount: 0,
 				oldest: null,
 				newest: null,
+				cursor: null,
 				skipped: false,
 				transientErrors: 0,
 			});
@@ -206,6 +232,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 				deletedCount: 2,
 				oldest: idService.parse(remoteNotes[3].id).date.getTime(),
 				newest: idService.parse(remoteNotes[2].id).date.getTime(),
+				cursor: null,
 				skipped: false,
 				transientErrors: 0,
 			});
@@ -310,13 +337,13 @@ describe('CleanRemoteNotesProcessorService', () => {
 			const job = createMockJob();
 
 			// Create old remote notes with reply/renote relationships
-			const originalNote = await createNote({}, bob, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 1000);
+			const originalNote = await createNote({}, bob, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 3000);
 			const replyNote = await createNote({
 				replyId: originalNote.id,
 			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 2000);
 			const renoteNote = await createNote({
 				renoteId: originalNote.id,
-			}, bob, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 3000);
+			}, bob, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 1000);
 
 			const result = await service.process(job as any);
 
@@ -340,7 +367,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 			// Create a reply note that is newer than the expiry period
 			const recentReplyNote = await createNote({
 				replyId: oldNote.id,
-			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) + 1000);
+			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) + 60000);
 
 			const result = await service.process(job as any);
 
@@ -362,12 +389,12 @@ describe('CleanRemoteNotesProcessorService', () => {
 			// Create a reply note that is newer than the expiry period
 			const recentReplyNote = await createNote({
 				replyId: oldNote.id,
-			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) + 1000);
+			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) + 60000);
 
 			// Create an old reply note that should be deleted
 			const oldReplyNote = await createNote({
 				replyId: oldNote.id,
-			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 2000);
+			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 500);
 
 			const result = await service.process(job as any);
 
@@ -390,7 +417,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 			// Create a reply note that is newer than the expiry period
 			const replyNote = await createNote({
 				replyId: olderRemoteNote.id,
-			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 2000);
+			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 500);
 
 			// Favorite the reply note
 			await noteFavoritesRepository.save({
@@ -419,7 +446,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 			// Create a reply note that is newer than the expiry period
 			const replyNote = await createNote({
 				replyId: olderRemoteNote.id,
-			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 2000);
+			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 500);
 
 			// Pin the reply note
 			await userNotePiningsRepository.save({
@@ -449,7 +476,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 			const replyNote = await createNote({
 				replyId: olderRemoteNote.id,
 				clippedCount: 1, // Clipped
-			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 2000);
+			}, carol, Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 500);
 
 			const result = await service.process(job as any);
 
@@ -716,7 +743,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 			const blockBReplies: MiNote[] = [];
 			for (let i = 0; i < 50; i++) {
 				const root = await createNote({}, bob, oldTime - 30000 - i * 2);
-				const reply = await createNote({ replyId: root.id, clippedCount: 1 }, carol, oldTime - 30000 - i * 2 - 1);
+				const reply = await createNote({ replyId: root.id, clippedCount: 1 }, carol, oldTime - 30000 - i * 2 + 1);
 				blockBRoots.push(root);
 				blockBReplies.push(reply);
 			}
@@ -849,13 +876,83 @@ describe('CleanRemoteNotesProcessorService', () => {
 		}, 30 * 1000);
 	});
 
-	// region note_reaction protection (NOT EXISTS subquery with INNER JOIN on user.host IS NULL)
-	// The removalCriteria condition is:
-	//   NOT EXISTS (SELECT 1 FROM note_reaction INNER JOIN "user"
-	//               ON note_reaction."userId" = "user".id
-	//               WHERE note_reaction."noteId" = note."id"
-	//               AND "user"."host" IS NULL)
 	// i.e. only reactions from local users (host IS NULL) prevent deletion.
+
+	// region cursor persistence
+	// 1回の実行で走査しきれないサーバーのために、走査位置をRedisへ保存して次回に引き継ぐ
+	describe('advanced - cursor persistence', () => {
+		const oldTimeBase = () => Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 10000;
+
+		test('should clear the stored cursor once the scan reaches the end', async () => {
+			await createNote({}, bob, oldTimeBase());
+
+			const job = createMockJob();
+			const result = await service.process(job as any);
+
+			expect(result.deletedCount).toBe(1);
+			// 末尾まで到達したので次回は先頭から
+			expect(result.cursor).toBe(null);
+			expect(await redisClient.get(CURSOR_REDIS_KEY)).toBe(null);
+		});
+
+		test('should resume from the stored cursor and leave notes before it untouched', async () => {
+			const oldTime = oldTimeBase();
+			const beforeCursor = await createNote({}, bob, oldTime);
+			const afterCursor = await createNote({}, bob, oldTime + 5000);
+
+			await redisClient.set(CURSOR_REDIS_KEY, beforeCursor.id);
+
+			const job = createMockJob();
+			const result = await service.process(job as any);
+
+			expect(result.deletedCount).toBe(1);
+
+			const remainingNotes = await notesRepository.find();
+			expect(remainingNotes.map(n => n.id)).toEqual([beforeCursor.id]);
+			expect(remainingNotes.map(n => n.id)).not.toContain(afterCursor.id);
+		});
+
+		test('should ignore a stored cursor that fell outside the target range', async () => {
+			await createNote({}, bob, oldTimeBase());
+
+			// 保持期間が延長された場合に起きる、newestLimit より新しいカーソル
+			await redisClient.set(CURSOR_REDIS_KEY, idService.gen(Date.now()));
+
+			const job = createMockJob();
+			const result = await service.process(job as any);
+
+			// 先頭から走査し直すので、範囲外カーソルがあっても削除できる
+			expect(result.deletedCount).toBe(1);
+		});
+
+		test('should keep the cursor when the run is cut short before reaching the end', async () => {
+			const AMOUNT = 250;
+			const oldTime = oldTimeBase();
+			for (let i = 0; i < AMOUNT; i++) {
+				await createNote({}, bob, oldTime - i);
+			}
+
+			const job = createMockJob();
+			// 1バッチ処理した直後にループを抜けさせる。maxDuration 経由だと初回バッチ前に
+			// 打ち切られることがあり、カーソルが保存される前に終わってしまう
+			let disabled = false;
+			job.updateProgress = vi.fn(() => {
+				if (!disabled) {
+					meta.enableRemoteNotesCleaning = false;
+					disabled = true;
+				}
+			});
+
+			const result = await service.process(job as any);
+
+			expect(result.deletedCount).toBeGreaterThan(0);
+			expect(result.deletedCount).toBeLessThan(AMOUNT);
+			// 途中で打ち切られた位置が次回へ引き継がれる
+			expect(result.cursor).not.toBe(null);
+			expect(await redisClient.get(CURSOR_REDIS_KEY)).toBe(result.cursor);
+		}, 30 * 1000);
+	});
+
 	describe('advanced - note_reaction', () => {
 		// ローカルユーザーがリアクションしたノートは削除されない
 		test('should not delete note that is reacted by a local user', async () => {
@@ -939,7 +1036,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 			const oldTime = Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 1000;
 
 			const root = await createNote({}, bob, oldTime);
-			const reply = await createNote({ replyId: root.id }, carol, oldTime - 1000);
+			const reply = await createNote({ replyId: root.id }, carol, oldTime + 500);
 
 			// root にローカルユーザーがリアクション
 			await noteReactionsRepository.save({
@@ -965,7 +1062,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 			const oldTime = Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 1000;
 
 			const root = await createNote({}, bob, oldTime);
-			const reply = await createNote({ replyId: root.id }, carol, oldTime - 1000);
+			const reply = await createNote({ replyId: root.id }, carol, oldTime + 500);
 
 			// reply にローカルユーザーがリアクション
 			await noteReactionsRepository.save({
@@ -991,7 +1088,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 			const oldTime = Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 1000;
 
 			const root = await createNote({}, bob, oldTime);
-			const reply = await createNote({ replyId: root.id }, carol, oldTime - 1000);
+			const reply = await createNote({ replyId: root.id }, carol, oldTime + 500);
 
 			// root と reply それぞれに リモートユーザーがリアクション
 			await noteReactionsRepository.save([
@@ -1025,9 +1122,9 @@ describe('CleanRemoteNotesProcessorService', () => {
 			const oldTime = Date.now() - ms(`${meta.remoteNotesCleaningExpiryDaysForEachNotes} days`) - 1000;
 
 			const root = await createNote({}, bob, oldTime);
-			const r1 = await createNote({ replyId: root.id }, carol, oldTime - 1000);
-			const r2 = await createNote({ replyId: r1.id }, bob, oldTime - 2000);
-			const r3 = await createNote({ replyId: r2.id }, carol, oldTime - 3000);
+			const r1 = await createNote({ replyId: root.id }, carol, oldTime + 100);
+			const r2 = await createNote({ replyId: r1.id }, bob, oldTime + 200);
+			const r3 = await createNote({ replyId: r2.id }, carol, oldTime + 300);
 
 			// 末端 r3 にローカルリアクション
 			await noteReactionsRepository.save({
@@ -1129,6 +1226,7 @@ describe('CleanRemoteNotesProcessorService', () => {
 				deletedCount: 0,
 				oldest: null,
 				newest: null,
+				cursor: null,
 				skipped: false,
 				transientErrors: 0,
 			});
@@ -1243,12 +1341,12 @@ describe('CleanRemoteNotesProcessorService', () => {
 			const newReplyOfOldRoot = await createNote({ replyId: oldRootWithNewReply.id }, bob);
 
 			// 11) 古い root に古い reply（両方削除対象） → ツリーごと削除
-			const oldTreeRoot = await createNote({}, bob, oldTime - 9);
-			const oldTreeReply = await createNote({ replyId: oldTreeRoot.id }, carol, oldTime - 10);
+			const oldTreeRoot = await createNote({}, bob, oldTime - 10);
+			const oldTreeReply = await createNote({ replyId: oldTreeRoot.id }, carol, oldTime - 9);
 
 			// 12) 古い root + 古い reply, reply にローカルリアクション → ツリー保護
-			const protectedTreeRoot = await createNote({}, bob, oldTime - 11);
-			const protectedTreeReply = await createNote({ replyId: protectedTreeRoot.id }, carol, oldTime - 12);
+			const protectedTreeRoot = await createNote({}, bob, oldTime - 12);
+			const protectedTreeReply = await createNote({ replyId: protectedTreeRoot.id }, carol, oldTime - 11);
 			await noteReactionsRepository.save({
 				id: idService.gen(),
 				userId: alice.id,

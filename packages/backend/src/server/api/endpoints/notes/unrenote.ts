@@ -5,10 +5,12 @@
 
 import ms from 'ms';
 import { Inject, Injectable } from '@nestjs/common';
-import type { UsersRepository, NotesRepository } from '@/models/_.js';
+import { In } from 'typeorm';
+import type { UsersRepository, NotesRepository, NoteRelationsRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { NoteDeleteService } from '@/core/NoteDeleteService.js';
 import { DI } from '@/di-symbols.js';
+import { chunk } from '@/misc/prelude/array.js';
 import { GetterService } from '@/server/api/GetterService.js';
 import { ApiError } from '../../error.js';
 
@@ -51,6 +53,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
 
+		@Inject(DI.noteRelationsRepository)
+		private noteRelationsRepository: NoteRelationsRepository,
+
 		private getterService: GetterService,
 		private noteDeleteService: NoteDeleteService,
 	) {
@@ -60,13 +65,24 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw err;
 			});
 
-			const renotes = await this.notesRepository.findBy({
-				userId: me.id,
-				renoteId: note.id,
+			const relations = await this.noteRelationsRepository.findBy({
+				parentId: note.id,
+				kind: In([1, 2]),
 			});
 
-			for (const note of renotes) {
-				this.noteDeleteService.delete(await this.usersRepository.findOneByOrFail({ id: me.id }), note);
+			if (relations.length === 0) return;
+
+			const user = await this.usersRepository.findOneByOrFail({ id: me.id });
+
+			for (const childIds of chunk(relations.map(relation => relation.childId), 100)) {
+				const renotes = await this.notesRepository.findBy({
+					id: In(childIds),
+					userId: me.id,
+				});
+
+				for (const renote of renotes) {
+					this.noteDeleteService.delete(user, renote);
+				}
 			}
 		});
 	}

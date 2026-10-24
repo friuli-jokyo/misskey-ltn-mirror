@@ -23,8 +23,8 @@ export class TestJobProcessorService {
 	public async process(job: Bull.Job<{ user: { id: string }; duration: number }>): Promise<void> {
 		this.logger.info(`Starting test job for user ${job.data.user.id} with duration ${job.data.duration}s...`);
 
-		const duration = job.data.duration * 1000; // Convert to milliseconds
-		const steps = 20; // Number of progress updates
+		const duration = job.data.duration * 1000;
+		const steps = 20;
 		const stepDuration = duration / steps;
 
 		for (let i = 0; i <= steps; i++) {

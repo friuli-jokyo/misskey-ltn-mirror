@@ -73,13 +73,10 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				.andWhere('note.visibility = \'public\'')
 				.andWhere('note.anonymouslySendToUserId IS NULL')
 				.andWhere('note.channelId IS NULL')
-				.innerJoinAndSelect('note.user', 'user')
-				.leftJoinAndSelect('note.reply', 'reply')
-				.leftJoinAndSelect('note.renote', 'renote')
-				.leftJoinAndSelect('reply.user', 'replyUser')
-				.leftJoinAndSelect('renote.user', 'renoteUser');
+				.innerJoinAndSelect('note.user', 'user');
 
 			this.queryService.generateBaseNoteFilteringQuery(query, me);
+			if (me == null) this.queryService.generateUgcVisibilityQueryForVisitor(query);
 			if (me) this.queryService.generateMutedUserRenotesQueryForNotes(query, me);
 
 			if (ps.withFiles) {
@@ -98,7 +95,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 			//#endregion
 
-			const timeline = await query.limit(ps.limit).getMany();
+			const timeline = await this.queryService.fetchPaginationQueryAcrossPartitions(query, ps, ps.limit);
 
 			process.nextTick(() => {
 				if (me) {

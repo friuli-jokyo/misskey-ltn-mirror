@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { In } from 'typeorm';
 import { Inject, Injectable } from '@nestjs/common';
-import type { DriveFilesRepository } from '@/models/_.js';
+import type { DriveFilesRepository, DriveFileMd5sRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { DriveFileEntityService } from '@/core/entities/DriveFileEntityService.js';
 import { DI } from '@/di-symbols.js';
@@ -43,12 +44,20 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.driveFilesRepository)
 		private driveFilesRepository: DriveFilesRepository,
 
+		@Inject(DI.driveFileMd5sRepository)
+		private driveFileMd5sRepository: DriveFileMd5sRepository,
+
 		private driveFileEntityService: DriveFileEntityService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const files = await this.driveFilesRepository.findBy({
+			const lookups = await this.driveFileMd5sRepository.findBy({
 				md5: ps.md5,
 				userId: me.id,
+			});
+			if (lookups.length === 0) return [];
+
+			const files = await this.driveFilesRepository.findBy({
+				id: In(lookups.map(l => l.fileId)),
 			});
 
 			return await this.driveFileEntityService.packMany(files, { self: true });

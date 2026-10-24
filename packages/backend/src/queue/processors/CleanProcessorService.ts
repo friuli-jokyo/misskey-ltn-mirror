@@ -4,14 +4,17 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { In, LessThan } from 'typeorm';
+import { DataSource, In, IsNull, LessThan } from 'typeorm';
 import { DI } from '@/di-symbols.js';
-import type { AntennasRepository, RoleAssignmentsRepository, UserIpsRepository } from '@/models/_.js';
+import type { AntennasRepository, RoleAssignmentsRepository, UserIpsRepository, UsersRepository } from '@/models/_.js';
 import type Logger from '@/logger.js';
 import { bindThis } from '@/decorators.js';
 import { IdService } from '@/core/IdService.js';
 import type { Config } from '@/config.js';
+import { QueueService } from '@/core/QueueService.js';
 import { ReversiService } from '@/core/ReversiService.js';
+import { sweepPendingParents } from '@/misc/join-pending-children.js';
+import { analyzePartitionedParent, partitionCopyTables } from '@/misc/partition-copies.js';
 import { QueueLoggerService } from '../QueueLoggerService.js';
 import type * as Bull from 'bullmq';
 
@@ -23,6 +26,12 @@ export class CleanProcessorService {
 		@Inject(DI.config)
 		private config: Config,
 
+		@Inject(DI.db)
+		private db: DataSource,
+
+		@Inject(DI.dbLong)
+		private dbLong: DataSource,
+
 		@Inject(DI.userIpsRepository)
 		private userIpsRepository: UserIpsRepository,
 
@@ -32,7 +41,11 @@ export class CleanProcessorService {
 		@Inject(DI.roleAssignmentsRepository)
 		private roleAssignmentsRepository: RoleAssignmentsRepository,
 
+		@Inject(DI.usersRepository)
+		private usersRepository: UsersRepository,
+
 		private queueLoggerService: QueueLoggerService,
+		private queueService: QueueService,
 		private reversiService: ReversiService,
 		private idService: IdService,
 	) {
@@ -68,6 +81,28 @@ export class CleanProcessorService {
 		}
 
 		this.reversiService.cleanOutdatedGames();
+
+		const deletedLocalUsers = await this.usersRepository.find({
+			select: { id: true },
+			where: {
+				host: IsNull(),
+				isDeleted: true,
+			},
+		});
+
+		for (const user of deletedLocalUsers) {
+			await this.queueService.createPurgeAccountJob(user);
+		}
+
+		await sweepPendingParents(this.db, this.idService, Date.now() + 1000 * 60);
+
+		for (const table of partitionCopyTables) {
+			try {
+				await analyzePartitionedParent(this.dbLong, table);
+			} catch (e) {
+				this.logger.warn(`ANALYZE ONLY ${table} failed: ${String(e)}`);
+			}
+		}
 
 		this.logger.succ('Cleaned.');
 	}

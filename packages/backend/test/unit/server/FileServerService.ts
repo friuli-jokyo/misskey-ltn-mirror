@@ -7,11 +7,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { describe, expect, test, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, expect, test, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import sharp from 'sharp';
 import { DataSource, type Repository } from 'typeorm';
 import { initTestDb, randomString } from '../../utils.js';
-import type { AiService } from '@/core/AiService.js';
+import type { SensitiveMediaDetectionService } from '@/core/SensitiveMediaDetectionService.js';
 import { DownloadService } from '@/core/DownloadService.js';
 import { FileInfoService } from '@/core/FileInfoService.js';
 import { HttpRequestService } from '@/core/HttpRequestService.js';
@@ -22,7 +22,9 @@ import { LoggerService } from '@/core/LoggerService.js';
 import { VideoProcessingService } from '@/core/VideoProcessingService.js';
 import { loadConfig, type Config } from '@/config.js';
 import { MiDriveFile } from '@/models/DriveFile.js';
+import { MiDriveFileAccessKey } from '@/models/DriveFileAccessKey.js';
 import { FileServerService } from '@/server/FileServerService.js';
+import { FileServerFileResolver } from '@/server/file/FileServerFileResolver.js';
 
 const dummyPath = path.resolve('test/resources/dummy-for-file-server-service.png');
 const dummySize = fs.statSync(dummyPath).size;
@@ -76,10 +78,12 @@ describe('FileServerService', () => {
 	let fastify: FastifyInstance;
 	let externalFastify: FastifyInstance;
 	let driveFilesRepository: Repository<MiDriveFile>;
+	let driveFileAccessKeysRepository: Repository<MiDriveFileAccessKey>;
 	let internalStorageService: InternalStorageService;
 	let idService: IdService;
 	let config: Config;
 	let fileServerService: FileServerService;
+	let fileResolver: FileServerFileResolver;
 	let externalFileServerService: FileServerService;
 	let remoteServer: FastifyInstance;
 	let remotePngUrl: string;
@@ -90,10 +94,10 @@ describe('FileServerService', () => {
 	let createdFallbackAssets = false;
 	let fallbackAssetsDir = '';
 
-	function writeInternalFile(key: string) {
+	function writeInternalFile(key: string, data: Buffer = dummyBuffer) {
 		const dest = internalStorageService.resolvePath(key);
 		fs.mkdirSync(path.dirname(dest), { recursive: true });
-		fs.copyFileSync(dummyPath, dest);
+		fs.writeFileSync(dest, data);
 		storedPaths.push(dest);
 	}
 
@@ -110,8 +114,9 @@ describe('FileServerService', () => {
 	}) {
 		const accessKey = params.accessKey;
 		const url = params.uri ?? `${config.url}/files/${accessKey}`;
+		const id = idService.gen();
 		await driveFilesRepository.insert({
-			id: idService.gen(),
+			id,
 			userId: null,
 			userHost: null,
 			md5: '00000000000000000000000000000000',
@@ -139,23 +144,31 @@ describe('FileServerService', () => {
 			requestHeaders: {},
 			requestIp: null,
 		});
+		await driveFileAccessKeysRepository.insert([
+			{ accessKey, fileId: id, kind: 0 },
+			...(params.thumbnailAccessKey != null ? [{ accessKey: params.thumbnailAccessKey, fileId: id, kind: 1 }] : []),
+			...(params.webpublicAccessKey != null ? [{ accessKey: params.webpublicAccessKey, fileId: id, kind: 2 }] : []),
+		]);
 	}
 
 	beforeAll(async () => {
 		config = loadConfig();
 		db = await initTestDb(false);
 		driveFilesRepository = db.getRepository(MiDriveFile);
+		driveFileAccessKeysRepository = db.getRepository(MiDriveFileAccessKey);
 
 		const loggerService = new LoggerService();
-		const aiService = {
+		const sensitiveMediaDetectionService = {
 			detectSensitive: async () => null,
-		} as unknown as AiService;
-		const fileInfoService = new FileInfoService(aiService, loggerService);
+			detectSensitiveMany: async (sources: Buffer[]) => sources.map(() => null),
+		} as unknown as SensitiveMediaDetectionService;
+		const fileInfoService = new FileInfoService(sensitiveMediaDetectionService, loggerService);
 		const httpRequestService = new HttpRequestService(config);
 		const downloadService = new DownloadService(config, httpRequestService, loggerService);
 		const imageProcessingService = new ImageProcessingService();
 		const videoProcessingService = new VideoProcessingService(config, imageProcessingService);
 		internalStorageService = new InternalStorageService(config);
+		fileResolver = new FileServerFileResolver(driveFilesRepository as any, driveFileAccessKeysRepository as any, fileInfoService, downloadService, internalStorageService);
 		idService = new IdService(config);
 		fileServerService = new FileServerService(
 			config,
@@ -216,6 +229,7 @@ describe('FileServerService', () => {
 
 	afterEach(async () => {
 		await driveFilesRepository.createQueryBuilder().delete().execute();
+		await driveFileAccessKeysRepository.createQueryBuilder().delete().execute();
 		for (const filePath of storedPaths) {
 			try {
 				fs.unlinkSync(filePath);
@@ -287,6 +301,16 @@ describe('FileServerService', () => {
 	});
 
 	describe('GET /files/:key', () => {
+		test.each(['../../sentinel.txt', 'nested/file.png', '..\\file.png', '..'])('resolver は DB 一致済みでも内蔵ストレージの %s をパス解決せず拒否する', async (accessKey) => {
+			await insertDriveFile({ accessKey, storedInternal: true, isLink: false });
+			const resolvePath = vi.spyOn(internalStorageService, 'resolvePath');
+
+			const result = await fileResolver.resolveFileByAccessKey(accessKey);
+
+			expect(result).toEqual({ kind: 'not-found' });
+			expect(resolvePath).not.toHaveBeenCalled();
+		});
+
 		test('GET /files/:key 404 のときダミー画像を返す', async () => {
 			const accessKey = randomString();
 
@@ -318,6 +342,7 @@ describe('FileServerService', () => {
 			expect(res.headers['cache-control']).toBe('max-age=31536000, immutable');
 			expect(res.headers['content-type']).toBe('image/png');
 			expect(res.headers['content-length']).toBe(String(dummySize));
+			expect(res.headers['accept-ranges']).toBe('bytes');
 			expect(res.headers['content-disposition'] ?? '').toMatch(/^inline;/);
 		});
 
@@ -369,10 +394,14 @@ describe('FileServerService', () => {
 			expect(res.headers['content-length']).toBe(String(dummySize));
 		});
 
+		/** Content-Range の総量と範囲は、応答対象のサムネイルのバイト列に基づく。 */
 		test('GET /files/:key thumbnail の Range で部分配信する', async () => {
 			const accessKey = randomString();
 			const thumbnailKey = randomString();
-			writeInternalFile(thumbnailKey);
+			const thumbnailBuffer = await sharp(dummyBuffer).resize(1, 1).png().toBuffer();
+			expect(thumbnailBuffer.length).not.toBe(dummySize);
+			writeInternalFile(accessKey);
+			writeInternalFile(thumbnailKey, thumbnailBuffer);
 			await insertDriveFile({
 				accessKey,
 				thumbnailAccessKey: thumbnailKey,
@@ -390,17 +419,22 @@ describe('FileServerService', () => {
 			});
 
 			expect(res.statusCode).toBe(206);
-			expect(res.headers['content-range']).toBe(`bytes 0-3/${dummySize}`);
+			expect(res.headers['content-range']).toBe(`bytes 0-3/${thumbnailBuffer.length}`);
 			expect(res.headers['accept-ranges']).toBe('bytes');
 			expect(res.headers['content-length']).toBe('4');
 			expect(res.headers['content-type']).toBe('image/png');
 			expect(res.headers['cache-control']).toBe('max-age=31536000, immutable');
+			expect(res.rawPayload).toEqual(thumbnailBuffer.subarray(0, 4));
 		});
 
-		test('GET /files/:key thumbnail のファイル名を整形する', async () => {
+		/** Content-Length は、内蔵ストレージに保存したサムネイルのバイト数と一致する。 */
+		test('GET /files/:key thumbnail のファイル名と配信サイズを検証する', async () => {
 			const accessKey = randomString();
 			const thumbnailKey = randomString();
-			writeInternalFile(thumbnailKey);
+			const thumbnailBuffer = await sharp(dummyBuffer).resize(1, 1).png().toBuffer();
+			expect(thumbnailBuffer.length).not.toBe(dummySize);
+			writeInternalFile(accessKey);
+			writeInternalFile(thumbnailKey, thumbnailBuffer);
 			await insertDriveFile({
 				accessKey,
 				thumbnailAccessKey: thumbnailKey,
@@ -418,12 +452,18 @@ describe('FileServerService', () => {
 			expect(res.headers['content-type']).toBe('image/png');
 			expect(res.headers['cache-control']).toBe('max-age=31536000, immutable');
 			expect(res.headers['content-disposition'] ?? '').toContain('sample-thumb.png');
+			expect(res.rawPayload).toEqual(thumbnailBuffer);
+			expect(res.headers['content-length']).toBe(String(thumbnailBuffer.length));
 		});
 
-		test('GET /files/:key webpublic のファイル名を整形する', async () => {
+		/** Content-Length は、Web公開用に変換して内蔵ストレージに保存した画像のバイト数と一致する。 */
+		test('GET /files/:key webpublic のファイル名と配信サイズを検証する', async () => {
 			const accessKey = randomString();
 			const webpublicKey = randomString();
-			writeInternalFile(webpublicKey);
+			const webpublicBuffer = await sharp(dummyBuffer).resize(1, 1).png().toBuffer();
+			expect(webpublicBuffer.length).not.toBe(dummySize);
+			writeInternalFile(accessKey);
+			writeInternalFile(webpublicKey, webpublicBuffer);
 			await insertDriveFile({
 				accessKey,
 				webpublicAccessKey: webpublicKey,
@@ -441,6 +481,8 @@ describe('FileServerService', () => {
 			expect(res.headers['content-type']).toBe('image/png');
 			expect(res.headers['cache-control']).toBe('max-age=31536000, immutable');
 			expect(res.headers['content-disposition'] ?? '').toContain('sample-web.png');
+			expect(res.rawPayload).toEqual(webpublicBuffer);
+			expect(res.headers['content-length']).toBe(String(webpublicBuffer.length));
 		});
 
 		test('GET /files/:key browsersafe でない MIME は octet-stream になる', async () => {
@@ -522,7 +564,7 @@ describe('FileServerService', () => {
 			expect(res.statusCode).toBe(206);
 			expect(res.headers['content-range']).toBe(`bytes 0-3/${dummyBuffer.length}`);
 			expect(res.headers['accept-ranges']).toBe('bytes');
-			expect(res.headers['content-length']).toBe(String(dummyBuffer.length));
+			expect(res.headers['content-length']).toBe('4');
 			expect(res.headers['content-type']).toBe('image/png');
 			expect(res.headers['cache-control']).toBe('max-age=31536000, immutable');
 		});

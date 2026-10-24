@@ -22,6 +22,7 @@ import type {
 import { SystemAccountService } from '@/core/SystemAccountService.js';
 import { bindThis } from '@/decorators.js';
 import { Resolver } from '@/core/activitypub/ApResolverService.js';
+import type { DataSource } from 'typeorm';
 
 type MockResponse = {
 	type: string;
@@ -40,6 +41,7 @@ export class MockResolver extends Resolver {
 			{} as NotesRepository,
 			{} as PollsRepository,
 			{} as NoteReactionsRepository,
+			{} as DataSource,
 			{} as FollowRequestsRepository,
 			{} as UtilityService,
 			{} as SystemAccountService,

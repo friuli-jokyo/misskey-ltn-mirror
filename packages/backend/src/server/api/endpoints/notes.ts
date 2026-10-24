@@ -54,15 +54,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), ps.sinceId, ps.untilId, ps.sinceDate, ps.untilDate)
 				.andWhere('note.visibility = \'public\'')
 				.andWhere('note.localOnly = FALSE')
-				.innerJoinAndSelect('note.user', 'user')
-				.leftJoinAndSelect('note.reply', 'reply')
-				.leftJoinAndSelect('note.renote', 'renote')
-				.leftJoinAndSelect('reply.user', 'replyUser')
-				.leftJoinAndSelect('renote.user', 'renoteUser');
+				.innerJoinAndSelect('note.user', 'user');
 
 			if (ps.local) {
 				query.andWhere('note.userHost IS NULL');
 			}
+
+			if (me == null) this.queryService.generateUgcVisibilityQueryForVisitor(query);
 
 			if (ps.reply !== undefined) {
 				query.andWhere(ps.reply ? 'note.replyId IS NOT NULL' : 'note.replyId IS NULL');
@@ -85,7 +83,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			//	query.isBot = bot;
 			//}
 
-			const notes = await query.limit(ps.limit).getMany();
+			const notes = await this.queryService.fetchPaginationQueryAcrossPartitions(query, ps, ps.limit);
 
 			return await this.noteEntityService.packMany(notes);
 		});

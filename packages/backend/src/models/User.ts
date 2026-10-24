@@ -92,6 +92,13 @@ export class MiUser {
 	})
 	public notesCount: number;
 
+	@Index('IDX_USER_NOTE_ID_FLOOR', { synchronize: false })
+	@Column({
+		...id(),
+		nullable: true,
+	})
+	public noteIdFloor: string | null;
+
 	@Column({
 		...id(),
 		nullable: true,
@@ -239,11 +246,6 @@ export class MiUser {
 		length: 128, default: 'mutual',
 	})
 	public chatScope: 'everyone' | 'followers' | 'following' | 'mutual' | 'none';
-
-	@Column('varchar', {
-		length: 128, default: 'lax',
-	})
-	public federationPolicy: 'none' | 'lax' | 'strict';
 
 	@Index()
 	@Column('varchar', {

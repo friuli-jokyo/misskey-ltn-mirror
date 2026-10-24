@@ -10,6 +10,9 @@ import { MiNote } from './Note.js';
 
 @Entity('note_reaction')
 @Index(['userId', 'noteId'], { unique: true })
+@Index('IDX_NOTE_REACTION_NOTE_ID_ID', { synchronize: false })
+@Index('IDX_NOTE_REACTION_ID', { synchronize: false })
+@Index('IDX_NOTE_REACTION_USER_ID_ID', { synchronize: false })
 export class MiNoteReaction {
 	@PrimaryColumn(id())
 	public id: string;
@@ -19,7 +22,7 @@ export class MiNoteReaction {
 	public userId: MiUser['id'];
 
 	@ManyToOne(() => MiUser, {
-		onDelete: 'CASCADE',
+		createForeignKeyConstraints: false,
 	})
 	@JoinColumn()
 	public user?: MiUser | null;

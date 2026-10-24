@@ -11,6 +11,7 @@ import type { MiNote } from '@/models/Note.js';
 import { DI } from '@/di-symbols.js';
 import { bindThis } from '@/decorators.js';
 import { acquireChartInsertLock } from '@/misc/distributed-lock.js';
+import { QueryService } from '@/core/QueryService.js';
 import Chart from '../core.js';
 import { ChartLoggerService } from '../ChartLoggerService.js';
 import { name, schema } from './entities/notes.js';
@@ -32,14 +33,15 @@ export default class NotesChart extends Chart<typeof schema> { // eslint-disable
 		private notesRepository: NotesRepository,
 
 		private chartLoggerService: ChartLoggerService,
+		private queryService: QueryService,
 	) {
 		super(db, (k) => acquireChartInsertLock(redisClient, k), chartLoggerService.logger, name, schema);
 	}
 
 	protected async tickMajor(): Promise<Partial<KVs<typeof schema>>> {
 		const [localCount, remoteCount] = await Promise.all([
-			this.notesRepository.countBy({ userHost: IsNull() }),
-			this.notesRepository.countBy({ userHost: Not(IsNull()) }),
+			this.queryService.countAcrossPartitions(this.notesRepository.createQueryBuilder('note').where({ userHost: IsNull() })),
+			this.queryService.countAcrossPartitions(this.notesRepository.createQueryBuilder('note').where({ userHost: Not(IsNull()) })),
 		]);
 
 		return {

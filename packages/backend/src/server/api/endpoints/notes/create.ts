@@ -10,6 +10,7 @@ import { Endpoint } from '@/server/api/endpoint-base.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { NoteCreateService } from '@/core/NoteCreateService.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
+import { AuthenticationError } from '@/server/api/AuthenticateService.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -284,6 +285,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 						throw new ApiError(meta.errors.cannotCreateAlreadyExpiredPoll);
 					} else if (err.id === 'bfa3905b-25f5-4894-b430-da331a490e4b') {
 						throw new ApiError(meta.errors.noSuchChannel);
+					} else if (err.id === 'e3e4eb00-3a45-49d7-bf8d-959a02f5d2eb') {
+						throw new AuthenticationError('user not found');
 					}
 				}
 				throw err;

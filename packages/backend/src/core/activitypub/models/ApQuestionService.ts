@@ -5,7 +5,7 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { DI } from '@/di-symbols.js';
-import type { UsersRepository, NotesRepository, PollsRepository } from '@/models/_.js';
+import type { UsersRepository, PollsRepository } from '@/models/_.js';
 import type { Config } from '@/config.js';
 import type { IPoll } from '@/models/Poll.js';
 import type { MiRemoteUser } from '@/models/User.js';
@@ -15,6 +15,7 @@ import { getOneApId, isQuestion } from '../type.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { ApLoggerService } from '../ApLoggerService.js';
 import { ApResolverService } from '../ApResolverService.js';
+import { ApDbResolverService } from '../ApDbResolverService.js';
 import type { Resolver } from '../ApResolverService.js';
 import type { IObject } from '../type.js';
 
@@ -29,13 +30,11 @@ export class ApQuestionService {
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
 
-		@Inject(DI.notesRepository)
-		private notesRepository: NotesRepository,
-
 		@Inject(DI.pollsRepository)
 		private pollsRepository: PollsRepository,
 
 		private apResolverService: ApResolverService,
+		private apDbResolverService: ApDbResolverService,
 		private apLoggerService: ApLoggerService,
 		private utilityService: UtilityService,
 	) {
@@ -79,7 +78,7 @@ export class ApQuestionService {
 		if (this.utilityService.isUriLocal(uri)) throw new Error('uri points local');
 
 		//#region このサーバーに既に登録されているか
-		const note = await this.notesRepository.findOneBy({ uri });
+		const note = await this.apDbResolverService.getNoteFromApId(uri);
 		if (note == null) throw new Error('Question is not registered');
 
 		const poll = await this.pollsRepository.findOneBy({ noteId: note.id });

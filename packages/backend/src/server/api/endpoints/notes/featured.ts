@@ -73,8 +73,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			if (ps.untilId) {
 				noteIds = noteIds.filter(id => id < ps.untilId!);
 			}
-			noteIds = noteIds.slice(0, ps.limit);
-
 			if (noteIds.length === 0) {
 				return [];
 			}
@@ -90,16 +88,16 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			const query = this.notesRepository.createQueryBuilder('note')
 				.where('note.id IN (:...noteIds)', { noteIds: noteIds })
 				.innerJoinAndSelect('note.user', 'user')
-				.leftJoinAndSelect('note.reply', 'reply')
-				.leftJoinAndSelect('note.renote', 'renote')
-				.leftJoinAndSelect('reply.user', 'replyUser')
-				.leftJoinAndSelect('renote.user', 'renoteUser')
 				.leftJoinAndSelect('note.channel', 'channel');
 
 			this.queryService.generateBlockedHostQueryForNote(query);
 			this.queryService.generateSuspendedUserQueryForNote(query);
+			if (me == null) this.queryService.generateUgcVisibilityQueryForVisitor(query);
 
-			const notes = (await query.getMany()).filter(note => {
+			const fetchedNotes = await query.getMany();
+			await this.queryService.attachReplyAndRenote(fetchedNotes);
+
+			const notes = fetchedNotes.filter(note => {
 				if (me && isUserRelated(note, userIdsWhoBlockingMe)) return false;
 				if (me && isUserRelated(note, userIdsWhoMeMuting)) return false;
 
@@ -108,7 +106,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			notes.sort((a, b) => a.id > b.id ? -1 : 1);
 
-			return await this.noteEntityService.packMany(notes, me);
+			return await this.noteEntityService.packMany(notes.slice(0, ps.limit), me);
 		});
 	}
 }

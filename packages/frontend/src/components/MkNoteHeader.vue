@@ -51,8 +51,8 @@ import { inject } from 'vue';
 import * as Misskey from 'misskey-js';
 import { hostname } from '@@/js/config.js';
 import { i18n } from '@/i18n.js';
-import { notePage } from '@/filters/note.js';
-import { userPage } from '@/filters/user.js';
+import { notePage } from '@@/js/note.js';
+import { userPage } from '@@/js/user.js';
 import { DI } from '@/di.js';
 
 defineProps<{

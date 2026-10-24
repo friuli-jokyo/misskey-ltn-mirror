@@ -5,12 +5,14 @@
 
 import { createPublicKey, randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { In } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import * as mfm from 'mfm-js';
 import { DI } from '@/di-symbols.js';
+import { UNREFERENCEABLE_NOTE_ID } from '@/const.js';
 import type { Config } from '@/config.js';
 import type { MiPartialLocalUser, MiLocalUser, MiPartialRemoteUser, MiRemoteUser, MiUser } from '@/models/User.js';
 import type { IMentionedRemoteUsers, MiNote } from '@/models/Note.js';
+import type { MiNoteUnlinkedRelation } from '@/models/NoteUnlinkedRelation.js';
 import type { MiBlocking } from '@/models/Blocking.js';
 import type { MiRelay } from '@/models/Relay.js';
 import type { MiDriveFile } from '@/models/DriveFile.js';
@@ -23,12 +25,13 @@ import { MfmService } from '@/core/MfmService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { DriveFileEntityService } from '@/core/entities/DriveFileEntityService.js';
 import type { MiUserKeypair } from '@/models/UserKeypair.js';
-import type { UsersRepository, UserProfilesRepository, NotesRepository, DriveFilesRepository, PollsRepository, MiMeta } from '@/models/_.js';
+import type { UsersRepository, UserProfilesRepository, NotesRepository, NoteUrisRepository, DriveFilesRepository, PollsRepository, MiMeta } from '@/models/_.js';
 import { bindThis } from '@/decorators.js';
 import { CustomEmojiService } from '@/core/CustomEmojiService.js';
 import { IdService } from '@/core/IdService.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { escapeHtml } from '@/misc/escape-html.js';
+import { isDeletedNote } from '@/misc/note-dependents.js';
 import { JsonLdService } from './JsonLdService.js';
 import { ApMfmService } from './ApMfmService.js';
 import { CONTEXT } from './misc/contexts.js';
@@ -51,6 +54,12 @@ export class ApRendererService {
 
 		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
+
+		@Inject(DI.noteUrisRepository)
+		private noteUrisRepository: NoteUrisRepository,
+
+		@Inject(DI.db)
+		private db: DataSource,
 
 		@Inject(DI.driveFilesRepository)
 		private driveFilesRepository: DriveFilesRepository,
@@ -312,7 +321,7 @@ export class ApRendererService {
 
 		const object: ILike = {
 			type: 'Like',
-			id: `${this.config.url}/likes/${noteReaction.id}`,
+			id: `${this.config.url}/likes/${noteReaction.noteId}/${noteReaction.id}`,
 			actor: `${this.config.url}/users/${noteReaction.userId}`,
 			object: note.uri ? note.uri : `${this.config.url}/notes/${noteReaction.noteId}`,
 			content: reaction,
@@ -355,6 +364,41 @@ export class ApRendererService {
 	}
 
 	@bindThis
+	public async getOriginalParentIds(note: Pick<MiNote, 'id' | 'replyId' | 'renoteId'>): Promise<Omit<MiNoteUnlinkedRelation, 'noteId'>> {
+		if (note.replyId !== UNREFERENCEABLE_NOTE_ID && note.renoteId !== UNREFERENCEABLE_NOTE_ID) {
+			return { replyId: note.replyId, renoteId: note.renoteId, replyUri: null, renoteUri: null };
+		}
+
+		const originals: Omit<MiNoteUnlinkedRelation, 'noteId'>[] = await this.db.query('SELECT "replyId", "renoteId", "replyUri", "renoteUri" FROM "note_unlinked_relation" WHERE "noteId" = $1', [note.id]);
+		const original = originals.at(0);
+
+		return {
+			replyId: note.replyId === UNREFERENCEABLE_NOTE_ID ? original?.replyId ?? null : note.replyId,
+			renoteId: note.renoteId === UNREFERENCEABLE_NOTE_ID ? original?.renoteId ?? null : note.renoteId,
+			replyUri: note.replyId === UNREFERENCEABLE_NOTE_ID ? original?.replyUri ?? null : null,
+			renoteUri: note.renoteId === UNREFERENCEABLE_NOTE_ID ? original?.renoteUri ?? null : null,
+		};
+	}
+
+	@bindThis
+	private async renderMissingNoteUri(id: MiNote['id']): Promise<string | undefined> {
+		const uriRow = await this.noteUrisRepository.findOneBy({ noteId: id });
+		if (uriRow != null) return uriRow.uri;
+
+		return await isDeletedNote(this.db, id) ? `${this.config.url}/notes/${id}` : undefined;
+	}
+
+	@bindThis
+	public async renderNoteUri(id: MiNote['id'], recordedUri: string | null): Promise<string | undefined> {
+		if (recordedUri != null) return recordedUri;
+
+		const note = await this.notesRepository.findOneBy({ id });
+		if (note != null) return note.uri ? note.uri : `${this.config.url}/notes/${note.id}`;
+
+		return await this.renderMissingNoteUri(id);
+	}
+
+	@bindThis
 	public async renderNote(note: MiNote, dive = true): Promise<IPost> {
 		const getPromisedFiles = async (ids: string[]): Promise<MiDriveFile[]> => {
 			if (ids.length === 0) return [];
@@ -362,11 +406,13 @@ export class ApRendererService {
 			return ids.map(id => items.find(item => item.id === id)).filter(x => x != null);
 		};
 
+		const parentIds = await this.getOriginalParentIds(note);
+
 		let inReplyTo;
 		let inReplyToNote: MiNote | null;
 
 		if (note.replyId) {
-			inReplyToNote = await this.notesRepository.findOneBy({ id: note.replyId });
+			inReplyToNote = parentIds.replyId != null && parentIds.replyUri == null ? await this.notesRepository.findOneBy({ id: parentIds.replyId }) : null;
 
 			if (inReplyToNote != null) {
 				const inReplyToUserExist = await this.usersRepository.exists({ where: { id: inReplyToNote.userId } });
@@ -382,6 +428,10 @@ export class ApRendererService {
 						}
 					}
 				}
+			} else if (parentIds.replyUri != null) {
+				inReplyTo = parentIds.replyUri;
+			} else if (parentIds.replyId != null) {
+				inReplyTo = await this.renderMissingNoteUri(parentIds.replyId);
 			}
 		} else {
 			inReplyTo = null;
@@ -389,12 +439,8 @@ export class ApRendererService {
 
 		let quote: string | undefined;
 
-		if (note.renoteId) {
-			const renote = await this.notesRepository.findOneBy({ id: note.renoteId });
-
-			if (renote) {
-				quote = renote.uri ? renote.uri : `${this.config.url}/notes/${renote.id}`;
-			}
+		if (parentIds.renoteId) {
+			quote = await this.renderNoteUri(parentIds.renoteId, parentIds.renoteUri);
 		}
 
 		const attributedTo = this.userEntityService.genLocalUserUri(note.userId);
@@ -628,10 +674,11 @@ export class ApRendererService {
 	}
 
 	@bindThis
-	public renderTombstone(id: string): ITombstone {
+	public renderTombstone(id: string, formerType?: string): ITombstone {
 		return {
 			id,
 			type: 'Tombstone',
+			...(formerType != null ? { formerType } : {}),
 		};
 	}
 

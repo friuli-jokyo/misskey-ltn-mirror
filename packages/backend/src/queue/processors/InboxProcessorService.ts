@@ -18,6 +18,7 @@ import type { IActivity } from '@/core/activitypub/type.js';
 import type { MiRemoteUser } from '@/models/User.js';
 import type { MiUserPublickey } from '@/models/UserPublickey.js';
 import { ApDbResolverService } from '@/core/activitypub/ApDbResolverService.js';
+import { ApResolverService } from '@/core/activitypub/ApResolverService.js';
 import { StatusError } from '@/misc/status-error.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { ApPersonService } from '@/core/activitypub/models/ApPersonService.js';
@@ -53,6 +54,7 @@ export class InboxProcessorService implements OnApplicationShutdown {
 		private jsonLdService: JsonLdService,
 		private apPersonService: ApPersonService,
 		private apDbResolverService: ApDbResolverService,
+		private apResolverService: ApResolverService,
 		private instanceChart: InstanceChart,
 		private apRequestChart: ApRequestChart,
 		private federationChart: FederationChart,
@@ -250,7 +252,9 @@ export class InboxProcessorService implements OnApplicationShutdown {
 
 		// アクティビティを処理
 		try {
-			const result = await this.apInboxService.performActivity(authUser.user, activity);
+			const resolver = await this.apResolverService.createResolver();
+			if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) resolver.markLastAttempt();
+			const result = await this.apInboxService.performActivity(authUser.user, activity, resolver);
 			if (result && !result.startsWith('ok')) {
 				this.logger.warn(`inbox activity ignored (maybe): id=${activity.id} reason=${result}`);
 				return result;
@@ -266,8 +270,14 @@ export class InboxProcessorService implements OnApplicationShutdown {
 						return e.message;
 					case '9f466dab-c856-48cd-9e65-ff90ff750580':
 						return 'note contains too many mentions';
+					case '90b9d6f0-893a-4fef-b0f1-e9a33989f71a':
+					case '48d7a997-da5c-4716-b3c3-92db3f37bf7d':
+						return 'skip: renote target is not public or home';
 					case '09d79f9e-64f1-4316-9cfa-e75c4d091574': // Instance is blocked
 						return 'skip: blocked instance';
+					case 'e3e4eb00-3a45-49d7-bf8d-959a02f5d2eb':
+					case 'cc7e1130-6bf7-4105-adeb-25f799da854f':
+						return 'skip: actor deleted';
 				}
 			}
 			throw e;

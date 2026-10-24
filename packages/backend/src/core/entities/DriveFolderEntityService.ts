@@ -5,7 +5,7 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { DI } from '@/di-symbols.js';
-import type { DriveFilesRepository, DriveFoldersRepository } from '@/models/_.js';
+import type { DriveFoldersRepository } from '@/models/_.js';
 import { awaitAll } from '@/misc/prelude/await-all.js';
 import type { Packed } from '@/misc/json-schema.js';
 import type { } from '@/models/Blocking.js';
@@ -22,9 +22,6 @@ export class DriveFolderEntityService {
 		@Inject(DI.driveFoldersRepository)
 		private driveFoldersRepository: DriveFoldersRepository,
 
-		@Inject(DI.driveFilesRepository)
-		private driveFilesRepository: DriveFilesRepository,
-
 		private idService: IdService,
 	) {
 	}
@@ -38,7 +35,6 @@ export class DriveFolderEntityService {
 		hint?: {
 			folderMap?: Map<string, MiDriveFolder>;
 			foldersCountMap?: Map<string, number> | null;
-			filesCountMap?: Map<string, number> | null;
 			parentPacker?: (id: string) => Promise<Packed<'DriveFolder'>>;
 		},
 	): Promise<Packed<'DriveFolder'>> {
@@ -61,10 +57,7 @@ export class DriveFolderEntityService {
 					?? this.driveFoldersRepository.countBy({
 						parentId: folder.id,
 					}),
-				filesCount: hint?.filesCountMap?.get(folder.id)
-					?? this.driveFilesRepository.countBy({
-						folderId: folder.id,
-					}),
+				filesCount: folder.filesCount,
 
 				...(folder.parentId ? {
 					parent: hint?.parentPacker
@@ -143,7 +136,6 @@ export class DriveFolderEntityService {
 		const folderMap = await collectUniqueObjects(src);
 
 		let foldersCountMap: Map<string, number> | null = null;
-		let filesCountMap: Map<string, number> | null = null;
 		if (opts.detail) {
 			await collectAncestors(folderMap);
 
@@ -156,18 +148,9 @@ export class DriveFolderEntityService {
 					.groupBy('folder.parentId')
 					.getRawMany<{ parentId: string; count: string }>();
 
-				const fileCounts = await this.driveFilesRepository.createQueryBuilder('file')
-					.select('file.folderId', 'folderId')
-					.addSelect('COUNT(*)', 'count')
-					.where('file.folderId IN (:...ids)', { ids })
-					.groupBy('file.folderId')
-					.getRawMany<{ folderId: string; count: string }>();
-
 				foldersCountMap = new Map(folderCounts.map(row => [row.parentId, Number(row.count)]));
-				filesCountMap = new Map(fileCounts.map(row => [row.folderId, Number(row.count)]));
 			} else {
 				foldersCountMap = new Map();
-				filesCountMap = new Map();
 			}
 		}
 
@@ -184,7 +167,6 @@ export class DriveFolderEntityService {
 			const packedPromise = this.pack(folder, options, {
 				folderMap,
 				foldersCountMap,
-				filesCountMap,
 				parentPacker: packFromId,
 			});
 			packedMap.set(id, packedPromise);

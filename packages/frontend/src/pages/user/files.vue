@@ -23,7 +23,7 @@ import * as Misskey from 'misskey-js';
 import MkNoteMediaGrid from '@/components/MkNoteMediaGrid.vue';
 import MkPagination from '@/components/MkPagination.vue';
 import { Paginator } from '@/utility/paginator.js';
-import { notePage } from '@/filters/note.js';
+import { notePage } from '@@/js/note.js';
 
 const props = defineProps<{
 	user: Misskey.entities.UserDetailed;

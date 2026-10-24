@@ -5,7 +5,7 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import type { DriveFilesRepository } from '@/models/_.js';
+import type { DriveFileMd5sRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 
 export const meta = {
@@ -34,11 +34,11 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
-		@Inject(DI.driveFilesRepository)
-		private driveFilesRepository: DriveFilesRepository,
+		@Inject(DI.driveFileMd5sRepository)
+		private driveFileMd5sRepository: DriveFileMd5sRepository,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const exist = await this.driveFilesRepository.exists({
+			const exist = await this.driveFileMd5sRepository.exists({
 				where: {
 					md5: ps.md5,
 					userId: me.id,

@@ -5,11 +5,12 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import * as Bull from 'bullmq';
-import { Not } from 'typeorm';
+import { EntityNotFoundError, Not } from 'typeorm';
 import { DI } from '@/di-symbols.js';
 import type { InstancesRepository, MiMeta } from '@/models/_.js';
 import type Logger from '@/logger.js';
 import { ApRequestService } from '@/core/activitypub/ApRequestService.js';
+import { CacheService } from '@/core/CacheService.js';
 import { FederatedInstanceService } from '@/core/FederatedInstanceService.js';
 import { FetchInstanceMetadataService } from '@/core/FetchInstanceMetadataService.js';
 import { MemorySingleCache } from '@/misc/cache.js';
@@ -37,6 +38,7 @@ export class DeliverProcessorService {
 		private instancesRepository: InstancesRepository,
 
 		private utilityService: UtilityService,
+		private cacheService: CacheService,
 		private federatedInstanceService: FederatedInstanceService,
 		private fetchInstanceMetadataService: FetchInstanceMetadataService,
 		private apRequestService: ApRequestService,
@@ -78,6 +80,14 @@ export class DeliverProcessorService {
 		// suspend server by software
 		if (i != null && this.utilityService.isDeliverSuspendedSoftware(i)) {
 			return 'skip (software suspended)';
+		}
+
+		const sender = await this.cacheService.findUserById(job.data.user.id).catch(err => {
+			if (err instanceof EntityNotFoundError) return null;
+			throw err;
+		});
+		if (sender == null || (sender.isDeleted && !job.data.isAccountDeletion)) {
+			return 'skip (sender deleted)';
 		}
 
 		try {

@@ -59,6 +59,47 @@ export class IdService {
 	}
 
 	@bindThis
+	private suffixSpace(): { timeLength: number; chars: string } {
+		switch (this.method) {
+			case 'aid': return { timeLength: 8, chars: '0123456789abcdefghijklmnopqrstuvwxyz' };
+			case 'aidx': return { timeLength: 8, chars: '0123456789abcdefghijklmnopqrstuvwxyz' };
+			case 'meid': return { timeLength: 12, chars: '0123456789abcdef' };
+			case 'meidg': return { timeLength: 12, chars: '0123456789abcdef' };
+			case 'ulid': return { timeLength: 10, chars: '0123456789ABCDEFGHJKMNPQRSTVWXYZ' };
+			case 'objectid': return { timeLength: 8, chars: '0123456789abcdef' };
+			default: throw new Error('unrecognized id generation method');
+		}
+	}
+
+	@bindThis
+	public isSameTime(a: string, b: string): boolean {
+		const { timeLength } = this.suffixSpace();
+		return a.length === b.length && a.slice(0, timeLength) === b.slice(0, timeLength);
+	}
+
+	@bindThis
+	public lastWithinTime(id: string): string {
+		const { timeLength, chars } = this.suffixSpace();
+		return id.slice(0, timeLength) + chars[chars.length - 1].repeat(id.length - timeLength);
+	}
+
+	@bindThis
+	public successorWithinTime(id: string): string | null {
+		const { timeLength, chars } = this.suffixSpace();
+		const digits = Array.from(id.slice(timeLength));
+		for (let i = digits.length - 1; i >= 0; i--) {
+			const index = chars.indexOf(digits[i]);
+			if (index < 0) return null;
+			if (index < chars.length - 1) {
+				digits[i] = chars[index + 1];
+				return id.slice(0, timeLength) + digits.join('');
+			}
+			digits[i] = chars[0];
+		}
+		return null;
+	}
+
+	@bindThis
 	public parse(id: string): { date: Date; } {
 		switch (this.method) {
 			case 'aid': return parseAid(id);

@@ -40,7 +40,6 @@ export class JobChannel extends Channel {
 
 	@bindThis
 	public async init(params: JsonObject) {
-		// Send initial job list
 		const jobs = await this.dbQueue.getJobs();
 		const userJobs = jobs.filter((job) => job.data.user?.id === this.user!.id);
 
@@ -62,7 +61,6 @@ export class JobChannel extends Channel {
 			this.send('jobProgress', job);
 		}
 
-		// Subscribe to job events
 		this.subscriber.on(`jobStream:${this.user!.id}`, (data) => {
 			if (!data.body) return;
 

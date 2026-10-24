@@ -150,10 +150,8 @@ const createTestJob = async () => {
 };
 
 onMounted(() => {
-	// Initial fetch
 	fetchJobs();
 
-	// Setup WebSocket connection
 	connection = useStream().useChannel('job');
 
 	connection.on('jobProgress', updateJob);

@@ -4,8 +4,9 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
+import { In } from 'typeorm';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import type { NoteFavoritesRepository } from '@/models/_.js';
+import type { NoteFavoritesRepository, NotesRepository } from '@/models/_.js';
 import { QueryService } from '@/core/QueryService.js';
 import { NoteFavoriteEntityService } from '@/core/entities/NoteFavoriteEntityService.js';
 import { DI } from '@/di-symbols.js';
@@ -46,17 +47,29 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.noteFavoritesRepository)
 		private noteFavoritesRepository: NoteFavoritesRepository,
 
+		@Inject(DI.notesRepository)
+		private notesRepository: NotesRepository,
+
 		private noteFavoriteEntityService: NoteFavoriteEntityService,
 		private queryService: QueryService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const query = this.queryService.makePaginationQuery(this.noteFavoritesRepository.createQueryBuilder('favorite'), ps.sinceId, ps.untilId, ps.sinceDate, ps.untilDate)
-				.andWhere('favorite.userId = :meId', { meId: me.id })
-				.leftJoinAndSelect('favorite.note', 'note');
+				.andWhere('favorite.userId = :meId', { meId: me.id });
 
 			const favorites = await query
 				.limit(ps.limit)
 				.getMany();
+
+			if (favorites.length > 0) {
+				const notes = new Map((await this.notesRepository.findBy({
+					id: In(favorites.map(favorite => favorite.noteId)),
+				})).map(note => [note.id, note]));
+
+				for (const favorite of favorites) {
+					favorite.note = notes.get(favorite.noteId) ?? null;
+				}
+			}
 
 			return await this.noteFavoriteEntityService.packMany(favorites, me);
 		});

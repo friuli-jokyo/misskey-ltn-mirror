@@ -130,20 +130,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</MkSelect>
 		</SearchMarker>
 
-		<SearchMarker :keywords="['federation']">
-			<MkInfo v-if="profile.federationPolicy === 'none'" warn>{{ i18n.ts.federationMayNotWorkProperly }}</MkInfo>
-			<MkSelect
-				v-model="profile.federationPolicy"
-				:items="[
-					{ label: i18n.ts.strict, value: 'strict' },
-					{ label: i18n.ts.lax, value: 'lax' },
-					{ label: i18n.ts.none, value: 'none' },
-				]"
-			>
-				<template #label><SearchLabel>{{ i18n.ts.federationPolicy }}</SearchLabel></template>
-			</MkSelect>
-		</SearchMarker>
-
 		<SearchMarker>
 			<MkFolder>
 				<template #label><SearchLabel>{{ i18n.ts.advancedSettings }}</SearchLabel></template>
@@ -201,6 +187,7 @@ import { store } from '@/store.js';
 import MkInfo from '@/components/MkInfo.vue';
 import MkTextarea from '@/components/MkTextarea.vue';
 import { genId } from '@/utility/id.js';
+import { replaceCurrentAccountData, updateCurrentAccount } from '@/accounts.js';
 
 const $i = ensureSignin();
 
@@ -220,7 +207,6 @@ const profile = reactive({
 	lang: assertVaildLang($i.lang) ? $i.lang : null,
 	isBot: $i.isBot ?? false,
 	isCat: $i.isCat ?? false,
-	federationPolicy: $i.federationPolicy,
 });
 
 watch(() => profile, () => {
@@ -278,13 +264,17 @@ function save() {
 		lang: profile.lang || null,
 		isBot: !!profile.isBot,
 		isCat: !!profile.isCat,
-		federationPolicy: profile.federationPolicy,
 	}, undefined, {
 		'0b3f9f6a-2f4d-4b1f-9fb4-49d3a2fd7191': {
 			title: i18n.ts.yourNameContainsProhibitedWords,
 			text: i18n.ts.yourNameContainsProhibitedWordsDescription,
 		},
+	}).then((res) => {
+		replaceCurrentAccountData(res);
+	}).catch(() => {
+		// エラーダイアログは apiWithDialog 側で表示済み
 	});
+
 	claimAchievement('profileFilled');
 	if (profile.name === 'syuilo' || profile.name === 'しゅいろ') {
 		claimAchievement('setNameToSyuilo');
@@ -298,9 +288,19 @@ function changeAvatar(ev: PointerEvent) {
 	async function done(driveFile: Misskey.entities.DriveFile) {
 		const i = await os.apiWithDialog('i/update', {
 			avatarId: driveFile.id,
+		}, undefined, {
+			'71bb5e53-4742-4609-b465-36081e131208': {
+				title: i18n.ts.cannotSelectSensitiveMedia,
+				text: i18n.ts.cannotSelectSensitiveMediaDescription,
+			},
+		}).catch(() => null); // エラーダイアログは apiWithDialog 側で表示済み
+		if (i == null) return;
+
+		updateCurrentAccount({
+			avatarId: i.avatarId,
+			avatarUrl: i.avatarUrl,
+			avatarBlurhash: i.avatarBlurhash,
 		});
-		$i.avatarId = i.avatarId;
-		$i.avatarUrl = i.avatarUrl;
 		claimAchievement('profileFilled');
 	}
 
@@ -336,20 +336,48 @@ function changeAvatar(ev: PointerEvent) {
 		text: i18n.ts.fromDrive,
 		icon: 'ti ti-cloud',
 		action: () => {
-			chooseDriveFile({ multiple: false }).then(files => {
+			chooseDriveFile({ multiple: false, excludeSensitive: true }).then(files => {
 				done(files[0]);
 			});
 		},
-	}], ev.currentTarget ?? ev.target);
+	}, ...($i.avatarId != null ? [
+			{ type: 'divider' as const },
+			{
+				type: 'button' as const,
+				text: i18n.ts.detach,
+				icon: 'ti ti-circle-x',
+				action: () => {
+					os.apiWithDialog('i/update', {
+						avatarId: null,
+					}).then((res) => {
+						updateCurrentAccount({
+							avatarId: res.avatarId,
+							avatarUrl: res.avatarUrl,
+							avatarBlurhash: res.avatarBlurhash,
+						});
+					}).catch(() => {
+						// エラーダイアログは apiWithDialog 側で表示済み
+					});
+				},
+			},
+		] : [])], ev.currentTarget ?? ev.target);
 }
 
 function changeBanner(ev: PointerEvent) {
 	async function done(driveFile: Misskey.entities.DriveFile) {
 		const i = await os.apiWithDialog('i/update', {
 			bannerId: driveFile.id,
+		}, undefined, {
+			'e148b34c-9f33-4300-93e0-7817008fb366': {
+				title: i18n.ts.cannotSelectSensitiveMedia,
+				text: i18n.ts.cannotSelectSensitiveMediaDescription,
+			},
+		}).catch(() => null); // エラーダイアログは apiWithDialog 側で表示済み
+		if (i == null) return;
+		updateCurrentAccount({
+			bannerId: i.bannerId,
+			bannerUrl: i.bannerUrl,
 		});
-		$i.bannerId = i.bannerId;
-		$i.bannerUrl = i.bannerUrl;
 	}
 
 	os.popupMenu([{
@@ -384,11 +412,30 @@ function changeBanner(ev: PointerEvent) {
 		text: i18n.ts.fromDrive,
 		icon: 'ti ti-cloud',
 		action: () => {
-			chooseDriveFile({ multiple: false }).then(files => {
+			chooseDriveFile({ multiple: false, excludeSensitive: true }).then(files => {
 				done(files[0]);
 			});
 		},
-	}], ev.currentTarget ?? ev.target);
+	}, ...($i.bannerId ? [
+			{ type: 'divider' as const },
+			{
+				type: 'button' as const,
+				text: i18n.ts.detach,
+				icon: 'ti ti-circle-x',
+				action: () => {
+					os.apiWithDialog('i/update', {
+						bannerId: null,
+					}).then((res) => {
+						updateCurrentAccount({
+							bannerId: res.bannerId,
+							bannerUrl: res.bannerUrl,
+						});
+					}).catch(() => {
+						// エラーダイアログは apiWithDialog 側で表示済み
+					});
+				},
+			},
+		] : [])], ev.currentTarget ?? ev.target);
 }
 
 const headerActions = computed(() => []);

@@ -6,9 +6,10 @@
 import * as fs from 'node:fs';
 import { Writable } from 'node:stream';
 import { Inject, Injectable } from '@nestjs/common';
+import { In } from 'typeorm';
 import { format as dateFormat } from 'date-fns';
 import { DI } from '@/di-symbols.js';
-import type { ClipNotesRepository, ClipsRepository, MiClip, MiClipNote, MiUser, PollsRepository, UsersRepository } from '@/models/_.js';
+import type { ClipNotesRepository, ClipsRepository, MiClip, MiClipNote, MiUser, NotesRepository, PollsRepository, UsersRepository } from '@/models/_.js';
 import type Logger from '@/logger.js';
 import { DriveService } from '@/core/DriveService.js';
 import { createTemp } from '@/misc/create-temp.js';
@@ -40,6 +41,9 @@ export class ExportClipsProcessorService {
 
 		@Inject(DI.clipNotesRepository)
 		private clipNotesRepository: ClipNotesRepository,
+
+		@Inject(DI.notesRepository)
+		private notesRepository: NotesRepository,
 
 		private driveService: DriveService,
 		private queueLoggerService: QueueLoggerService,
@@ -142,8 +146,6 @@ export class ExportClipsProcessorService {
 
 		while (true) {
 			const query = this.clipNotesRepository.createQueryBuilder('clipNote')
-				.leftJoinAndSelect('clipNote.note', 'note')
-				.leftJoinAndSelect('note.user', 'user')
 				.where('clipNote.clipId = :clipId', { clipId })
 				.orderBy('clipNote.id', 'ASC')
 				.take(100);
@@ -152,15 +154,27 @@ export class ExportClipsProcessorService {
 				query.andWhere('clipNote.id > :cursor', { cursor });
 			}
 
-			this.queryService.generateVisibilityQuery(query, { id: userId });
+			const page = await query.getMany();
 
-			const clipNotes = await query.getMany() as (MiClipNote & { note: MiNote & { user: MiUser } })[];
-
-			if (clipNotes.length === 0) {
+			if (page.length === 0) {
 				break;
 			}
 
-			cursor = clipNotes.at(-1)?.id ?? null;
+			cursor = page.at(-1)?.id ?? null;
+
+			const notesQuery = this.notesRepository.createQueryBuilder('note')
+				.where({ id: In(page.map(clipNote => clipNote.noteId)) })
+				.innerJoinAndSelect('note.user', 'user');
+
+			this.queryService.generateVisibilityQuery(notesQuery, { id: userId });
+
+			const notes = new Map((await notesQuery.getMany()).map(note => [note.id, note]));
+
+			for (const clipNote of page) {
+				clipNote.note = notes.get(clipNote.noteId) ?? null;
+			}
+
+			const clipNotes = page.filter(clipNote => clipNote.note != null) as (MiClipNote & { note: MiNote & { user: MiUser } })[];
 
 			for (const clipNote of clipNotes) {
 				const noteCreatedAt = this.idService.parse(clipNote.note.id).date;

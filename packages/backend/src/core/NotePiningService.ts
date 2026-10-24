@@ -4,7 +4,7 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { IsNull } from 'typeorm';
+import { DataSource, IsNull } from 'typeorm';
 import { DI } from '@/di-symbols.js';
 import type { NotesRepository, UserNotePiningsRepository, UsersRepository } from '@/models/_.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
@@ -25,6 +25,9 @@ export class NotePiningService {
 	constructor(
 		@Inject(DI.config)
 		private config: Config,
+
+		@Inject(DI.db)
+		private db: DataSource,
 
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
@@ -73,11 +76,17 @@ export class NotePiningService {
 			throw new IdentifiableError('23f0cf4e-59a3-4276-a91d-61a5891c1514', 'That note has already been pinned.');
 		}
 
-		await this.userNotePiningsRepository.insert({
-			id: this.idService.gen(),
-			userId: user.id,
-			noteId: note.id,
-		} as MiUserNotePining);
+		const inserted: { id: MiUserNotePining['id'] }[] = await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+			await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [user.id]);
+			return await transactionalEntityManager.query(
+				'WITH "target" AS (SELECT "id" FROM "note" WHERE "id" = $3 FOR KEY SHARE) INSERT INTO "user_note_pining" ("id", "userId", "noteId") SELECT $1, $2, "id" FROM "target" RETURNING "id"',
+				[this.idService.gen(), user.id, note.id],
+			);
+		});
+
+		if (inserted.length === 0) {
+			throw new IdentifiableError('70c4e51f-5bea-449c-a030-53bee3cce202', 'No such note.');
+		}
 
 		// Deliver to remote followers
 		if (this.userEntityService.isLocalUser(user) && !note.localOnly && ['public', 'home'].includes(note.visibility)) {

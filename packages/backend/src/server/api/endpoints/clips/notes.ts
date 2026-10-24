@@ -6,7 +6,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Brackets } from 'typeorm';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import type { NotesRepository, ClipsRepository, ClipNotesRepository } from '@/models/_.js';
+import type { ClipsRepository, ClipNotesRepository } from '@/models/_.js';
 import { QueryService } from '@/core/QueryService.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { DI } from '@/di-symbols.js';
@@ -59,9 +59,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.clipsRepository)
 		private clipsRepository: ClipsRepository,
 
-		@Inject(DI.notesRepository)
-		private notesRepository: NotesRepository,
-
 		@Inject(DI.clipNotesRepository)
 		private clipNotesRepository: ClipNotesRepository,
 
@@ -81,37 +78,35 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw new ApiError(meta.errors.noSuchClip);
 			}
 
-			const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), ps.sinceId, ps.untilId, ps.sinceDate, ps.untilDate)
-				.innerJoin(this.clipNotesRepository.metadata.targetName, 'clipNote', 'clipNote.noteId = note.id')
-				.innerJoinAndSelect('note.user', 'user')
-				.leftJoinAndSelect('note.reply', 'reply')
-				.leftJoinAndSelect('note.renote', 'renote')
-				.leftJoinAndSelect('reply.user', 'replyUser')
-				.leftJoinAndSelect('renote.user', 'renoteUser')
-				.andWhere('clipNote.clipId = :clipId', { clipId: clip.id });
+			const notes = await this.queryService.fetchNotesByIdPages(async ({ sinceId, untilId, ascending, limit }) => {
+				const clipNotesQuery = this.clipNotesRepository.createQueryBuilder('clipNote')
+					.select('clipNote.noteId', 'noteId')
+					.where('clipNote.clipId = :clipId', { clipId: clip.id })
+					.orderBy('clipNote.noteId', ascending ? 'ASC' : 'DESC');
+				if (sinceId != null) clipNotesQuery.andWhere('clipNote.noteId > :sinceId', { sinceId });
+				if (untilId != null) clipNotesQuery.andWhere('clipNote.noteId < :untilId', { untilId });
 
-			this.queryService.generateVisibilityQuery(query, me);
-			this.queryService.generateBlockedHostQueryForNote(query);
-			// this.queryService.generateSuspendedUserQueryForNote(query); // To avoid problems with removing notes, ignoring suspended user for now
-			if (me) {
-				this.queryService.generateMutedUserQueryForNotes(query, me);
-				this.queryService.generateBlockedUserQueryForNotes(query, me);
-				this.queryService.generateMutedUserQueryForNotes(query, me, { noteColumn: 'renote' });
-				this.queryService.generateBlockedUserQueryForNotes(query, me, { noteColumn: 'renote' });
-			}
-
-			if (ps.search != null) {
-				for (const word of ps.search.trim().split(' ')) {
-					query.andWhere(new Brackets(qb => {
-						qb.orWhere('note.text ILIKE :search', { search: `%${sqlLikeEscape(word)}%` });
-						qb.orWhere('note.cw ILIKE :search', { search: `%${sqlLikeEscape(word)}%` });
-					}));
+				return (await clipNotesQuery.limit(limit).getRawMany<{ noteId: string }>()).map(row => row.noteId);
+			}, ps, query => {
+				this.queryService.generateVisibilityQuery(query, me);
+				this.queryService.generateBlockedHostQueryForNote(query);
+				// this.queryService.generateSuspendedUserQueryForNote(query); // To avoid problems with removing notes, ignoring suspended user for now
+				if (me) {
+					this.queryService.generateMutedUserQueryForNotes(query, me);
+					this.queryService.generateBlockedUserQueryForNotes(query, me);
+					this.queryService.generateMutedUserQueryForRenoteTarget(query, me);
+					this.queryService.generateBlockedUserQueryForRenoteTarget(query, me);
 				}
-			}
 
-			const notes = await query
-				.limit(ps.limit)
-				.getMany();
+				if (ps.search != null) {
+					for (const word of ps.search.trim().split(' ')) {
+						query.andWhere(new Brackets(qb => {
+							qb.orWhere('note.text ILIKE :search', { search: `%${sqlLikeEscape(word)}%` });
+							qb.orWhere('note.cw ILIKE :search', { search: `%${sqlLikeEscape(word)}%` });
+						}));
+					}
+				}
+			});
 
 			return await this.noteEntityService.packMany(notes, me);
 		});

@@ -35,6 +35,14 @@ export const meta = {
 				type: 'number',
 				optional: false, nullable: false,
 			},
+			reactionsCount: {
+				type: 'number',
+				optional: false, nullable: false,
+			},
+			//originalReactionsCount: {
+			//	type: 'number',
+			//	optional: false, nullable: false,
+			//},
 			instances: {
 				type: 'number',
 				optional: false, nullable: false,
@@ -83,7 +91,11 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				//originalReactionsCount,
 				instances,
 			] = await Promise.all([
-				this.noteReactionsRepository.count({ cache: 3600000 }), // 1 hour
+				this.noteReactionsRepository.query(`
+					SELECT COALESCE(SUM(GREATEST(c.reltuples::float8, 0)), 0)::bigint AS "count", COALESCE(bool_or(c.oid = 'note_reaction'::regclass AND c.reltuples < 0), false) AS "unanalyzed"
+					FROM pg_class c
+					WHERE c.relkind = 'r' AND (c.oid = 'note_reaction'::regclass OR c.oid IN (SELECT i.inhrelid FROM pg_inherits i WHERE i.inhparent = 'note_reaction'::regclass))
+				`).then(async ([{ count, unanalyzed }]: { count: string; unanalyzed: boolean }[]) => unanalyzed ? await this.noteReactionsRepository.count({ cache: 3600000 }) : Number(count)),
 				//this.noteReactionsRepository.count({ where: { userHost: IsNull() }, cache: 3600000 }),
 				this.instancesRepository.count({ cache: 3600000 }),
 			]);

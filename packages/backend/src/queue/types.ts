@@ -5,6 +5,7 @@
 
 import type { Antenna } from '@/server/api/endpoints/i/import-antennas.js';
 import type { MiDriveFile } from '@/models/DriveFile.js';
+import type { MiAnnouncement } from '@/models/Announcement.js';
 import type { MiNote } from '@/models/Note.js';
 import type { SystemWebhookEventType } from '@/models/SystemWebhook.js';
 import type { MiUser } from '@/models/User.js';
@@ -25,6 +26,7 @@ export type DeliverJobData = {
 	to: string;
 	/** whether it is sharedInbox */
 	isSharedInbox: boolean;
+	isAccountDeletion?: boolean;
 };
 
 export type InboxJobData = {
@@ -61,6 +63,7 @@ export type DbJobMap = {
 	importUserLists: DbUserImportJobData;
 	importCustomEmojis: DbUserImportJobData;
 	deleteAccount: DbUserDeleteJobData;
+	purgeAccount: DbJobDataWithUser;
 	testJob: { user: ThinUser; duration: number };
 };
 
@@ -113,6 +116,11 @@ export type EndedPollNotificationJobData = {
 
 export type PostScheduledNoteJobData = {
 	noteDraftId: string;
+};
+
+export type ArchiveAnnouncementJobData = {
+	announcementId: MiAnnouncement['id'];
+	autoArchiveAt: number;
 };
 
 export type SystemWebhookDeliverJobData<T extends SystemWebhookEventType = SystemWebhookEventType> = {

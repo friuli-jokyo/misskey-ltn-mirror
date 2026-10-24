@@ -33,7 +33,10 @@ import { MiChatRoomMembership } from '@/models/ChatRoomMembership.js';
 import { MiClip } from '@/models/Clip.js';
 import { MiClipFavorite } from '@/models/ClipFavorite.js';
 import { MiClipNote } from '@/models/ClipNote.js';
+import { MiDeletedNote } from '@/models/DeletedNote.js';
 import { MiDriveFile } from '@/models/DriveFile.js';
+import { MiDriveFileAccessKey } from '@/models/DriveFileAccessKey.js';
+import { MiDriveFileMd5 } from '@/models/DriveFileMd5.js';
 import { MiDriveFolder } from '@/models/DriveFolder.js';
 import { MiEmoji } from '@/models/Emoji.js';
 import { MiFlash } from '@/models/Flash.js';
@@ -50,10 +53,16 @@ import { MiMuting } from '@/models/Muting.js';
 import { MiNote } from '@/models/Note.js';
 import { MiNoteDraft } from '@/models/NoteDraft.js';
 import { MiNoteFavorite } from '@/models/NoteFavorite.js';
+import { MiNotePendingParent } from '@/models/NotePendingParent.js';
 import { MiNoteReaction } from '@/models/NoteReaction.js';
+import { MiNoteReactionLocator } from '@/models/NoteReactionLocator.js';
+import { MiNoteRelation } from '@/models/NoteRelation.js';
 import { MiNoteThreadMuting } from '@/models/NoteThreadMuting.js';
+import { MiNoteUnlinkedRelation } from '@/models/NoteUnlinkedRelation.js';
+import { MiNoteUri } from '@/models/NoteUri.js';
 import { MiPage } from '@/models/Page.js';
 import { MiPageLike } from '@/models/PageLike.js';
+import { MiPartitionMigrationState } from '@/models/PartitionMigrationState.js';
 import { MiPasswordResetRequest } from '@/models/PasswordResetRequest.js';
 import { MiPoll } from '@/models/Poll.js';
 import { MiPollVote } from '@/models/PollVote.js';
@@ -73,6 +82,7 @@ import { MiSystemAccount } from '@/models/SystemAccount.js';
 import { MiSystemWebhook } from '@/models/SystemWebhook.js';
 import { MiUsedUsername } from '@/models/UsedUsername.js';
 import { MiUser } from '@/models/User.js';
+import { MiUserDriveUsage } from '@/models/UserDriveUsage.js';
 import { MiUserIp } from '@/models/UserIp.js';
 import { MiUserKeypair } from '@/models/UserKeypair.js';
 import { MiUserList } from '@/models/UserList.js';
@@ -117,6 +127,9 @@ export {
 	MiClipNote,
 	MiClipFavorite,
 	MiDriveFile,
+	MiDriveFileAccessKey,
+	MiDriveFileMd5,
+	MiUserDriveUsage,
 	MiDriveFolder,
 	MiEmoji,
 	MiFollowing,
@@ -133,9 +146,16 @@ export {
 	MiNoteDraft,
 	MiNoteFavorite,
 	MiNoteReaction,
+	MiNoteReactionLocator,
+	MiNoteRelation,
 	MiNoteThreadMuting,
+	MiNoteUri,
+	MiNotePendingParent,
+	MiNoteUnlinkedRelation,
+	MiDeletedNote,
 	MiPage,
 	MiPageLike,
+	MiPartitionMigrationState,
 	MiPasswordResetRequest,
 	MiPoll,
 	MiPollVote,
@@ -198,6 +218,9 @@ export type ClipsRepository = Repository<MiClip> & MiRepository<MiClip>;
 export type ClipNotesRepository = Repository<MiClipNote> & MiRepository<MiClipNote>;
 export type ClipFavoritesRepository = Repository<MiClipFavorite> & MiRepository<MiClipFavorite>;
 export type DriveFilesRepository = Repository<MiDriveFile> & MiRepository<MiDriveFile>;
+export type DriveFileAccessKeysRepository = Repository<MiDriveFileAccessKey> & MiRepository<MiDriveFileAccessKey>;
+export type DriveFileMd5sRepository = Repository<MiDriveFileMd5> & MiRepository<MiDriveFileMd5>;
+export type UserDriveUsagesRepository = Repository<MiUserDriveUsage> & MiRepository<MiUserDriveUsage>;
 export type DriveFoldersRepository = Repository<MiDriveFolder> & MiRepository<MiDriveFolder>;
 export type EmojisRepository = Repository<MiEmoji> & MiRepository<MiEmoji>;
 export type FollowingsRepository = Repository<MiFollowing> & MiRepository<MiFollowing>;
@@ -214,9 +237,16 @@ export type NotesRepository = Repository<MiNote> & MiRepository<MiNote>;
 export type NoteDraftsRepository = Repository<MiNoteDraft> & MiRepository<MiNoteDraft>;
 export type NoteFavoritesRepository = Repository<MiNoteFavorite> & MiRepository<MiNoteFavorite>;
 export type NoteReactionsRepository = Repository<MiNoteReaction> & MiRepository<MiNoteReaction>;
+export type NoteReactionLocatorsRepository = Repository<MiNoteReactionLocator> & MiRepository<MiNoteReactionLocator>;
+export type NoteRelationsRepository = Repository<MiNoteRelation> & MiRepository<MiNoteRelation>;
 export type NoteThreadMutingsRepository = Repository<MiNoteThreadMuting> & MiRepository<MiNoteThreadMuting>;
+export type NoteUrisRepository = Repository<MiNoteUri> & MiRepository<MiNoteUri>;
+export type NotePendingParentsRepository = Repository<MiNotePendingParent> & MiRepository<MiNotePendingParent>;
+export type NoteUnlinkedRelationsRepository = Repository<MiNoteUnlinkedRelation> & MiRepository<MiNoteUnlinkedRelation>;
+export type DeletedNotesRepository = Repository<MiDeletedNote> & MiRepository<MiDeletedNote>;
 export type PagesRepository = Repository<MiPage> & MiRepository<MiPage>;
 export type PageLikesRepository = Repository<MiPageLike> & MiRepository<MiPageLike>;
+export type PartitionMigrationStatesRepository = Repository<MiPartitionMigrationState> & MiRepository<MiPartitionMigrationState>;
 export type PasswordResetRequestsRepository = Repository<MiPasswordResetRequest> & MiRepository<MiPasswordResetRequest>;
 export type PollsRepository = Repository<MiPoll> & MiRepository<MiPoll>;
 export type PollVotesRepository = Repository<MiPollVote> & MiRepository<MiPollVote>;

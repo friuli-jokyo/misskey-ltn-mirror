@@ -75,6 +75,22 @@ function normalizeSynonymousSubdomain(url: URL | string): URL {
 	return new URL(urlParsed.toString().replace(host, normalizedHost));
 }
 
+export function normalizeSynonymousUri(uri: string): string | null {
+	try {
+		return normalizeSynonymousSubdomain(uri).href;
+	} catch {
+		return null;
+	}
+}
+
+export function synonymousUris(uri: string): string[] {
+	const normalized = normalizeSynonymousUri(uri);
+	if (normalized == null) return [];
+	const prefixed = new URL(normalized);
+	prefixed.host = `www.${prefixed.host}`;
+	return [normalized, prefixed.href];
+}
+
 export function assertActivityMatchesUrl(requestUrl: string | URL, activity: IObject, finalUrl: string | URL, allowSoftfail: FetchAllowSoftFailMask): FetchAllowSoftFailMask {
 	// must have a unique identifier to verify authority
 	if (!activity.id) {

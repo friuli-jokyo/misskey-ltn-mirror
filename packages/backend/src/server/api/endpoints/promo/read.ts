@@ -4,7 +4,8 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import type { PromoReadsRepository } from '@/models/_.js';
+import { DataSource } from 'typeorm';
+import type { PromoReadsRepository, MiPromoRead } from '@/models/_.js';
 import { IdService } from '@/core/IdService.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { DI } from '@/di-symbols.js';
@@ -37,6 +38,9 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.promoReadsRepository)
 		private promoReadsRepository: PromoReadsRepository,
 
@@ -60,11 +64,17 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				return;
 			}
 
-			await this.promoReadsRepository.insert({
-				id: this.idService.gen(),
-				noteId: note.id,
-				userId: me.id,
+			const inserted: { id: MiPromoRead['id'] }[] = await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+				await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [me.id]);
+				return await transactionalEntityManager.query(
+					'WITH "target" AS (SELECT "id" FROM "note" WHERE "id" = $3 FOR KEY SHARE) INSERT INTO "promo_read" ("id", "noteId", "userId") SELECT $1, "id", $2 FROM "target" RETURNING "id"',
+					[this.idService.gen(), me.id, note.id],
+				);
 			});
+
+			if (inserted.length === 0) {
+				throw new ApiError(meta.errors.noSuchNote);
+			}
 		});
 	}
 }

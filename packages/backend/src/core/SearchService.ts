@@ -10,10 +10,11 @@ import { DI } from '@/di-symbols.js';
 import { type Config, FulltextSearchProvider } from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import { MiNote } from '@/models/Note.js';
-import type { FollowingsRepository, NotesRepository } from '@/models/_.js';
+import type { FollowingsRepository, MiMeta, NotesRepository } from '@/models/_.js';
 import { MiUser } from '@/models/_.js';
 import { sqlLikeEscape } from '@/misc/sql-like-escape.js';
 import { isUserRelated } from '@/misc/is-user-related.js';
+import { groupByPrefix, nextPrefix, prefixesDescending, prefixOf } from '@/misc/partition.js';
 import { CacheService } from '@/core/CacheService.js';
 import { QueryService } from '@/core/QueryService.js';
 import { IdService } from '@/core/IdService.js';
@@ -79,7 +80,7 @@ function stringifySearch(q: string, opts: SearchOpts): string {
 
 function compileValue(value: V): string {
 	if (typeof value === 'string') {
-		return `'${value}'`; // TODO: escape
+		return `'${value.replaceAll('\\', '\\\\').replaceAll('\'', '\\\'')}'`;
 	} else if (typeof value === 'number') {
 		return value.toString();
 	} else if (typeof value === 'boolean') {
@@ -137,6 +138,9 @@ export class SearchService {
 		private queryService: QueryService,
 		private idService: IdService,
 		private loggerService: LoggerService,
+
+		@Inject(DI.meta)
+		private meta: MiMeta,
 	) {
 		const meilisearchConfig = config.meilisearch;
 
@@ -247,15 +251,14 @@ export class SearchService {
 					: (a > b ? -1 : 1),
 			).slice(0, pagination.limit);
 
-			const query = this.notesRepository.createQueryBuilder('note')
-				.innerJoinAndSelect('note.user', 'user')
-				.leftJoinAndSelect('note.reply', 'reply')
-				.leftJoinAndSelect('note.renote', 'renote')
-				.leftJoinAndSelect('reply.user', 'replyUser')
-				.leftJoinAndSelect('renote.user', 'renoteUser')
-				.where('note.id IN (:...noteIds)', { noteIds: sortedIds });
+			const notes: MiNote[] = [];
+			for (const group of groupByPrefix(sortedIds).values()) {
+				const query = this.notesRepository.createQueryBuilder('note')
+					.innerJoinAndSelect('note.user', 'user')
+					.where('note.id IN (:...noteIds)', { noteIds: group });
 
-			const notes = await query.getMany();
+				notes.push(...await query.getMany());
+			}
 			const order = new Map(sortedIds.map((id, index) => [id, index]));
 			return notes.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 		}
@@ -320,7 +323,7 @@ export class SearchService {
 		}
 		const commonTermThreshold: number = threshold;
 
-		const sampling = this.queryNoteBySql(q, me, opts, usePgroonga);
+		const { query: sampling, floorKey } = this.queryNoteBySql(q, me, opts, usePgroonga);
 		const tableSample = this.config.fulltextSearch?.tableSample;
 
 		if (tableSample) {
@@ -341,18 +344,41 @@ export class SearchService {
 			}
 		}
 
+		if (this.queryService.isAlwaysEmpty(sampling)) return false;
+
+		const [{ relkind }]: { relkind: string }[] = await this.db.query('SELECT relkind FROM pg_class WHERE oid = \'note\'::regclass');
+		const partitioned = relkind === 'p';
+
 		const attributes: PropertyDescriptor = Object.create(null);
 		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
-			let expression = `SELECT COUNT(*) > ${commonTermThreshold} AS "isCommonTerm" FROM note note`;
+			let expression = partitioned ? 'SELECT COUNT(*) AS "count" FROM note note' : 'SELECT COUNT(*) AS "count" FROM ONLY note note';
 			if (tableSample) {
 				expression += ` TABLESAMPLE ${tableSample}`;
 			}
 			return expression;
 		};
-		Object.defineProperty(sampling, 'createSelectExpression', attributes);
 
-		const result = await sampling.getRawOne<{ isCommonTerm: boolean }>();
-		return result?.isCommonTerm ?? false;
+		if (!partitioned) {
+			Object.defineProperty(sampling, 'createSelectExpression', attributes);
+			const result = await sampling.getRawOne<{ count: string }>();
+			return Number(result?.count ?? 0) > commonTermThreshold;
+		}
+
+		const nowPrefix = prefixOf(this.idService.gen(Date.now(), true));
+		let count = 0;
+		for (const prefix of prefixesDescending(nextPrefix(nowPrefix) ?? nowPrefix, floorKey != null ? prefixOf(floorKey) : undefined)) {
+			const upper = nextPrefix(prefix);
+			const page = sampling.clone()
+				.andWhere('note.id >= :partitionLower', { partitionLower: prefix });
+			if (upper != null) page.andWhere('note.id < :partitionUpper', { partitionUpper: upper });
+			Object.defineProperty(page, 'createSelectExpression', attributes);
+
+			const result = await page.getRawOne<{ count: string }>();
+			count += Number(result?.count ?? 0);
+			if (count > commonTermThreshold) return true;
+		}
+
+		return false;
 	}
 
 	@bindThis
@@ -386,31 +412,10 @@ export class SearchService {
 		softLimit = false,
 		cacheKey?: string,
 	): Promise<MiNote[]> {
-		const cte = this.queryNoteBySql(q, me, opts, false);
-		const query = this.queryService.makePaginationQuery(
-			this.notesRepository.createQueryBuilder('note')
-				.addCommonTableExpression(cte.getQuery(), 'note')
-				.setParameters(cte.expressionMap.parameters),
-			pagination.sinceId,
-			pagination.untilId,
-			undefined,
-			undefined,
-			'id',
-			'_',
-		);
-		query.expressionMap.selects = cte.expressionMap.selects;
+		const { query, floorKey } = this.queryNoteBySql(q, me, opts, false);
+		this.queryService.makePaginationQuery(query, pagination.sinceId, pagination.untilId);
 
-		const attributes: PropertyDescriptor = Object.create(null);
-		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
-			return 'SELECT * FROM note note';
-		};
-		Object.defineProperty(query, 'createSelectExpression', attributes);
-
-		if (!softLimit) {
-			query.limit(pagination.limit);
-		}
-
-		const notes = await query.getMany();
+		const notes = await this.queryService.fetchPaginationQueryAcrossPartitions(query, pagination, softLimit ? Number.MAX_SAFE_INTEGER : pagination.limit, { floorKey });
 
 		if (cacheKey && notes.length > 0) {
 			await this.redisClient.multi()
@@ -432,31 +437,10 @@ export class SearchService {
 		softLimit = false,
 		cacheKey?: string,
 	): Promise<MiNote[]> {
-		const cte = this.queryNoteBySql(q, me, opts, true);
-		const query = this.queryService.makePaginationQuery(
-			this.notesRepository.createQueryBuilder('note')
-				.addCommonTableExpression(cte.getQuery(), 'note')
-				.setParameters(cte.expressionMap.parameters),
-			pagination.sinceId,
-			pagination.untilId,
-			undefined,
-			undefined,
-			'id',
-			'_',
-		);
-		query.expressionMap.selects = cte.expressionMap.selects;
+		const { query, floorKey } = this.queryNoteBySql(q, me, opts, true);
+		this.queryService.makePaginationQuery(query, pagination.sinceId, pagination.untilId);
 
-		const attributes: PropertyDescriptor = Object.create(null);
-		attributes.value = function createSelectExpression(this: SelectQueryBuilder<MiNote>) {
-			return 'SELECT * FROM note note';
-		};
-		Object.defineProperty(query, 'createSelectExpression', attributes);
-
-		if (!softLimit) {
-			query.limit(pagination.limit);
-		}
-
-		const notes = await query.getMany();
+		const notes = await this.queryService.fetchPaginationQueryAcrossPartitions(query, pagination, softLimit ? Number.MAX_SAFE_INTEGER : pagination.limit, { floorKey });
 
 		if (cacheKey && notes.length > 0) {
 			await this.redisClient.multi()
@@ -477,19 +461,17 @@ export class SearchService {
 		usePgroonga: boolean,
 	) {
 		const query = this.notesRepository.createQueryBuilder('note');
+		let floorKey: string | undefined;
 
 		if (opts.userId) {
 			query.andWhere('note.userId = :userId', { userId: opts.userId });
 		} else if (opts.channelId) {
 			query.andWhere('note.channelId = :channelId', { channelId: opts.channelId });
+			if (/^[0-9a-z]{2}/.test(opts.channelId)) floorKey = opts.channelId;
 		}
 
 		query
-			.innerJoinAndSelect('note.user', 'user')
-			.leftJoinAndSelect('note.reply', 'reply')
-			.leftJoinAndSelect('note.renote', 'renote')
-			.leftJoinAndSelect('reply.user', 'replyUser')
-			.leftJoinAndSelect('renote.user', 'renoteUser');
+			.innerJoinAndSelect('note.user', 'user');
 
 		if (usePgroonga) {
 			query.andWhere('concat_ws_unsafe_immutable(\' \', note.cw, note.text) &@~ :q', { q });
@@ -510,12 +492,13 @@ export class SearchService {
 		}
 
 		if (opts.rangeStartAt != null) {
-			const date = this.idService.gen(opts.rangeStartAt - 1);
+			const date = this.idService.gen(opts.rangeStartAt - 1, true);
 			query.andWhere('note.id > :rangeStartAt', { rangeStartAt: date });
+			if (floorKey == null || date > floorKey) floorKey = date;
 		}
 
 		if (opts.rangeEndAt != null) {
-			const date = this.idService.gen(opts.rangeEndAt + 1);
+			const date = this.idService.gen(opts.rangeEndAt + 1, true);
 			query.andWhere('note.id < :rangeEndAt', { rangeEndAt: date });
 		}
 
@@ -573,9 +556,10 @@ export class SearchService {
 		}
 
 		this.queryService.generateVisibilityQuery(query, me);
+		if (me == null) this.queryService.generateUgcVisibilityQueryForVisitor(query);
 		this.queryService.generateBaseNoteFilteringQuery(query, me);
 
-		return query;
+		return { query, floorKey };
 	}
 
 	@bindThis
@@ -622,6 +606,10 @@ export class SearchService {
 				filter.qs.push({ op: '=', k: 'userHost', v: opts.host });
 			}
 		}
+		if (me == null) {
+			if (this.meta.ugcVisibilityForVisitor === 'none') return [];
+			if (this.meta.ugcVisibilityForVisitor === 'local') filter.qs.push({ op: 'is null', k: 'userHost' });
+		}
 
 		const res = await this.meilisearchNoteIndex.search(q, {
 			sort: ['createdAt:desc'],
@@ -644,19 +632,21 @@ export class SearchService {
 			])
 			: [new Set<string>(), new Set<string>()];
 
-		const query = this.notesRepository.createQueryBuilder('note')
-			.innerJoinAndSelect('note.user', 'user')
-			.leftJoinAndSelect('note.reply', 'reply')
-			.leftJoinAndSelect('note.renote', 'renote')
-			.leftJoinAndSelect('reply.user', 'replyUser')
-			.leftJoinAndSelect('renote.user', 'renoteUser');
+		const fetchedNotes: MiNote[] = [];
+		for (const group of groupByPrefix(res.hits.map(x => x.id)).values()) {
+			const query = this.notesRepository.createQueryBuilder('note')
+				.innerJoinAndSelect('note.user', 'user');
 
-		query.where('note.id IN (:...noteIds)', { noteIds: res.hits.map(x => x.id) });
+			query.where('note.id IN (:...noteIds)', { noteIds: group });
 
-		this.queryService.generateBlockedHostQueryForNote(query);
-		this.queryService.generateSuspendedUserQueryForNote(query);
+			this.queryService.generateBlockedHostQueryForNote(query);
+			this.queryService.generateSuspendedUserQueryForNote(query);
 
-		const notes = (await query.getMany()).filter(note => {
+			fetchedNotes.push(...await query.getMany());
+		}
+		await this.queryService.attachReplyAndRenote(fetchedNotes);
+
+		const notes = fetchedNotes.filter(note => {
 			if (me && isUserRelated(note, userIdsWhoBlockingMe)) return false;
 			if (me && isUserRelated(note, userIdsWhoMeMuting)) return false;
 			return true;

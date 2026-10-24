@@ -27,6 +27,9 @@ import {
 	MiClipFavorite,
 	MiClipNote,
 	MiDriveFile,
+	MiDriveFileAccessKey,
+	MiDriveFileMd5,
+	MiUserDriveUsage,
 	MiDriveFolder,
 	MiEmoji,
 	MiFlash,
@@ -43,10 +46,17 @@ import {
 	MiNote,
 	MiNoteFavorite,
 	MiNoteReaction,
+	MiNoteReactionLocator,
+	MiNoteRelation,
 	MiNoteThreadMuting,
+	MiNoteUri,
+	MiNotePendingParent,
+	MiNoteUnlinkedRelation,
+	MiDeletedNote,
 	MiNoteDraft,
 	MiPage,
 	MiPageLike,
+	MiPartitionMigrationState,
 	MiPasswordResetRequest,
 	MiPoll,
 	MiPollVote,
@@ -140,6 +150,48 @@ const $noteThreadMutingsRepository: Provider = {
 const $noteReactionsRepository: Provider = {
 	provide: DI.noteReactionsRepository,
 	useFactory: (db: DataSource) => db.getRepository(MiNoteReaction).extend(miRepository as MiRepository<MiNoteReaction>),
+	inject: [DI.db],
+};
+
+const $noteReactionLocatorsRepository: Provider = {
+	provide: DI.noteReactionLocatorsRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiNoteReactionLocator).extend(miRepository as MiRepository<MiNoteReactionLocator>),
+	inject: [DI.db],
+};
+
+const $noteRelationsRepository: Provider = {
+	provide: DI.noteRelationsRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiNoteRelation).extend(miRepository as MiRepository<MiNoteRelation>),
+	inject: [DI.db],
+};
+
+const $noteUrisRepository: Provider = {
+	provide: DI.noteUrisRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiNoteUri).extend(miRepository as MiRepository<MiNoteUri>),
+	inject: [DI.db],
+};
+
+const $notePendingParentsRepository: Provider = {
+	provide: DI.notePendingParentsRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiNotePendingParent).extend(miRepository as MiRepository<MiNotePendingParent>),
+	inject: [DI.db],
+};
+
+const $noteUnlinkedRelationsRepository: Provider = {
+	provide: DI.noteUnlinkedRelationsRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiNoteUnlinkedRelation).extend(miRepository as MiRepository<MiNoteUnlinkedRelation>),
+	inject: [DI.db],
+};
+
+const $deletedNotesRepository: Provider = {
+	provide: DI.deletedNotesRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiDeletedNote).extend(miRepository as MiRepository<MiDeletedNote>),
+	inject: [DI.db],
+};
+
+const $partitionMigrationStatesRepository: Provider = {
+	provide: DI.partitionMigrationStatesRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiPartitionMigrationState).extend(miRepository as MiRepository<MiPartitionMigrationState>),
 	inject: [DI.db],
 };
 
@@ -254,6 +306,24 @@ const $emojisRepository: Provider = {
 const $driveFilesRepository: Provider = {
 	provide: DI.driveFilesRepository,
 	useFactory: (db: DataSource) => db.getRepository(MiDriveFile).extend(miRepository as MiRepository<MiDriveFile>),
+	inject: [DI.db],
+};
+
+const $driveFileAccessKeysRepository: Provider = {
+	provide: DI.driveFileAccessKeysRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiDriveFileAccessKey).extend(miRepository as MiRepository<MiDriveFileAccessKey>),
+	inject: [DI.db],
+};
+
+const $driveFileMd5sRepository: Provider = {
+	provide: DI.driveFileMd5sRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiDriveFileMd5).extend(miRepository as MiRepository<MiDriveFileMd5>),
+	inject: [DI.db],
+};
+
+const $userDriveUsagesRepository: Provider = {
+	provide: DI.userDriveUsagesRepository,
+	useFactory: (db: DataSource) => db.getRepository(MiUserDriveUsage).extend(miRepository as MiRepository<MiUserDriveUsage>),
 	inject: [DI.db],
 };
 
@@ -563,6 +633,13 @@ const $reversiGamesRepository: Provider = {
 		$noteFavoritesRepository,
 		$noteThreadMutingsRepository,
 		$noteReactionsRepository,
+		$noteReactionLocatorsRepository,
+		$noteRelationsRepository,
+		$noteUrisRepository,
+		$partitionMigrationStatesRepository,
+		$notePendingParentsRepository,
+		$noteUnlinkedRelationsRepository,
+		$deletedNotesRepository,
 		$noteDraftsRepository,
 		$pollsRepository,
 		$pollVotesRepository,
@@ -582,6 +659,9 @@ const $reversiGamesRepository: Provider = {
 		$instancesRepository,
 		$emojisRepository,
 		$driveFilesRepository,
+		$driveFileAccessKeysRepository,
+		$driveFileMd5sRepository,
+		$userDriveUsagesRepository,
 		$driveFoldersRepository,
 		$metasRepository,
 		$mutingsRepository,
@@ -642,6 +722,13 @@ const $reversiGamesRepository: Provider = {
 		$noteFavoritesRepository,
 		$noteThreadMutingsRepository,
 		$noteReactionsRepository,
+		$noteReactionLocatorsRepository,
+		$noteRelationsRepository,
+		$noteUrisRepository,
+		$partitionMigrationStatesRepository,
+		$notePendingParentsRepository,
+		$noteUnlinkedRelationsRepository,
+		$deletedNotesRepository,
 		$noteDraftsRepository,
 		$pollsRepository,
 		$pollVotesRepository,
@@ -661,6 +748,9 @@ const $reversiGamesRepository: Provider = {
 		$instancesRepository,
 		$emojisRepository,
 		$driveFilesRepository,
+		$driveFileAccessKeysRepository,
+		$driveFileMd5sRepository,
+		$userDriveUsagesRepository,
 		$driveFoldersRepository,
 		$metasRepository,
 		$mutingsRepository,

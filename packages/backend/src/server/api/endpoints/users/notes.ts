@@ -86,8 +86,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private channelMutingService: ChannelMutingService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const untilId = ps.untilId ?? (ps.untilDate ? this.idService.gen(ps.untilDate!) : null);
-			const sinceId = ps.sinceId ?? (ps.sinceDate ? this.idService.gen(ps.sinceDate!) : null);
+			const untilId = ps.untilId ?? (ps.untilDate ? this.idService.gen(ps.untilDate!, true) : null);
+			const sinceId = ps.sinceId ?? (ps.sinceDate ? this.idService.gen(ps.sinceDate!, true) : null);
 			const isSelf = me && (me.id === ps.userId);
 
 			if (ps.withReplies && ps.withFiles) throw new ApiError(meta.errors.bothWithRepliesAndWithFiles);
@@ -178,11 +178,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			.andWhere('note.anonymouslySendToUserId IS NULL')
 			.andWhere('note.anonymousChannelUsername IS NULL')
 			.innerJoinAndSelect('note.user', 'user')
-			.leftJoinAndSelect('note.reply', 'reply')
-			.leftJoinAndSelect('note.renote', 'renote')
-			.leftJoinAndSelect('note.channel', 'channel')
-			.leftJoinAndSelect('reply.user', 'replyUser')
-			.leftJoinAndSelect('renote.user', 'renoteUser');
+			.leftJoinAndSelect('note.channel', 'channel');
 
 		if (ps.withChannelNotes) {
 			query.andWhere(new Brackets(qb => {
@@ -213,6 +209,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		}
 
 		this.queryService.generateVisibilityQuery(query, me);
+		if (me == null) this.queryService.generateUgcVisibilityQueryForVisitor(query);
 		this.queryService.generateBaseNoteFilteringQuery(query, me, {
 			excludeAuthor: true,
 			excludeUserFromMute: ps.userId,
@@ -232,6 +229,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}));
 		}
 
-		return await query.limit(ps.limit).getMany();
+		return await this.queryService.fetchPaginationQueryAcrossPartitions(query, ps, ps.limit, { floorKey: await this.queryService.noteFloorOf(ps.userId) });
 	}
 }

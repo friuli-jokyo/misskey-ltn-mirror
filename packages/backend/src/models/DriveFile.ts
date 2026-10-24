@@ -10,6 +10,8 @@ import { MiDriveFolder } from './DriveFolder.js';
 
 @Entity('drive_file')
 @Index(['userId', 'folderId', 'id'])
+@Index(['userId', 'name'])
+@Index(['userId', 'size'])
 export class MiDriveFile {
 	@PrimaryColumn(id())
 	public id: string;
@@ -122,7 +124,6 @@ export class MiDriveFile {
 	})
 	public webpublicAccessKey: string | null;
 
-	@Index()
 	@Column('varchar', {
 		length: 1024, nullable: true,
 		comment: 'The URI of the DriveFile. it will be null when the DriveFile is local.',
@@ -148,21 +149,18 @@ export class MiDriveFile {
 	@JoinColumn()
 	public folder: MiDriveFolder | null;
 
-	@Index()
 	@Column('boolean', {
 		default: false,
 		comment: 'Whether the DriveFile is NSFW.',
 	})
 	public isSensitive: boolean;
 
-	@Index()
 	@Column('boolean', {
 		default: false,
 		comment: 'Whether the DriveFile is NSFW. (predict)',
 	})
 	public maybeSensitive: boolean;
 
-	@Index()
 	@Column('boolean', {
 		default: false,
 	})

@@ -4,7 +4,7 @@
  */
 
 import * as fs from 'node:fs';
-import type { DriveFilesRepository, MiDriveFile } from '@/models/_.js';
+import type { DriveFilesRepository, DriveFileAccessKeysRepository, MiDriveFile } from '@/models/_.js';
 import { createTemp } from '@/misc/create-temp.js';
 import type { DownloadService } from '@/core/DownloadService.js';
 import type { FileInfoService } from '@/core/FileInfoService.js';
@@ -46,6 +46,7 @@ export type FileResolveResult =
 export class FileServerFileResolver {
 	constructor(
 		private driveFilesRepository: DriveFilesRepository,
+		private driveFileAccessKeysRepository: DriveFileAccessKeysRepository,
 		private fileInfoService: FileInfoService,
 		private downloadService: DownloadService,
 		private internalStorageService: InternalStorageService,
@@ -71,17 +72,14 @@ export class FileServerFileResolver {
 	}
 
 	public async resolveFileByAccessKey(key: string): Promise<FileResolveResult> {
-		// Fetch drive file
-		const file = await this.driveFilesRepository.createQueryBuilder('file')
-			.where('file.accessKey = :accessKey', { accessKey: key })
-			.orWhere('file.thumbnailAccessKey = :thumbnailAccessKey', { thumbnailAccessKey: key })
-			.orWhere('file.webpublicAccessKey = :webpublicAccessKey', { webpublicAccessKey: key })
-			.getOne();
+		const lookup = await this.driveFileAccessKeysRepository.findOneBy({ accessKey: key });
+		if (lookup == null) return { kind: 'not-found' };
 
+		const file = await this.driveFilesRepository.findOneBy({ id: lookup.fileId });
 		if (file == null) return { kind: 'not-found' };
 
-		const isThumbnail = file.thumbnailAccessKey === key;
-		const isWebpublic = file.webpublicAccessKey === key;
+		const isThumbnail = lookup.kind === 1;
+		const isWebpublic = lookup.kind === 2;
 
 		if (!file.storedInternal) {
 			if (!(file.isLink && file.uri)) return { kind: 'unavailable' };
@@ -97,6 +95,8 @@ export class FileServerFileResolver {
 				filename: file.name,
 			};
 		}
+
+		if (!/^[a-zA-Z0-9._-]+$/.test(key) || key === '.' || key === '..') return { kind: 'not-found' };
 
 		const path = this.internalStorageService.resolvePath(key);
 

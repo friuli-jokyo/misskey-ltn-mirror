@@ -8,12 +8,12 @@ import { IncomingMessage } from 'node:http';
 import { Inject, Injectable } from '@nestjs/common';
 import fastifyAccepts from '@fastify/accepts';
 import httpSignature from '@peertube/http-signature';
-import { Brackets, In, IsNull, LessThan, Not } from 'typeorm';
+import { Brackets, DataSource, In, IsNull, LessThan, Not } from 'typeorm';
 import accepts from 'accepts';
 import vary from 'vary';
 import secureJson from 'secure-json-parse';
 import { DI } from '@/di-symbols.js';
-import type { FollowingsRepository, NotesRepository, EmojisRepository, NoteReactionsRepository, UserProfilesRepository, UserNotePiningsRepository, UsersRepository, FollowRequestsRepository, MiMeta } from '@/models/_.js';
+import type { FollowingsRepository, NotesRepository, NoteUrisRepository, EmojisRepository, NoteReactionsRepository, UserProfilesRepository, UserNotePiningsRepository, UsersRepository, FollowRequestsRepository, MiMeta } from '@/models/_.js';
 import * as url from '@/misc/prelude/url.js';
 import type { Config } from '@/config.js';
 import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
@@ -31,6 +31,8 @@ import { IActivity } from '@/core/activitypub/type.js';
 import { isQuote, isRenote } from '@/misc/is-renote.js';
 import * as Acct from '@/misc/acct.js';
 import { FanoutTimelineEndpointService } from '@/core/FanoutTimelineEndpointService.js';
+import { findNoteReactionById } from '@/misc/note-reaction-lookup.js';
+import { isDeletedNote } from '@/misc/note-dependents.js';
 import type { FastifyInstance, FastifyRequest, FastifyReply, FastifyPluginOptions, FastifyBodyParser } from 'fastify';
 import type { FindOptionsWhere } from 'typeorm';
 
@@ -55,8 +57,14 @@ export class ActivityPubServerService {
 		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
 
+		@Inject(DI.noteUrisRepository)
+		private noteUrisRepository: NoteUrisRepository,
+
 		@Inject(DI.noteReactionsRepository)
 		private noteReactionsRepository: NoteReactionsRepository,
+
+		@Inject(DI.db)
+		private db: DataSource,
 
 		@Inject(DI.emojisRepository)
 		private emojisRepository: EmojisRepository,
@@ -98,8 +106,9 @@ export class ActivityPubServerService {
 	@bindThis
 	private async packActivity(note: MiNote): Promise<any> {
 		if (isRenote(note) && !isQuote(note)) {
-			const renote = await this.notesRepository.findOneByOrFail({ id: note.renoteId });
-			return this.apRendererService.renderAnnounce(renote.uri ? renote.uri : `${this.config.url}/notes/${renote.id}`, note);
+			const { renoteId, renoteUri } = await this.apRendererService.getOriginalParentIds(note);
+			const object = renoteId != null ? await this.apRendererService.renderNoteUri(renoteId, renoteUri) : undefined;
+			return object != null ? this.apRendererService.renderAnnounce(object, note) : null;
 		}
 
 		return this.apRendererService.renderCreate(await this.apRendererService.renderNote(note, false), note);
@@ -408,7 +417,8 @@ export class ActivityPubServerService {
 		});
 
 		const pinnedNotes = (await Promise.all(pinings.map(pining =>
-			this.notesRepository.findOneByOrFail({ id: pining.noteId }))))
+			this.notesRepository.findOneBy({ id: pining.noteId }))))
+			.filter(note => note != null)
 			.filter(note => !note.localOnly && ['public', 'home'].includes(note.visibility));
 
 		const renderedNotes = await Promise.all(pinnedNotes.map(note => this.apRendererService.renderNote(note)));
@@ -509,7 +519,7 @@ export class ActivityPubServerService {
 
 			if (sinceId) notes.reverse();
 
-			const activities = await Promise.all(notes.map(note => this.packActivity(note)));
+			const activities = (await Promise.all(notes.map(note => this.packActivity(note)))).filter(activity => activity != null);
 			const rendered = this.apRendererService.renderOrderedCollectionPage(
 				`${partOf}?${url.query({
 					page: 'true',
@@ -550,16 +560,16 @@ export class ActivityPubServerService {
 		limit: number,
 		userId: MiUser['id'],
 	}) {
-		return await this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), ps.sinceId, ps.untilId)
+		const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), ps.sinceId, ps.untilId)
 			.andWhere('note.userId = :userId', { userId: ps.userId })
 			.andWhere(new Brackets(qb => {
 				qb
 					.where('note.visibility = \'public\'')
 					.orWhere('note.visibility = \'home\'');
 			}))
-			.andWhere('note.localOnly = FALSE')
-			.limit(ps.limit)
-			.getMany();
+			.andWhere('note.localOnly = FALSE');
+
+		return await this.queryService.fetchPaginationQueryAcrossPartitions(query, ps, ps.limit, { floorKey: ps.userId });
 	}
 
 	@bindThis
@@ -631,6 +641,10 @@ export class ActivityPubServerService {
 		};
 
 		fastify.register(fastifyAccepts);
+
+		// raw-body shares `request.raw` with the body parser, so a string parser here would switch that stream
+		// to string mode and break raw-body. Keep only the `parseAs: 'buffer'` parsers below. The rest get 415 error.
+		fastify.removeAllContentTypeParsers();
 		fastify.addContentTypeParser('application/activity+json', { parseAs: 'buffer' }, almostDefaultJsonParser);
 		fastify.addContentTypeParser('application/ld+json', { parseAs: 'buffer' }, almostDefaultJsonParser);
 
@@ -658,11 +672,24 @@ export class ActivityPubServerService {
 
 			const note = await this.notesRepository.findOneBy({
 				id: request.params.note,
-				visibility: In(['public', 'home']),
-				localOnly: false,
 			});
 
 			if (note == null) {
+				const uriRow = await this.noteUrisRepository.findOneBy({ noteId: request.params.note });
+				if (uriRow != null) {
+					reply.code(404);
+					return;
+				}
+				if (!await isDeletedNote(this.db, request.params.note)) {
+					reply.code(404);
+					return;
+				}
+				reply.header('Cache-Control', 'public, max-age=180');
+				this.setResponseType(request, reply);
+				return this.apRendererService.addContext(this.apRendererService.renderTombstone(`${this.config.url}/notes/${request.params.note}`, 'Note'));
+			}
+
+			if (!['public', 'home'].includes(note.visibility)) {
 				reply.code(404);
 				return;
 			}
@@ -675,6 +702,12 @@ export class ActivityPubServerService {
 				}
 				reply.redirect(note.uri);
 				return;
+			}
+
+			if (note.localOnly) {
+				reply.header('Cache-Control', 'public, max-age=180');
+				this.setResponseType(request, reply);
+				return this.apRendererService.addContext(this.apRendererService.renderTombstone(`${this.config.url}/notes/${note.id}`, 'Note'));
 			}
 
 			reply.header('Cache-Control', 'public, max-age=180');
@@ -703,9 +736,16 @@ export class ActivityPubServerService {
 				return;
 			}
 
+			const activity = await this.packActivity(note);
+
+			if (activity == null) {
+				reply.code(404);
+				return;
+			}
+
 			reply.header('Cache-Control', 'public, max-age=180');
 			this.setResponseType(request, reply);
-			return (this.apRendererService.addContext(await this.packActivity(note)));
+			return (this.apRendererService.addContext(activity));
 		});
 
 		// outbox
@@ -823,13 +863,38 @@ export class ActivityPubServerService {
 		});
 
 		// like
+		fastify.get<{ Params: { note: string; like: string; } }>('/likes/:note/:like', async (request, reply) => {
+			if (this.meta.federation === 'none') {
+				reply.code(403);
+				return;
+			}
+
+			const reaction = await this.noteReactionsRepository.findOneBy({ id: request.params.like, noteId: request.params.note });
+
+			if (reaction == null) {
+				reply.code(404);
+				return;
+			}
+
+			const note = await this.notesRepository.findOneBy({ id: reaction.noteId });
+
+			if (note == null) {
+				reply.code(404);
+				return;
+			}
+
+			reply.header('Cache-Control', 'public, max-age=180');
+			this.setResponseType(request, reply);
+			return (this.apRendererService.addContext(await this.apRendererService.renderLike(reaction, note)));
+		});
+
 		fastify.get<{ Params: { like: string; } }>('/likes/:like', async (request, reply) => {
 			if (this.meta.federation === 'none') {
 				reply.code(403);
 				return;
 			}
 
-			const reaction = await this.noteReactionsRepository.findOneBy({ id: request.params.like });
+			const reaction = await findNoteReactionById(this.db, request.params.like);
 
 			if (reaction == null) {
 				reply.code(404);

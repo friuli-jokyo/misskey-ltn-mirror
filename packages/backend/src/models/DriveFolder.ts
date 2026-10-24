@@ -45,4 +45,9 @@ export class MiDriveFolder {
 	})
 	@JoinColumn()
 	public parent: MiDriveFolder | null;
+
+	@Column('integer', {
+		default: 0,
+	})
+	public filesCount: number;
 }

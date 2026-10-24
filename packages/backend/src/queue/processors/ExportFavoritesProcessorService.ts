@@ -5,9 +5,10 @@
 
 import * as fs from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
+import { In } from 'typeorm';
 import { format as dateFormat } from 'date-fns';
 import { DI } from '@/di-symbols.js';
-import type { MiNoteFavorite, NoteFavoritesRepository, PollsRepository, MiUser, UsersRepository } from '@/models/_.js';
+import type { MiNoteFavorite, NoteFavoritesRepository, NotesRepository, PollsRepository, MiUser, UsersRepository } from '@/models/_.js';
 import type Logger from '@/logger.js';
 import { DriveService } from '@/core/DriveService.js';
 import { createTemp } from '@/misc/create-temp.js';
@@ -36,6 +37,9 @@ export class ExportFavoritesProcessorService {
 
 		@Inject(DI.noteFavoritesRepository)
 		private noteFavoritesRepository: NoteFavoritesRepository,
+
+		@Inject(DI.notesRepository)
+		private notesRepository: NotesRepository,
 
 		private driveService: DriveService,
 		private queueLoggerService: QueueLoggerService,
@@ -88,8 +92,6 @@ export class ExportFavoritesProcessorService {
 
 			while (true) {
 				const query = this.noteFavoritesRepository.createQueryBuilder('favorite')
-					.leftJoinAndSelect('favorite.note', 'note')
-					.leftJoinAndSelect('note.user', 'user')
 					.where('favorite.userId = :userId', { userId: user.id })
 					.orderBy('favorite.id', 'ASC')
 					.take(100);
@@ -98,16 +100,28 @@ export class ExportFavoritesProcessorService {
 					query.andWhere('favorite.id > :cursor', { cursor });
 				}
 
-				this.queryService.generateVisibilityQuery(query, { id: user.id });
+				const page = await query.getMany();
 
-				const favorites = await query.getMany() as (MiNoteFavorite & { note: MiNote & { user: MiUser } })[];
-
-				if (favorites.length === 0) {
+				if (page.length === 0) {
 					job.updateProgress(100);
 					break;
 				}
 
-				cursor = favorites.at(-1)?.id ?? null;
+				cursor = page.at(-1)?.id ?? null;
+
+				const notesQuery = this.notesRepository.createQueryBuilder('note')
+					.where({ id: In(page.map(favorite => favorite.noteId)) })
+					.innerJoinAndSelect('note.user', 'user');
+
+				this.queryService.generateVisibilityQuery(notesQuery, { id: user.id });
+
+				const notes = new Map((await notesQuery.getMany()).map(note => [note.id, note]));
+
+				for (const favorite of page) {
+					favorite.note = notes.get(favorite.noteId) ?? null;
+				}
+
+				const favorites = page.filter(favorite => favorite.note != null) as (MiNoteFavorite & { note: MiNote & { user: MiUser } })[];
 
 				for (const favorite of favorites) {
 					const noteCreatedAt = this.idService.parse(favorite.note.id).date;

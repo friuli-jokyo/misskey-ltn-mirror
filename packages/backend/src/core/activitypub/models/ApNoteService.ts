@@ -24,7 +24,8 @@ import { UtilityService } from '@/core/UtilityService.js';
 import { bindThis } from '@/decorators.js';
 import { checkHttps } from '@/misc/check-https.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
-import { getOneApId, getApId, getOneApHrefNullable, validPost, isEmoji, getApType } from '../type.js';
+import { normalizeSynonymousUri, synonymousUris } from '../misc/check-against-url.js';
+import { getOneApId, getApId, getOneApHrefNullable, validPost, isEmoji, getApType, isTombstone } from '../type.js';
 import { ApLoggerService } from '../ApLoggerService.js';
 import { ApMfmService } from '../ApMfmService.js';
 import { ApDbResolverService } from '../ApDbResolverService.js';
@@ -37,6 +38,32 @@ import { ApQuestionService } from './ApQuestionService.js';
 import { ApImageService } from './ApImageService.js';
 import type { Resolver } from '../ApResolverService.js';
 import type { IObject, IPost } from '../type.js';
+
+const rejectedNoteErrorIds = [
+	'd450b8a9-48e4-4dab-ae36-f4db763fda7c',
+	'85ab9bd7-3a41-4530-959d-f07073900109',
+	'689ee33f-f97c-479a-ac49-1b9f8140af99',
+	'9f466dab-c856-48cd-9e65-ff90ff750580',
+	'90b9d6f0-893a-4fef-b0f1-e9a33989f71a',
+	'48d7a997-da5c-4716-b3c3-92db3f37bf7d',
+];
+
+const blockedInstanceErrorId = '09d79f9e-64f1-4316-9cfa-e75c4d091574';
+
+export const unfetchableObjectErrorIds = [
+	'b94fd5b1-0e3b-4678-9df2-dad4cd515ab2',
+	'72180409-793c-4973-868e-5a118eb5519b',
+];
+
+const invalidActorErrorId = '97acabe7-7638-4f83-ab14-ffefa0ad793a';
+
+const deletedAuthorErrorId = 'e3e4eb00-3a45-49d7-bf8d-959a02f5d2eb';
+
+export type NoteParentReference =
+	| { type: 'note'; note: MiNote }
+	| { type: 'former'; formerId: MiNote['id'] }
+	| { type: 'waiting'; uri: string }
+	| { type: 'gone' | 'rejected'; reason: string };
 
 @Injectable()
 export class ApNoteService {
@@ -126,7 +153,7 @@ export class ApNoteService {
 	 * Noteを作成します。
 	 */
 	@bindThis
-	public async createNote(value: string | IObject, actor?: MiRemoteUser, resolver?: Resolver, silent = false): Promise<MiNote | null> {
+	public async createNote(value: string | IObject, actor?: MiRemoteUser, resolver?: Resolver, silent = false, fetched = false): Promise<MiNote | null> {
 		// eslint-disable-next-line no-param-reassign
 		if (resolver == null) resolver = await this.apResolverService.createResolver();
 
@@ -220,7 +247,7 @@ export class ApNoteService {
 
 		// Audience (to, cc) が指定されてなかった場合
 		if (visibility === 'specified' && visibleUsers.length === 0) {
-			if (typeof value === 'string') {	// 入力がstringならばresolverでGETが発生している
+			if (typeof value === 'string' || fetched) {	// 入力がstringならばresolverでGETが発生している
 				// こちらから匿名GET出来たものならばpublic
 				visibility = 'public';
 			}
@@ -236,52 +263,13 @@ export class ApNoteService {
 		}
 
 		// リプライ
-		const reply: MiNote | null = note.inReplyTo
-			? await this.resolveNote(note.inReplyTo, { resolver })
-				.then(x => {
-					if (x == null) {
-						this.logger.warn('Specified inReplyTo, but not found');
-						throw new Error('inReplyTo not found');
-					}
-
-					return x;
-				})
-				.catch(async err => {
-					this.logger.warn(`Error in inReplyTo ${note.inReplyTo} - ${err.statusCode ?? err}`);
-					throw err;
-				})
-			: null;
+		const replyReference = note.inReplyTo ? await this.resolveParent(note.inReplyTo, resolver, note.id) : null;
+		const reply = replyReference?.type === 'note' ? replyReference.note : null;
 
 		// 引用
-		let quote: MiNote | undefined | null = null;
-
-		if (note._misskey_quote ?? note.quoteUrl) {
-			const tryResolveNote = async (uri: string): Promise<
-				| { status: 'ok'; res: MiNote }
-				| { status: 'permerror' | 'temperror' }
-			> => {
-				if (!/^https?:/.test(uri)) return { status: 'permerror' };
-				try {
-					const res = await this.resolveNote(uri);
-					if (res == null) return { status: 'permerror' };
-					return { status: 'ok', res };
-				} catch (e) {
-					return {
-						status: (e instanceof StatusError && !e.isRetryable) ? 'permerror' : 'temperror',
-					};
-				}
-			};
-
-			const uris = unique([note._misskey_quote, note.quoteUrl].filter(x => x != null));
-			const results = await Promise.all(uris.map(tryResolveNote));
-
-			quote = results.filter((x): x is { status: 'ok', res: MiNote } => x.status === 'ok').map(x => x.res).at(0);
-			if (!quote) {
-				if (results.some(x => x.status === 'temperror')) {
-					throw new Error('quote resolve failed');
-				}
-			}
-		}
+		const quoteReference = (note._misskey_quote ?? note.quoteUrl)
+			? await this.resolveQuote(unique([note._misskey_quote, note.quoteUrl].filter(x => x != null)), note.inReplyTo, replyReference, resolver, note.id)
+			: null;
 
 		// vote
 		if (reply && reply.hasPoll) {
@@ -312,12 +300,14 @@ export class ApNoteService {
 
 		const apEmojis = emojis.map(emoji => emoji.name);
 
+		const createdAt = note.published ? new Date(note.published) : null;
+
 		try {
 			return await this.noteCreateService.create(actor, {
-				createdAt: note.published ? new Date(note.published) : null,
+				createdAt,
 				files,
 				reply,
-				renote: quote,
+				renote: quoteReference?.type === 'note' ? quoteReference.note : null,
 				name: note.name,
 				cw,
 				text,
@@ -331,6 +321,12 @@ export class ApNoteService {
 				poll,
 				uri: note.id,
 				url: url,
+				replyFormerId: replyReference?.type === 'former' ? replyReference.formerId : null,
+				renoteFormerId: quoteReference?.type === 'former' ? quoteReference.formerId : null,
+				unresolvedReplyUri: replyReference?.type === 'waiting' ? replyReference.uri : null,
+				unresolvedRenoteUri: quoteReference?.type === 'waiting' ? quoteReference.uri : null,
+				unlinkableReply: replyReference?.type === 'gone' || replyReference?.type === 'rejected',
+				unlinkableRenote: quoteReference?.type === 'gone' || quoteReference?.type === 'rejected',
 			}, silent);
 		} catch (err: any) {
 			if (err.name !== 'duplicated') {
@@ -343,6 +339,122 @@ export class ApNoteService {
 			}
 			return duplicate;
 		}
+	}
+
+	@bindThis
+	public async resolveParent(value: string | IObject, resolver: Resolver, childUri: string, sentFrom?: URL): Promise<NoteParentReference> {
+		const uri = typeof value === 'string' ? value : value.id;
+		const normalizedUri = typeof uri === 'string' ? normalizeSynonymousUri(uri) : null;
+		if (typeof uri !== 'string' || normalizedUri == null) return this.unlinkedParent(String(uri), { type: 'rejected', reason: 'invalid uri' });
+		if (normalizedUri === normalizeSynonymousUri(childUri)) return this.unlinkedParent(uri, { type: 'rejected', reason: 'self reference' });
+		if (!this.isFederationAllowedParentUri(uri)) return this.unlinkedParent(uri, { type: 'rejected', reason: 'blocked instance' });
+		if (this.noteCreateService.pendingUriOf(uri) == null) return await this.findParent(uri) ?? this.unlinkedParent(uri, { type: 'rejected', reason: 'unfetchable uri' });
+
+		let unlock: () => Promise<void>;
+		try {
+			unlock = await acquireApObjectLock(this.redisClient, uri);
+		} catch (err) {
+			return this.unlinkedParent(uri, this.decideParentFailure(err, uri, resolver));
+		}
+
+		try {
+			const known = await this.findParent(uri);
+			if (known != null) return known;
+
+			const embedded = typeof value !== 'string' && sentFrom?.origin === new URL(uri).origin && (toArray(value.to).length > 0 || toArray(value.cc).length > 0);
+			let object: IObject;
+			if (embedded) {
+				object = value;
+			} else {
+				try {
+					object = await resolver.resolve(uri);
+				} catch (err) {
+					if (err instanceof IdentifiableError && unfetchableObjectErrorIds.includes(err.id)) return this.unlinkedParent(uri, { type: 'rejected', reason: err.message });
+					return this.unlinkedParent(uri, this.decideParentFailure(err, uri, resolver));
+				}
+			}
+
+			if (isTombstone(object)) return this.unlinkedParent(uri, { type: 'gone', reason: 'Tombstone' });
+
+			const objectUri = object.id != null && object.id !== uri && normalizeSynonymousUri(object.id) === normalizedUri ? object.id : uri;
+			if (objectUri !== uri) {
+				if (!this.isFederationAllowedParentUri(objectUri)) return this.unlinkedParent(uri, { type: 'rejected', reason: 'blocked instance' });
+				const canonical = await this.findParent(objectUri);
+				if (canonical != null) return canonical;
+			}
+
+			try {
+				const invalid = this.validateNote(object, objectUri);
+				if (invalid != null) return this.unlinkedParent(uri, { type: 'rejected', reason: invalid.message });
+
+				const note = await this.createNote(object, undefined, resolver, true, !embedded);
+				if (note == null) return this.unlinkedParent(uri, { type: 'rejected', reason: 'not a note' });
+				return { type: 'note', note };
+			} catch (err) {
+				if (err instanceof IdentifiableError && [...unfetchableObjectErrorIds, invalidActorErrorId].includes(err.id)) return this.unlinkedParent(uri, { type: 'waiting', uri });
+				return this.unlinkedParent(uri, this.decideParentFailure(err, uri, resolver));
+			}
+		} finally {
+			unlock();
+		}
+	}
+
+	@bindThis
+	private isFederationAllowedParentUri(uri: string): boolean {
+		return this.utilityService.isSynonymousUriLocal(uri) || this.utilityService.isFederationAllowedUri(uri);
+	}
+
+	@bindThis
+	private async findParent(uri: string): Promise<NoteParentReference | null> {
+		let formerId: MiNote['id'] | null = null;
+		for (const candidate of unique([uri, ...synonymousUris(uri)])) {
+			const reference = await this.apDbResolverService.getNoteReferenceFromApId(candidate);
+			if (reference.note == null && reference.formerId == null) continue;
+			if (!this.isFederationAllowedParentUri(candidate)) return this.unlinkedParent(uri, { type: 'rejected', reason: 'blocked instance' });
+			if (reference.note != null) return { type: 'note', note: reference.note };
+			formerId ??= reference.formerId;
+		}
+		if (formerId != null) return { type: 'former', formerId };
+		if (this.noteCreateService.pendingUriOf(uri) == null) return this.unlinkedParent(uri, { type: 'rejected', reason: 'unfetchable uri' });
+		return null;
+	}
+
+	@bindThis
+	private decideParentFailure(err: unknown, uri: string, resolver: Resolver): NoteParentReference {
+		if (err instanceof StatusError && !err.isRetryable) {
+			return err.statusCode === 410 ? { type: 'gone', reason: err.message } : { type: 'waiting', uri };
+		}
+		if (err instanceof IdentifiableError) {
+			if (rejectedNoteErrorIds.includes(err.id)) return { type: 'rejected', reason: err.message };
+			if (err.id === blockedInstanceErrorId) return { type: 'rejected', reason: 'blocked instance' };
+			if (err.id === deletedAuthorErrorId) return { type: 'gone', reason: err.message };
+		}
+		if (resolver.isLastAttempt()) return { type: 'waiting', uri };
+		this.logger.warn(`Error in parent ${uri} - ${err instanceof StatusError ? err.statusCode : err}`);
+		throw err;
+	}
+
+	@bindThis
+	private unlinkedParent(uri: string, reference: NoteParentReference): NoteParentReference {
+		this.logger.warn(`parent ${uri} cannot be linked: ${'reason' in reference ? `${reference.type} - ${reference.reason}` : reference.type}`);
+		return reference;
+	}
+
+	@bindThis
+	private async resolveQuote(values: (string | IObject)[], replyValue: unknown, replyReference: NoteParentReference | null, resolver: Resolver, childUri: string): Promise<NoteParentReference> {
+		const replyUri = typeof replyValue === 'string' ? replyValue : (replyValue as IObject | null | undefined)?.id;
+		const results = await Promise.allSettled(values.map(value => {
+			const uri = typeof value === 'string' ? value : value.id;
+			return replyReference != null && uri != null && uri === replyUri ? replyReference : this.resolveParent(value, resolver, childUri);
+		}));
+		const references = results.filter(result => result.status === 'fulfilled').map(result => result.value);
+		for (const types of [['note'], ['former'], ['gone', 'rejected']]) {
+			const reference = references.find(x => types.includes(x.type));
+			if (reference != null) return reference;
+		}
+		const failure = results.find(result => result.status === 'rejected');
+		if (failure != null) throw failure.reason;
+		return references[0];
 	}
 
 	/**
@@ -363,8 +475,8 @@ export class ApNoteService {
 
 		try {
 			//#region このサーバーに既に登録されていたらそれを返す
-			const exist = await this.fetchNote(uri);
-			if (exist) return exist;
+			const reference = await this.apDbResolverService.getNoteReferenceFromApId(uri);
+			if (reference.note != null || reference.formerId != null) return reference.note;
 			//#endregion
 
 			if (this.utilityService.isUriLocal(uri)) {

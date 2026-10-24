@@ -4,7 +4,8 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import type { UsersRepository, PollsRepository, PollVotesRepository } from '@/models/_.js';
+import { DataSource } from 'typeorm';
+import type { UsersRepository, PollsRepository, PollVotesRepository, MiPollVote } from '@/models/_.js';
 import type { MiRemoteUser } from '@/models/User.js';
 import { IdService } from '@/core/IdService.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
@@ -15,6 +16,7 @@ import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
 import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { DI } from '@/di-symbols.js';
 import { UserBlockingService } from '@/core/UserBlockingService.js';
+import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { ApiError } from '../../../error.js';
 
 export const meta = {
@@ -79,6 +81,9 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
 
@@ -95,6 +100,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private apRendererService: ApRendererService,
 		private globalEventService: GlobalEventService,
 		private userBlockingService: UserBlockingService,
+		private noteEntityService: NoteEntityService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const createdAt = new Date();
@@ -104,6 +110,11 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				if (err.id === '9725d0ce-ba28-4dde-95a7-2cbb2c15de24') throw new ApiError(meta.errors.noSuchNote);
 				throw err;
 			});
+
+			// check visibility
+			if (!await this.noteEntityService.isVisibleForMe(note, me.id)) {
+				throw new ApiError(meta.errors.noSuchNote);
+			}
 
 			if (!note.hasPoll) {
 				throw new ApiError(meta.errors.noPoll);
@@ -144,16 +155,23 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 
 			// Create vote
-			const vote = await this.pollVotesRepository.insertOne({
-				id: this.idService.gen(createdAt.getTime()),
-				noteId: note.id,
-				userId: me.id,
-				choice: ps.choice,
+			const inserted: MiPollVote[] = await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+				await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [me.id]);
+				return await transactionalEntityManager.query(
+					'WITH "target" AS (SELECT "id" FROM "note" WHERE "id" = $4 FOR KEY SHARE) INSERT INTO "poll_vote" ("id", "noteId", "userId", "choice") SELECT $1, "id", $2, $3 FROM "target" RETURNING *',
+					[this.idService.gen(createdAt.getTime()), me.id, ps.choice, note.id],
+				);
 			});
+
+			if (inserted.length === 0) {
+				throw new ApiError(meta.errors.noSuchNote);
+			}
+
+			const vote = inserted[0];
 
 			// Increment votes count
 			const index = ps.choice + 1; // In SQL, array index is 1 based
-			await this.pollsRepository.query(`UPDATE poll SET votes[${index}] = votes[${index}] + 1 WHERE "noteId" = '${poll.noteId}'`);
+			await this.pollsRepository.query('UPDATE poll SET votes[$1] = votes[$1] + 1 WHERE "noteId" = $2', [index, poll.noteId]);
 
 			this.globalEventService.publishNoteStream(note, 'pollVoted', {
 				choice: ps.choice,

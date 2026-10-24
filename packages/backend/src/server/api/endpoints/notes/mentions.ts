@@ -67,11 +67,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				}))
 				// Avoid scanning primary key index
 				.orderBy('CONCAT(note.id)', (ps.sinceDate || ps.sinceId) ? 'ASC' : 'DESC')
-				.innerJoinAndSelect('note.user', 'user')
-				.leftJoinAndSelect('note.reply', 'reply')
-				.leftJoinAndSelect('note.renote', 'renote')
-				.leftJoinAndSelect('reply.user', 'replyUser')
-				.leftJoinAndSelect('renote.user', 'renoteUser');
+				.innerJoinAndSelect('note.user', 'user');
 
 			this.queryService.generateVisibilityQuery(query, me);
 			this.queryService.generateBaseNoteFilteringQuery(query, me);
@@ -87,7 +83,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				query.setParameters(followingQuery.getParameters());
 			}
 
-			const mentions = await query.limit(ps.limit).getMany();
+			const mentions = await this.queryService.fetchPaginationQueryAcrossPartitions(query, ps, ps.limit, { floorKey: me.id });
 
 			return await this.noteEntityService.packMany(mentions, me);
 		});

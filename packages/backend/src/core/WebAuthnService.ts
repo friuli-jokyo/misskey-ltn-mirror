@@ -20,7 +20,6 @@ import { MiUser } from '@/models/_.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
 import type {
 	AuthenticationResponseJSON,
-	AuthenticatorTransportFuture,
 	CredentialDeviceType,
 	PublicKeyCredentialCreationOptionsJSON,
 	PublicKeyCredentialRequestOptionsJSON,
@@ -68,7 +67,7 @@ export class WebAuthnService {
 			userID: isoUint8Array.fromUTF8String(userId),
 			userName: userName,
 			userDisplayName: userDisplayName,
-			excludeCredentials: keys.map(key => (<{ id: string; transports?: AuthenticatorTransportFuture[]; }>{
+			excludeCredentials: keys.map(key => (<{ id: string; transports?: string[]; }>{
 				id: key.id,
 				transports: key.transports ?? undefined,
 			})),
@@ -78,7 +77,7 @@ export class WebAuthnService {
 			},
 		});
 
-		await this.redisClient.setex(`webauthn:challenge:${userId}`, 90, registrationOptions.challenge);
+		await this.redisClient.setex(`webauthn:registrationChallenge:${userId}`, 90, registrationOptions.challenge);
 
 		if (conditionalCreateState) {
 			await this.redisClient.setex(`webauthn:conditionalCreateState:${userId}:${conditionalCreateState}`, 90, '1');
@@ -97,15 +96,15 @@ export class WebAuthnService {
 		userVerified: boolean;
 		credentialDeviceType: CredentialDeviceType;
 		credentialBackedUp: boolean;
-		transports?: AuthenticatorTransportFuture[];
+		transports?: string[];
 	}> {
-		const challenge = await this.redisClient.get(`webauthn:challenge:${userId}`);
+		const challenge = await this.redisClient.get(`webauthn:registrationChallenge:${userId}`);
 
 		if (!challenge) {
 			throw new IdentifiableError('7dbfb66c-9216-4e2b-9c27-cef2ac8efb84', 'challenge not found');
 		}
 
-		await this.redisClient.del(`webauthn:challenge:${userId}`);
+		await this.redisClient.del(`webauthn:registrationChallenge:${userId}`);
 
 		const relyingParty = this.getRelyingParty();
 
@@ -157,15 +156,15 @@ export class WebAuthnService {
 
 		const authenticationOptions = await generateAuthenticationOptions({
 			rpID: relyingParty.rpId,
-			allowCredentials: keys.map(key => ({
+			allowCredentials: keys.map(key => (<{ id: string; transports?: string[]; }>{
 				id: key.id,
 				type: 'public-key',
-				transports: (key.transports as AuthenticatorTransportFuture[] | null) ?? undefined,
+				transports: key.transports ?? undefined,
 			})),
 			userVerification,
 		});
 
-		await this.redisClient.setex(`webauthn:challenge:${userId}`, 90, authenticationOptions.challenge);
+		await this.redisClient.setex(`webauthn:authenticationChallenge:${userId}`, 90, authenticationOptions.challenge);
 
 		return authenticationOptions;
 	}
@@ -183,7 +182,7 @@ export class WebAuthnService {
 			userVerification: 'preferred',
 		});
 
-		await this.redisClient.setex(`webauthn:challenge:${context}`, 90, authenticationOptions.challenge);
+		await this.redisClient.setex(`webauthn:passkeyChallenge:${context}`, 90, authenticationOptions.challenge);
 
 		return authenticationOptions;
 	}
@@ -195,7 +194,7 @@ export class WebAuthnService {
 	 */
 	@bindThis
 	public async verifySignInWithPasskeyAuthentication(context: string, response: AuthenticationResponseJSON): Promise<{ userId: MiUser['id'] | null, finished: boolean }> {
-		const challenge = await this.redisClient.getdel(`webauthn:challenge:${context}`);
+		const challenge = await this.redisClient.getdel(`webauthn:passkeyChallenge:${context}`);
 
 		if (!challenge) {
 			throw new IdentifiableError('2d16e51c-007b-4edd-afd2-f7dd02c947f6', `challenge '${context}' not found`);
@@ -222,7 +221,7 @@ export class WebAuthnService {
 					id: key.id,
 					publicKey: Buffer.from(key.publicKey, 'base64url'),
 					counter: key.counter,
-					transports: key.transports ? key.transports as AuthenticatorTransportFuture[] : undefined,
+					transports: key.transports ?? undefined,
 				},
 				requireUserVerification: false,
 			});
@@ -237,7 +236,7 @@ export class WebAuthnService {
 		}
 
 		if (!authenticationInfo.userVerified) {
-			await this.redisClient.setex(`webauthn:challenge:${key.userId}`, 90, challenge);
+			await this.redisClient.setex(`webauthn:authenticationChallenge:${key.userId}`, 90, challenge);
 			return { userId: key.userId, finished: false };
 		}
 
@@ -263,14 +262,14 @@ export class WebAuthnService {
 		});
 		const id = randomUUID();
 
-		await this.redisClient.setex(`webauthn:challenge:_${id}`, 300, authenticationOptions.challenge);
+		await this.redisClient.setex(`webauthn:authenticationChallenge:_${id}`, 300, authenticationOptions.challenge);
 
 		return [id, authenticationOptions];
 	}
 
 	@bindThis
 	public async verifyAuthentication(response: AuthenticationResponseJSON, userId?: MiUser['id'], handle?: string): Promise<[userId: MiUser['id'], uv: boolean] | null> {
-		const challenge = await this.redisClient.getdel(`webauthn:challenge:${handle ? `_${handle}` : userId}`);
+		const challenge = await this.redisClient.getdel(`webauthn:authenticationChallenge:${handle ? `_${handle}` : userId}`);
 
 		if (!challenge) {
 			throw new IdentifiableError('2d16e51c-007b-4edd-afd2-f7dd02c947f6', 'challenge not found');
@@ -322,7 +321,7 @@ export class WebAuthnService {
 					id: key.id,
 					publicKey: Buffer.from(key.publicKey, 'base64url'),
 					counter: key.counter,
-					transports: key.transports ? key.transports as AuthenticatorTransportFuture[] : undefined,
+					transports: key.transports ?? undefined,
 				},
 				requireUserVerification: false,
 			});

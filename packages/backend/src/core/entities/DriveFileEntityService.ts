@@ -7,7 +7,7 @@ import { forwardRef, Inject, Injectable } from '@nestjs/common';
 import * as Redis from 'ioredis';
 import { DataSource, In, Repository } from 'typeorm';
 import { DI } from '@/di-symbols.js';
-import type { DriveFilesRepository, MiMeta } from '@/models/_.js';
+import type { DriveFilesRepository, UserDriveUsagesRepository, MiMeta } from '@/models/_.js';
 import type { Config } from '@/config.js';
 import type { Packed } from '@/misc/json-schema.js';
 import { awaitAll } from '@/misc/prelude/await-all.js';
@@ -49,6 +49,9 @@ export class DriveFileEntityService {
 
 		@Inject(DI.driveFilesRepository)
 		private driveFilesRepository: DriveFilesRepository,
+
+		@Inject(DI.userDriveUsagesRepository)
+		private userDriveUsagesRepository: UserDriveUsagesRepository,
 
 		// 循環参照のため / for circular dependency
 		@Inject(forwardRef(() => UserEntityService))
@@ -151,14 +154,9 @@ export class DriveFileEntityService {
 	public async calcDriveUsageOf(user: MiUser['id'] | { id: MiUser['id'] }): Promise<number> {
 		const id = typeof user === 'object' ? user.id : user;
 
-		const { sum } = await this.driveFilesRepository
-			.createQueryBuilder('file')
-			.where('file.userId = :id', { id: id })
-			.andWhere('file.isLink = FALSE')
-			.select('SUM(file.size)', 'sum')
-			.getRawOne();
+		const row = await this.userDriveUsagesRepository.findOneBy({ userId: id });
 
-		return parseInt(sum, 10) || 0;
+		return row?.usage ?? 0;
 	}
 
 	@bindThis

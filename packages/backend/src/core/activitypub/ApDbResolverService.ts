@@ -4,12 +4,17 @@
  */
 
 import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
+import * as Redis from 'ioredis';
+import { DataSource } from 'typeorm';
 import { DI } from '@/di-symbols.js';
-import type { NotesRepository, UserPublickeysRepository, UsersRepository } from '@/models/_.js';
+import type { NotesRepository, NoteUrisRepository, UserPublickeysRepository, UsersRepository } from '@/models/_.js';
 import type { Config } from '@/config.js';
 import { MemoryKVCache } from '@/misc/cache.js';
+import { isDeletedNote } from '@/misc/note-dependents.js';
 import type { MiUserPublickey } from '@/models/UserPublickey.js';
 import { CacheService } from '@/core/CacheService.js';
+import type { GlobalEvents } from '@/core/GlobalEventService.js';
+import { PartitionMigrationStateService } from '@/core/PartitionMigrationStateService.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import type { MiNote } from '@/models/Note.js';
 import { bindThis } from '@/decorators.js';
@@ -43,21 +48,55 @@ export class ApDbResolverService implements OnApplicationShutdown {
 		@Inject(DI.config)
 		private config: Config,
 
+		@Inject(DI.redisForSub)
+		private redisForSub: Redis.Redis,
+
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
 
 		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
 
+		@Inject(DI.noteUrisRepository)
+		private noteUrisRepository: NoteUrisRepository,
+
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.userPublickeysRepository)
 		private userPublickeysRepository: UserPublickeysRepository,
 
 		private cacheService: CacheService,
 		private apPersonService: ApPersonService,
+		private partitionMigrationStateService: PartitionMigrationStateService,
 		private utilityService: UtilityService,
 	) {
 		this.publicKeyCache = new MemoryKVCache<MiUserPublickey | null>(1000 * 60 * 60 * 12); // 12h
 		this.publicKeyByUserIdCache = new MemoryKVCache<MiUserPublickey | null>(1000 * 60 * 60 * 12); // 12h
+
+		this.redisForSub.on('message', this.onMessage);
+	}
+
+	@bindThis
+	private onMessage(_: string, data: string): void {
+		const obj = JSON.parse(data);
+
+		if (obj.channel === 'internal') {
+			const { type, body } = obj.message as GlobalEvents['internal']['payload'];
+			switch (type) {
+				case 'userChangeDeletedState': {
+					this.publicKeyByUserIdCache.delete(body.id);
+					for (const [k, v] of this.publicKeyCache.entries) {
+						if (v.value?.userId === body.id) {
+							this.publicKeyCache.delete(k);
+						}
+					}
+					break;
+				}
+				default:
+					break;
+			}
+		}
 	}
 
 	@bindThis
@@ -86,16 +125,56 @@ export class ApDbResolverService implements OnApplicationShutdown {
 		const parsed = this.parseUri(value);
 
 		if (parsed.local) {
-			if (parsed.type !== 'notes') return null;
+			if (parsed.type !== 'notes' || !parsed.id) return null;
 
 			return await this.notesRepository.findOneBy({
 				id: parsed.id,
 			});
 		} else {
-			return await this.notesRepository.findOneBy({
-				uri: parsed.uri,
-			});
+			return await this.findNoteByUri(parsed.uri);
 		}
+	}
+
+	@bindThis
+	public async getNoteReferenceFromApId(value: string | IObject): Promise<{ note: MiNote | null; formerId: MiNote['id'] | null }> {
+		const parsed = this.parseUri(value);
+
+		if (parsed.local) {
+			if (parsed.type !== 'notes' || !parsed.id) return { note: null, formerId: null };
+
+			const note = await this.notesRepository.findOneBy({ id: parsed.id });
+			if (note != null) return { note, formerId: null };
+
+			return { note: null, formerId: await this.isFormerLocalNote(parsed.id) ? parsed.id : null };
+		}
+
+		const lut = await this.noteUrisRepository.findOneBy({ uri: parsed.uri });
+		if (lut != null) {
+			const note = await this.notesRepository.findOneBy({ id: lut.noteId });
+			return note != null ? { note, formerId: null } : { note: null, formerId: lut.noteId };
+		}
+		if (await this.partitionMigrationStateService.isPhaseFinished('noteUriBackfill')) {
+			return { note: null, formerId: null };
+		}
+		return { note: await this.notesRepository.findOneBy({ uri: parsed.uri }), formerId: null };
+	}
+
+	@bindThis
+	private async isFormerLocalNote(id: MiNote['id']): Promise<boolean> {
+		if (await this.noteUrisRepository.existsBy({ noteId: id })) return false;
+		return await isDeletedNote(this.db, id);
+	}
+
+	@bindThis
+	private async findNoteByUri(uri: string): Promise<MiNote | null> {
+		const lut = await this.noteUrisRepository.findOneBy({ uri });
+		if (lut != null) {
+			return await this.notesRepository.findOneBy({ id: lut.noteId });
+		}
+		if (await this.partitionMigrationStateService.isPhaseFinished('noteUriBackfill')) {
+			return null;
+		}
+		return await this.notesRepository.findOneBy({ uri });
 	}
 
 	/**
@@ -106,7 +185,7 @@ export class ApDbResolverService implements OnApplicationShutdown {
 		const parsed = this.parseUri(value);
 
 		if (parsed.local) {
-			if (parsed.type !== 'users') return null;
+			if (parsed.type !== 'users' || !parsed.id) return null;
 
 			return await this.cacheService.userByIdCache.fetchMaybe(
 				parsed.id,
@@ -175,6 +254,7 @@ export class ApDbResolverService implements OnApplicationShutdown {
 
 	@bindThis
 	public dispose(): void {
+		this.redisForSub.off('message', this.onMessage);
 		this.publicKeyCache.dispose();
 		this.publicKeyByUserIdCache.dispose();
 	}

@@ -136,6 +136,7 @@ export type AdminSystemWebhookUpdateRequest = operations['admin___system-webhook
 export type AdminSystemWebhookUpdateResponse = operations['admin___system-webhook___update']['responses']['200']['content']['application/json'];
 export type AdminTestJobRequest = operations['admin___test-job']['requestBody']['content']['application/json'];
 export type AdminTestJobResponse = operations['admin___test-job']['responses']['200']['content']['application/json'];
+export type AdminUnsetMfaRequest = operations['admin___unset-mfa']['requestBody']['content']['application/json'];
 export type AdminUnsetUserAvatarRequest = operations['admin___unset-user-avatar']['requestBody']['content']['application/json'];
 export type AdminUnsetUserBannerRequest = operations['admin___unset-user-banner']['requestBody']['content']['application/json'];
 export type AdminUnsuspendUserRequest = operations['admin___unsuspend-user']['requestBody']['content']['application/json'];

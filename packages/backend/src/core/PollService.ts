@@ -4,8 +4,9 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { DI } from '@/di-symbols.js';
-import type { NotesRepository, UsersRepository, PollsRepository, PollVotesRepository, MiUser } from '@/models/_.js';
+import type { NotesRepository, UsersRepository, PollsRepository, PollVotesRepository, MiUser, MiPollVote } from '@/models/_.js';
 import type { MiNote } from '@/models/Note.js';
 import { RelayService } from '@/core/RelayService.js';
 import { IdService } from '@/core/IdService.js';
@@ -19,6 +20,9 @@ import { UserBlockingService } from '@/core/UserBlockingService.js';
 @Injectable()
 export class PollService {
 	constructor(
+		@Inject(DI.db)
+		private db: DataSource,
+
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
 
@@ -72,16 +76,19 @@ export class PollService {
 			throw new Error('already voted');
 		}
 
-		await this.pollVotesRepository.insert({
-			id: this.idService.gen(),
-			noteId: note.id,
-			userId: user.id,
-			choice: choice,
+		const inserted: { id: MiPollVote['id'] }[] = await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+			await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [user.id]);
+			return await transactionalEntityManager.query(
+				'WITH "target" AS (SELECT "id" FROM "note" WHERE "id" = $4 FOR KEY SHARE) INSERT INTO "poll_vote" ("id", "noteId", "userId", "choice") SELECT $1, "id", $2, $3 FROM "target" RETURNING "id"',
+				[this.idService.gen(), user.id, choice, note.id],
+			);
 		});
+
+		if (inserted.length === 0) throw new Error('note not found');
 
 		// Increment votes count
 		const index = choice + 1; // In SQL, array index is 1 based
-		await this.pollsRepository.query(`UPDATE poll SET votes[${index}] = votes[${index}] + 1 WHERE "noteId" = '${poll.noteId}'`);
+		await this.pollsRepository.query('UPDATE poll SET votes[$1] = votes[$1] + 1 WHERE "noteId" = $2', [index, poll.noteId]);
 
 		this.globalEventService.publishNoteStream(note, 'pollVoted', {
 			choice: choice,

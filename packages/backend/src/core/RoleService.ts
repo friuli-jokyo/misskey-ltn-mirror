@@ -601,7 +601,7 @@ export class RoleService implements OnApplicationShutdown, OnModuleInit {
 			driveCapacityMb: calc('driveCapacityMb', vs => Math.max(...vs)),
 			driveUploadBandwidthDurationHrCapacityMbPairs: calc('driveUploadBandwidthDurationHrCapacityMbPairs', vs => vs.flat()),
 			selfAssignability: calc('selfAssignability', vs => vs.flat()),
-			maxFileSizeMb: calc('maxFileSizeMb', vs => Math.max(...vs)),
+			maxFileSizeMb: calc('maxFileSizeMb', vs => Math.min(serverMaxFileSizeMb, Math.max(...vs))),
 			alwaysMarkNsfw: calc('alwaysMarkNsfw', vs => vs.some(v => v === true)),
 			canUpdateBioMedia: calc('canUpdateBioMedia', vs => vs.some(v => v === true)),
 			pinLimit: calc('pinLimit', vs => Math.max(...vs)),

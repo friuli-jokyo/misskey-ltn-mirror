@@ -80,7 +80,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), ps.sinceId, ps.untilId, ps.sinceDate, ps.untilDate);
 			query.andWhere(':file <@ note.fileIds', { file: [file.id] });
 
-			const notes = await query.limit(ps.limit).getMany();
+			const floorKey = file.userId != null ? await this.queryService.noteFloorOf(file.userId) : undefined;
+			const notes = await this.queryService.fetchPaginationQueryAcrossPartitions(query, ps, ps.limit, { floorKey });
 
 			return await this.noteEntityService.packMany(notes, me, {
 				detail: true,

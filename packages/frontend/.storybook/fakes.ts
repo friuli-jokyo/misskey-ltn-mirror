@@ -315,7 +315,6 @@ export function userDetailed(id = 'someuserid', username = 'miskist', host: enti
 		memo: null,
 		canChat: true,
 		chatScope: 'everyone',
-		federationPolicy: 'lax',
 	};
 }
 

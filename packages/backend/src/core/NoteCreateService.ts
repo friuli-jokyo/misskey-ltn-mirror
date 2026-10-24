@@ -6,7 +6,7 @@
 import { setImmediate } from 'node:timers/promises';
 import crypto from 'node:crypto';
 import * as mfm from 'mfm-js';
-import { In, DataSource, IsNull, LessThan, LessThanOrEqual, Not, Or } from 'typeorm';
+import { In, DataSource, EntityManager, IsNull, LessThan, LessThanOrEqual, Not, Or, QueryFailedError } from 'typeorm';
 import * as Redis from 'ioredis';
 import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { extractMentions } from '@/misc/extract-mentions.js';
@@ -14,10 +14,18 @@ import { extractCustomEmojisFromMfm } from '@/misc/extract-custom-emojis-from-mf
 import { extractHashtags } from '@/misc/extract-hashtags.js';
 import type { IMentionedRemoteUsers } from '@/models/Note.js';
 import { MiNote } from '@/models/Note.js';
+import { MiNoteRelation } from '@/models/NoteRelation.js';
+import { MiNoteUri } from '@/models/NoteUri.js';
+import { MiNotePendingParent } from '@/models/NotePendingParent.js';
+import { MiNoteUnlinkedRelation } from '@/models/NoteUnlinkedRelation.js';
 import type { BlockingsRepository, ChannelAnonymousSaltsRepository, ChannelFollowingsRepository, ChannelsRepository, DriveFilesRepository, FollowingsRepository, InstancesRepository, MiFollowing, MiMeta, MutingsRepository, NotesRepository, NoteThreadMutingsRepository, UserListMembershipsRepository, UserProfilesRepository, UsersRepository } from '@/models/_.js';
 import type { MiDriveFile } from '@/models/DriveFile.js';
 import type { MiApp } from '@/models/App.js';
-import { concat } from '@/misc/prelude/array.js';
+import { concat, unique } from '@/misc/prelude/array.js';
+import { findSiblingIds, joinChildrenToParent } from '@/misc/join-pending-children.js';
+import type { PendingChild } from '@/misc/join-pending-children.js';
+import { isDeletedNote, lockNoteRowsInIdOrder } from '@/misc/note-dependents.js';
+import type { LockedNote } from '@/misc/note-dependents.js';
 import { CirculationService } from './CirculationService.js';
 import { IdService } from '@/core/IdService.js';
 import type { MiUser, MiLocalUser, MiRemoteUser } from '@/models/User.js';
@@ -25,7 +33,7 @@ import type { IPoll } from '@/models/Poll.js';
 import { MiPoll } from '@/models/Poll.js';
 import { isDuplicateKeyValueError } from '@/misc/is-duplicate-key-value-error.js';
 import type { MiChannel } from '@/models/Channel.js';
-import { normalizeForSearch } from '@/misc/normalize-for-search.js';
+import { normalizeTag } from '@/misc/normalize-tag.js';
 import { RelayService } from '@/core/RelayService.js';
 import { FederatedInstanceService } from '@/core/FederatedInstanceService.js';
 import { DI } from '@/di-symbols.js';
@@ -44,11 +52,13 @@ import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
 import { ApDeliverManagerService } from '@/core/activitypub/ApDeliverManagerService.js';
+import { normalizeSynonymousUri, synonymousUris } from '@/core/activitypub/misc/check-against-url.js';
 import { RemoteUserResolveService } from '@/core/RemoteUserResolveService.js';
 import { bindThis } from '@/decorators.js';
-import { DB_MAX_NOTE_TEXT_LENGTH } from '@/const.js';
+import { DB_MAX_NOTE_TEXT_LENGTH, UNREFERENCEABLE_NOTE_ID } from '@/const.js';
 import { RoleService } from '@/core/RoleService.js';
 import { SearchService } from '@/core/SearchService.js';
+import { QueryService } from '@/core/QueryService.js';
 import { FeaturedService } from '@/core/FeaturedService.js';
 import { FanoutTimelineService } from '@/core/FanoutTimelineService.js';
 import { UtilityService } from '@/core/UtilityService.js';
@@ -59,8 +69,11 @@ import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { CollapsedQueue } from '@/misc/collapsed-queue.js';
 import { CacheService } from '@/core/CacheService.js';
 import { isQuote, isRenote } from '@/misc/is-renote.js';
+import { extractUrlsForKeyWordCheck } from '@/misc/extract-urls-for-keyword-check.js';
 
 type NotificationType = 'reply' | 'renote' | 'quote' | 'mention';
+
+class DeletedNoteIdError extends Error {}
 
 class NotificationManager {
 	private notifier: { id: MiUser['id']; };
@@ -191,6 +204,12 @@ type Option = {
 	apEmojis?: string[] | null;
 	uri?: string | null;
 	url?: string | null;
+	replyFormerId?: MiNote['id'] | null;
+	renoteFormerId?: MiNote['id'] | null;
+	unresolvedReplyUri?: string | null;
+	unresolvedRenoteUri?: string | null;
+	unlinkableReply?: boolean;
+	unlinkableRenote?: boolean;
 	app?: MiApp | null;
 };
 
@@ -277,6 +296,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 		private utilityService: UtilityService,
 		private userBlockingService: UserBlockingService,
 		private cacheService: CacheService,
+		private queryService: QueryService,
 	) {
 		this.updateNotesCountQueue = new CollapsedQueue(process.env.NODE_ENV !== 'test' ? 60 * 1000 * 5 : 0, this.collapseNotesCount, this.performUpdateNotesCount);
 	}
@@ -333,10 +353,9 @@ export class NoteCreateService implements OnApplicationShutdown {
 				where: { id: data.renoteId },
 				relations: {
 					user: true,
-					renote: true,
-					reply: true,
 				},
 			});
+			if (renote != null) await this.queryService.attachReplyAndRenote([renote]);
 
 			if (renote == null) {
 				throw new IdentifiableError('53983c56-e163-45a6-942f-4ddc485d4290', 'No such renote target');
@@ -524,7 +543,8 @@ export class NoteCreateService implements OnApplicationShutdown {
 
 		if (data.visibility === 'public' && data.channel == null) {
 			const sensitiveWords = this.meta.sensitiveWords;
-			if (this.utilityService.isKeyWordIncluded(data.cw ?? data.text ?? '', sensitiveWords)) {
+			const sensitiveWordsTarget = data.cw ?? data.text ?? '';
+			if (sensitiveWords.length > 0 && this.utilityService.isKeyWordIncluded([sensitiveWordsTarget, ...extractUrlsForKeyWordCheck(sensitiveWordsTarget)].join('\n'), sensitiveWords)) {
 				data.visibility = 'home';
 			} else if ((await this.roleService.getUserPolicies(user.id)).canPublicNote === false) {
 				data.visibility = 'home';
@@ -569,7 +589,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 				case 'followers':
 					// 他人のfollowers noteはreject
 					if (data.renote.userId !== user.id) {
-						throw new Error('Renote target is not public or home');
+						throw new IdentifiableError('90b9d6f0-893a-4fef-b0f1-e9a33989f71a', 'Renote target is not public or home');
 					}
 
 					// followers noteはfollowers以下にrenote可能
@@ -579,7 +599,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 					break;
 				case 'specified':
 					// specified / direct noteはreject
-					throw new Error('Renote target is not public or home');
+					throw new IdentifiableError('48d7a997-da5c-4716-b3c3-92db3f37bf7d', 'Renote target is not public or home');
 			}
 		}
 
@@ -595,19 +615,30 @@ export class NoteCreateService implements OnApplicationShutdown {
 			}
 		}
 
-		// 返信対象がpublicではないならhomeにする
-		if (data.reply && data.reply.visibility !== 'public' && data.visibility === 'public') {
-			data.visibility = 'home';
-		}
-
-		// ローカルのみをRenoteしたらローカルのみにする
-		if (data.renote && data.renote.localOnly && data.channel == null) {
-			data.localOnly = true;
-		}
-
-		// ローカルのみにリプライしたらローカルのみにする
-		if (data.reply && data.reply.localOnly && data.channel == null) {
-			data.localOnly = true;
+		if (data.reply) {
+			switch (data.reply.visibility) {
+				case 'public':
+					// public noteは無条件にreply可能
+					break;
+				case 'home':
+					// home noteはhome以下にreply可能
+					if (data.visibility === 'public') {
+						data.visibility = 'home';
+					}
+					break;
+				case 'followers':
+					// followers noteはfollowers以下にreply可能
+					if (data.visibility === 'public' || data.visibility === 'home') {
+						data.visibility = 'followers';
+					}
+					break;
+				case 'specified':
+					// specified / direct noteはspecifiedのみreply可能
+					if (data.visibility !== 'specified') {
+						data.visibility = 'specified';
+					}
+					break;
+			}
 		}
 
 		if (data.localOnly && data.visibility === 'specified') {
@@ -626,7 +657,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 			data.text = null;
 		}
 
-		if (data.text == null && data.files == null && data.poll == null && data.renote == null) {
+		if (data.text == null && data.files == null && data.poll == null && data.renote == null && data.renoteFormerId == null && data.unresolvedRenoteUri == null && !data.unlinkableRenote) {
 			throw new Error('text or files or poll or renote is required');
 		}
 
@@ -683,44 +714,10 @@ export class NoteCreateService implements OnApplicationShutdown {
 			throw new Error('cannot send anonymously to non-public note');
 		}
 
-		if (data.localOnly && (data.reply || data.renote || mentionedUsers.length)) {
-			const relatedUserIds = new Set<MiUser['id']>();
-			if (data.reply) relatedUserIds.add(data.reply.userId);
-			if (data.renote) relatedUserIds.add(data.renote.userId);
-			for (const u of mentionedUsers) {
-				relatedUserIds.add(u.id);
-			}
-			relatedUserIds.delete(user.id);
-			if (data.reply || data.renote) {
-				const ids = `(${data.reply ? `'${data.reply.id}'` : ''}${data.reply && data.renote ? ',' : ''}${data.renote ? `'${data.renote.id}'` : ''})`;
-				if (/[^()\da-z,']/.test(ids)) {
-					throw new Error('Invalid note id');
-				}
-				const notes = await this.db.query(`WITH RECURSIVE cte AS (SELECT * FROM "note" WHERE id IN ${ids} UNION ALL SELECT n.* FROM "note" n JOIN cte p ON n.id = p."replyId" OR n.id = p."renoteId") SELECT s.id, s."userId", s."localOnly", u."federationPolicy" FROM (SELECT DISTINCT ON ("userId") * FROM cte ORDER BY "userId", "localOnly") AS s JOIN "user" u ON s."userId" = u.id ORDER BY id`);
-				for (const note of notes) {
-					relatedUserIds.delete(note.userId);
-					if (note.localOnly || note.userId === user.id) {
-						continue;
-					}
-					if (note.federationPolicy === 'strict' || note.federationPolicy === 'lax' && !data.channel && !data.anonymouslySendToUser) {
-						throw new Error('Cannot set localOnly due to federation policy violation');
-					}
-				}
-			}
-			if (relatedUserIds.size) {
-				const relatedUsers = (mentionedUsers as MiUser[]).filter(u => relatedUserIds.has(u.id));
-				for (const relatedUser of relatedUsers) {
-					if (relatedUser.federationPolicy === 'strict' || relatedUser.federationPolicy === 'lax' && !data.channel && !data.anonymouslySendToUser) {
-						throw new Error('Cannot set localOnly due to federation policy violation');
-					}
-				}
-			}
-		}
-
-		const note = await this.insertNote(user, data, tags, emojis, mentionedUsers);
+		const { note, waitingParentUris } = await this.insertNote(user, data, tags, emojis, mentionedUsers);
 
 		setImmediate('post created', { signal: this.#shutdownController.signal }).then(
-			() => this.postNoteCreated(note, user, data, silent, tags!, mentionedUsers!),
+			() => this.postNoteCreated(note, user, data, silent, tags!, mentionedUsers!, waitingParentUris),
 			() => { /* aborted, ignore this */ },
 		);
 
@@ -728,25 +725,97 @@ export class NoteCreateService implements OnApplicationShutdown {
 	}
 
 	@bindThis
-	private async insertNote(user: { id: MiUser['id']; host: MiUser['host']; }, data: Option, tags: string[], emojis: string[], mentionedUsers: MinimumUser[]) {
+	private async genNoteId(data: Option, generated: Set<MiNote['id']>): Promise<MiNote['id']> {
+		const time = data.createdAt?.getTime();
+		if (time != null && !this.idService.isSafeT(time)) {
+			throw new IdentifiableError('d450b8a9-48e4-4dab-ae36-f4db763fda7c', 'invalid Note: published timestamp is malformed');
+		}
+
+		const parentIds = [data.reply?.id, data.renote?.id, data.replyFormerId, data.renoteFormerId]
+			.filter((parentId): parentId is MiNote['id'] => parentId != null);
+		const id = this.idService.gen(time);
+		if (generated.has(id)) throw new Error('Failed to generate a note id that was not deleted');
+		generated.add(id);
+
+		const ties = parentIds.filter(parentId => parentId >= id && this.idService.isSameTime(parentId, id));
+		if (ties.length > 0) {
+			const after = ties.reduce((a, b) => (a > b ? a : b));
+			const [{ maxId }]: { maxId: MiNote['id'] | null }[] = await this.db.query(
+				'SELECT GREATEST((SELECT max("id") FROM "note" WHERE "id" > $1 AND "id" <= $2), (SELECT max("id") FROM "deleted_note" WHERE "id" > $1 AND "id" <= $2)) AS "maxId"',
+				[after, this.idService.lastWithinTime(after)],
+			);
+			const successor = this.idService.successorWithinTime(maxId ?? after);
+			if (successor != null) return successor;
+		}
+
+		return id;
+	}
+
+	@bindThis
+	private parentIdOf(id: MiNote['id'], parent: MiNote | null | undefined, formerId: MiNote['id'] | null | undefined, unresolvedUri: string | null | undefined, unlinkable: boolean | undefined): MiNote['id'] | null {
+		const parentId = parent?.id ?? formerId ?? null;
+		if (parentId != null) return id > parentId ? parentId : UNREFERENCEABLE_NOTE_ID;
+		return unresolvedUri != null || unlinkable ? UNREFERENCEABLE_NOTE_ID : null;
+	}
+
+	@bindThis
+	private uriOf(note: MiNote): string | null {
+		return note.userHost == null ? `${this.config.url}/notes/${note.id}` : note.uri;
+	}
+
+	@bindThis
+	public pendingUriOf(uri: string): string | null {
+		if (!/^https?:/.test(uri) || uri.includes('#')) return null;
+		const normalized = normalizeSynonymousUri(uri);
+		if (normalized == null || normalized.length > 512 || this.utilityService.isSynonymousUriLocal(uri)) return null;
+		return normalized;
+	}
+
+	@bindThis
+	private async isFormerParent(transactionalEntityManager: EntityManager, parent: MiNote): Promise<boolean> {
+		if (parent.uri == null) return await isDeletedNote(transactionalEntityManager, parent.id);
+		const rows: unknown[] = await transactionalEntityManager.query('SELECT 1 FROM "note_uri" WHERE "uri" = $1 AND "noteId" = $2', [parent.uri, parent.id]);
+		return rows.length > 0;
+	}
+
+	@bindThis
+	private async isPrimaryKeyViolation(e: unknown): Promise<boolean> {
+		if (!(e instanceof QueryFailedError) || !isDuplicateKeyValueError(e)) return false;
+		const constraints: unknown[] = await this.db.query(
+			'SELECT 1 FROM "pg_constraint" c JOIN "pg_namespace" n ON n."oid" = c."connamespace" WHERE n."nspname" = $1 AND c."conname" = $2 AND c."contype" = \'p\'',
+			[e.driverError.schema, e.driverError.constraint],
+		);
+		return constraints.length > 0;
+	}
+
+	@bindThis
+	private async insertNote(user: { id: MiUser['id']; host: MiUser['host']; }, data: Option, tags: string[], emojis: string[], mentionedUsers: MinimumUser[]): Promise<{ note: MiNote; waitingParentUris: string[] }> {
+		const generated = new Set<MiNote['id']>();
+		for (;;) {
+			const inserted = await this.tryInsertNote(await this.genNoteId(data, generated), user, data, tags, emojis, mentionedUsers);
+			if (inserted != null) return inserted;
+		}
+	}
+
+	@bindThis
+	private async tryInsertNote(id: MiNote['id'], user: { id: MiUser['id']; host: MiUser['host']; }, data: Option, tags: string[], emojis: string[], mentionedUsers: MinimumUser[]): Promise<{ note: MiNote; waitingParentUris: string[] } | null> {
+		const replyId = this.parentIdOf(id, data.reply, data.replyFormerId, data.unresolvedReplyUri, data.unlinkableReply);
+		const renoteId = this.parentIdOf(id, data.renote, data.renoteFormerId, data.unresolvedRenoteUri, data.unlinkableRenote);
+
 		const insert = new MiNote({
-			id: this.idService.gen(data.createdAt?.getTime()),
+			id,
 			fileIds: data.files ? data.files.map(file => file.id) : [],
-			replyId: data.reply ? data.reply.id : null,
-			renoteId: data.renote ? data.renote.id : null,
+			replyId,
+			renoteId,
 			channelId: data.channel ? data.channel.id : null,
-			threadId: data.reply
-				? data.reply.threadId
-					? data.reply.threadId
-					: data.reply.id
-				: null,
+			threadId: null,
 			anonymouslySendToUserId: data.anonymouslySendToUser ? data.anonymouslySendToUser.id : null,
 			anonymousChannelUsername: data.anonymousChannelUsername ?? null,
 			name: data.name,
 			text: data.text,
 			hasPoll: data.poll != null,
 			cw: data.cw ?? null,
-			tags: tags.map(tag => normalizeForSearch(tag)),
+			tags: tags.map(tag => normalizeTag(tag)),
 			emojis,
 			userId: user.id,
 			localOnly: data.localOnly!,
@@ -788,13 +857,119 @@ export class NoteCreateService implements OnApplicationShutdown {
 			}));
 		}
 
+		const linkedParents = new Map<MiNote['id'], MiNote>();
+		for (const parent of [data.reply, data.renote]) {
+			if (parent != null && (parent.id === replyId || parent.id === renoteId)) linkedParents.set(parent.id, parent);
+		}
+		let unresolvedReplyUri = data.unresolvedReplyUri ?? null;
+		let unresolvedRenoteUri = data.unresolvedRenoteUri ?? null;
+		const waitingParentUris: string[] = [];
+
+		const lowersNoteIdFloor = user.host != null && insert.id < user.id;
+		const userIds = unique([user.id, insert.anonymouslySendToUserId].filter(id => id != null)).sort();
+		let failedInsertion: unknown = null;
+
 		// 投稿を作成
 		try {
-			if (insert.hasPoll) {
-				// Start transaction
-				await this.db.transaction(async transactionalEntityManager => {
-					await transactionalEntityManager.insert(MiNote, insert);
+			// Start transaction
+			await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+				for (const userId of userIds) {
+					const users: unknown[] = await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [userId]);
+					if (users.length === 0 && userId === user.id) throw new IdentifiableError('e3e4eb00-3a45-49d7-bf8d-959a02f5d2eb', 'No such user');
+					if (users.length === 0) throw new IdentifiableError('60142edb-1519-408e-926d-4f108d27bee0', 'No such reply target');
+				}
 
+				const lockedParents = new Map<MiNote['id'], LockedNote>();
+				let formerReplyId = data.replyFormerId != null && insert.replyId === data.replyFormerId ? data.replyFormerId : null;
+				let siblingIds = formerReplyId != null ? await findSiblingIds(transactionalEntityManager, formerReplyId, formerReplyId, []) : [];
+				let sibling: LockedNote | undefined;
+				const lockSiblingsBefore = async (bound: MiNote['id'] | null) => {
+					while (formerReplyId != null && sibling == null && siblingIds.length > 0 && (bound == null || siblingIds[0] < bound)) {
+						const siblingId = siblingIds[0];
+						siblingIds.shift();
+						sibling = (await lockNoteRowsInIdOrder(transactionalEntityManager, [siblingId], 'KEY SHARE')).at(0);
+						if (sibling == null && siblingIds.length === 0) siblingIds = await findSiblingIds(transactionalEntityManager, formerReplyId, siblingId, []);
+					}
+				};
+				for (const parent of [...linkedParents.values()].sort((a, b) => (a.id < b.id ? -1 : 1))) {
+					await lockSiblingsBefore(parent.id);
+					const locked = (await lockNoteRowsInIdOrder(transactionalEntityManager, [parent.id], 'KEY SHARE')).at(0);
+					if (locked != null) {
+						lockedParents.set(parent.id, locked);
+					} else if (await this.isFormerParent(transactionalEntityManager, parent)) {
+						if (insert.replyId === parent.id) {
+							formerReplyId = parent.id;
+							siblingIds = await findSiblingIds(transactionalEntityManager, parent.id, parent.id, []);
+						}
+					} else {
+						if (insert.replyId === parent.id) {
+							insert.replyId = UNREFERENCEABLE_NOTE_ID;
+							unresolvedReplyUri = parent.uri;
+						}
+						if (insert.renoteId === parent.id) {
+							insert.renoteId = UNREFERENCEABLE_NOTE_ID;
+							unresolvedRenoteUri = parent.uri;
+						}
+					}
+				}
+				await lockSiblingsBefore(null);
+
+				const replyParent = insert.replyId != null ? lockedParents.get(insert.replyId) : undefined;
+				if (replyParent != null) {
+					insert.threadId = replyParent.threadId ?? replyParent.id;
+				} else if (formerReplyId != null) {
+					insert.threadId = sibling?.threadId ?? formerReplyId;
+				}
+
+				const relations: Partial<MiNoteRelation>[] = [];
+				if (insert.replyId != null && insert.replyId !== UNREFERENCEABLE_NOTE_ID) {
+					relations.push({ childId: insert.id, parentId: insert.replyId, kind: 0 });
+				}
+				if (insert.renoteId != null && insert.renoteId !== UNREFERENCEABLE_NOTE_ID && isRenote(insert)) {
+					const renoteParent = lockedParents.get(insert.renoteId);
+					relations.push({
+						childId: insert.id,
+						parentId: insert.renoteId,
+						kind: isQuote(insert) ? 1 : 2,
+						parentReplyUserId: renoteParent?.replyUserId ?? null,
+						parentReplyUserHost: renoteParent?.replyUserHost ?? null,
+						parentRenoteUserId: renoteParent?.renoteUserId ?? null,
+						parentRenoteUserHost: renoteParent?.renoteUserHost ?? null,
+					});
+				}
+
+				const pendings: MiNotePendingParent[] = [];
+				const replyPendingUri = unresolvedReplyUri != null ? this.pendingUriOf(unresolvedReplyUri) : null;
+				if (replyPendingUri != null) {
+					pendings.push({ parentUri: replyPendingUri, childId: insert.id, kind: 0 });
+				}
+				const renotePendingUri = unresolvedRenoteUri != null ? this.pendingUriOf(unresolvedRenoteUri) : null;
+				if (renotePendingUri != null && isRenote(insert)) {
+					pendings.push({ parentUri: renotePendingUri, childId: insert.id, kind: isQuote(insert) ? 1 : 2 });
+				}
+
+				const unlinkedReplyId = insert.replyId === UNREFERENCEABLE_NOTE_ID ? data.reply?.id ?? data.replyFormerId ?? null : null;
+				const unlinkedRenoteId = insert.renoteId === UNREFERENCEABLE_NOTE_ID ? data.renote?.id ?? data.renoteFormerId ?? null : null;
+				const unlinkedReplyUri = insert.replyId === UNREFERENCEABLE_NOTE_ID && data.reply != null ? this.uriOf(data.reply) : null;
+				const unlinkedRenoteUri = insert.renoteId === UNREFERENCEABLE_NOTE_ID && data.renote != null ? this.uriOf(data.renote) : null;
+
+				try {
+					await transactionalEntityManager.insert(MiNote, insert);
+				} catch (err) {
+					failedInsertion = err;
+					throw err;
+				}
+
+				if (await isDeletedNote(transactionalEntityManager, insert.id)) throw new DeletedNoteIdError();
+
+				if (lowersNoteIdFloor) {
+					await transactionalEntityManager.query(
+						'UPDATE "user" SET "noteIdFloor" = $2 WHERE "id" = $1 AND COALESCE("noteIdFloor", "id") > $2',
+						[user.id, insert.id],
+					);
+				}
+
+				if (insert.hasPoll) {
 					const poll = new MiPoll({
 						noteId: insert.id,
 						choices: data.poll!.choices,
@@ -808,17 +983,37 @@ export class NoteCreateService implements OnApplicationShutdown {
 					});
 
 					await transactionalEntityManager.insert(MiPoll, poll);
-				});
-			} else {
-				await this.notesRepository.insert(insert);
-			}
+				}
+
+				if (relations.length > 0) {
+					await transactionalEntityManager.insert(MiNoteRelation, relations);
+				}
+
+				if (insert.uri != null) {
+					await transactionalEntityManager.insert(MiNoteUri, { uri: insert.uri, noteId: insert.id });
+				}
+
+				if (pendings.length > 0) {
+					await transactionalEntityManager.insert(MiNotePendingParent, pendings);
+					waitingParentUris.push(...pendings.map(pending => pending.parentUri));
+				}
+
+				if (user.host == null && (unlinkedReplyId != null || unlinkedRenoteId != null)) {
+					await transactionalEntityManager.insert(MiNoteUnlinkedRelation, { noteId: insert.id, replyId: unlinkedReplyId, renoteId: unlinkedRenoteId, replyUri: unlinkedReplyUri, renoteUri: unlinkedRenoteUri });
+				}
+			});
 
 			return {
-				...insert,
-				reply: data.reply ?? null,
-				renote: data.renote ?? null,
+				note: {
+					...insert,
+					reply: data.reply != null && insert.replyId === data.reply.id ? data.reply : null,
+					renote: data.renote != null && insert.renoteId === data.renote.id ? data.renote : null,
+				},
+				waitingParentUris,
 			};
 		} catch (e) {
+			if (e instanceof DeletedNoteIdError || (e === failedInsertion && await this.isPrimaryKeyViolation(e))) return null;
+
 			// duplicate key error
 			if (isDuplicateKeyValueError(e)) {
 				const err = new Error('Duplicated note');
@@ -833,12 +1028,50 @@ export class NoteCreateService implements OnApplicationShutdown {
 	}
 
 	@bindThis
+	private async joinPendingChildren(parent: MiNote) {
+		const parentUri = parent.uri != null ? this.pendingUriOf(parent.uri) : null;
+		if (parentUri == null) return;
+
+		const waiting: PendingChild[] = await this.db.query(
+			'SELECT "childId", "kind" FROM "note_pending_parent" WHERE "parentUri" = $1',
+			[parentUri],
+		);
+		if (waiting.length === 0) return;
+
+		await joinChildrenToParent(this.db, this.idService, parent, parentUri, waiting);
+	}
+
+	@bindThis
+	private async joinWaitingParent(parentUri: string) {
+		if (this.pendingUriOf(parentUri) == null) return;
+
+		const uriRows: { noteId: MiNote['id'] }[] = await this.db.query('SELECT "noteId" FROM "note_uri" WHERE "uri" = ANY($1)', [synonymousUris(parentUri)]);
+
+		for (const uriRow of uriRows) {
+			const parent = await this.notesRepository.findOneBy({ id: uriRow.noteId });
+			if (parent != null) await this.joinPendingChildren(parent);
+		}
+	}
+
+	@bindThis
 	private async postNoteCreated(note: MiNote, user: {
 		id: MiUser['id'];
 		username: MiUser['username'];
 		host: MiUser['host'];
 		isBot: MiUser['isBot'];
-	}, data: Option, silent: boolean, tags: string[], mentionedUsers: MinimumUser[]) {
+	}, data: Option, silent: boolean, tags: string[], mentionedUsers: MinimumUser[], waitingParentUris: string[]) {
+		try {
+			await this.joinPendingChildren(note);
+			for (const parentUri of unique(waitingParentUris)) {
+				await this.joinWaitingParent(parentUri);
+			}
+		} catch (e) {
+			console.error(e);
+		}
+
+		const reply = data.reply != null && note.replyId === data.reply.id ? data.reply : null;
+		const renote = data.renote != null && note.renoteId === data.renote.id ? data.renote : null;
+
 		this.notesChart.update(note, true);
 		if (note.visibility !== 'specified' && (this.meta.enableChartsForRemoteUser || (user.host == null)) && !note.anonymouslySendToUserId && !note.anonymousChannelUsername) {
 			this.perUserNotesChart.update(user, note, true);
@@ -868,23 +1101,23 @@ export class NoteCreateService implements OnApplicationShutdown {
 
 		this.pushToTl(note, user);
 
-		this.antennaService.addNoteToAntennas({
+		const matchedAntennas = this.antennaService.addNoteToAntennas({
 			...note,
 			channel: data.channel ?? null,
 		}, user);
 
-		if (data.reply) {
-			this.saveReply(data.reply, note);
+		if (reply) {
+			this.saveReply(reply, note);
 		}
 
-		if (data.reply == null && note.anonymouslySendToUserId == null && note.anonymousChannelUsername == null) {
+		if (note.replyId == null && note.anonymouslySendToUserId == null && note.anonymousChannelUsername == null) {
 			// TODO: キャッシュ
 			this.followingsRepository.findBy({
 				followeeId: user.id,
 				notify: 'normal',
 			}).then(async followings => {
 				if (note.visibility !== 'specified') {
-					const isPureRenote = this.isRenote(data) && !this.isQuote(data) ? true : false;
+					const isPureRenote = isRenote(note) && !isQuote(note);
 					for (const following of followings) {
 						// TODO: ワードミュート考慮
 						let isRenoteMuted = false;
@@ -902,8 +1135,8 @@ export class NoteCreateService implements OnApplicationShutdown {
 			});
 		}
 
-		if (data.renote && (data.anonymouslySendToUser || data.channel?.anonymousStrategy || data.renote.userId !== user.id && !user.isBot)) {
-			this.incRenoteCount(data.renote);
+		if (renote && (data.anonymouslySendToUser || data.channel?.anonymousStrategy || renote.userId !== user.id && !user.isBot)) {
+			this.incRenoteCount(renote);
 		}
 
 		if (data.poll && data.poll.expiresAt) {
@@ -943,32 +1176,38 @@ export class NoteCreateService implements OnApplicationShutdown {
 				});
 			}
 
+			matchedAntennas.then(antennas => {
+				for (const antenna of antennas) {
+					this.globalEventService.publishAntennaStream(antenna.id, 'note', noteObj);
+				}
+			});
+
 			this.webhookService.enqueueUserWebhook(user.id, 'note', { note: noteObj });
 			const nm = new NotificationManager(this.mutingsRepository, this.notificationService, this.followingsRepository, noteObj.user, note);
 
-			await this.createMentionedEvents(mentionedUsers, note, nm);
+			await this.createMentionedEvents(mentionedUsers, note, data.reply ?? null, nm);
 
 		// If has in reply to note
-		if (data.reply) {
+		if (reply) {
 				// 通知
-				if (data.reply.userHost === null) {
+				if (reply.userHost === null) {
 					const isThreadMuted = await this.noteThreadMutingsRepository.exists({
 						where: {
-							userId: data.reply.userId,
-							threadId: data.reply.threadId ?? data.reply.id,
+							userId: reply.userId,
+							threadId: note.threadId ?? note.id,
 						},
 					});
 
 					if (!isThreadMuted) {
-						nm.push(data.reply.userId, 'reply');
-						this.globalEventService.publishMainStream(data.reply.userId, 'reply', noteObj);
-						this.webhookService.enqueueUserWebhook(data.reply.userId, 'reply', { note: noteObj });
+						nm.push(reply.userId, 'reply');
+						this.globalEventService.publishMainStream(reply.userId, 'reply', noteObj);
+						this.webhookService.enqueueUserWebhook(reply.userId, 'reply', { note: noteObj });
 					}
 				}
 			}
 
 			// If it is renote
-			if (this.isRenote(data)) {
+			if (renote && this.isRenote(data)) {
 				const type = this.isQuote(data) ? 'quote' : 'renote';
 
 				// Notify
@@ -1029,13 +1268,16 @@ export class NoteCreateService implements OnApplicationShutdown {
 				lastNotedAt: new Date(),
 			});
 
-			this.notesRepository.countBy({
-				userId: user.id,
-				channelId: data.channel.id,
-			}).then(count => {
+			const otherChannelNotesQuery = this.notesRepository.createQueryBuilder('note')
+				.where('note.userId = :userId', { userId: user.id })
+				.andWhere('note.channelId = :channelId', { channelId: data.channel.id })
+				.andWhere('note.id != :noteId', { noteId: note.id })
+				.orderBy('note.id', 'DESC');
+
+			this.queryService.fetchPaginationQueryAcrossPartitions(otherChannelNotesQuery, {}, 1, { floorKey: data.channel.id }).then(otherChannelNotes => {
 				// この処理が行われるのはノート作成後なので、ノートが一つしかなかったら最初の投稿だと判断できる
 				// TODO: とはいえノートを削除して何回も投稿すればその分だけインクリメントされる雑さもあるのでどうにかしたい
-				if (count === 1) {
+				if (otherChannelNotes.length === 0) {
 					this.channelsRepository.increment({ id: data.channel!.id }, 'usersCount', 1);
 				}
 			});
@@ -1094,12 +1336,15 @@ export class NoteCreateService implements OnApplicationShutdown {
 	}
 
 	@bindThis
-	private async createMentionedEvents(mentionedUsers: MinimumUser[], note: MiNote, nm: NotificationManager) {
+	private async createMentionedEvents(mentionedUsers: MinimumUser[], note: MiNote, reply: MiNote | null, nm: NotificationManager) {
+		const threadIds = [note.threadId ?? note.id];
+		if (note.replyId === UNREFERENCEABLE_NOTE_ID && reply != null) threadIds.push(reply.threadId ?? reply.id);
+
 		for (const u of mentionedUsers.filter(u => this.userEntityService.isLocalUser(u))) {
 			const isThreadMuted = await this.noteThreadMutingsRepository.exists({
 				where: {
 					userId: u.id,
-					threadId: note.threadId ?? note.id,
+					threadId: In(threadIds),
 				},
 			});
 
@@ -1424,9 +1669,20 @@ export class NoteCreateService implements OnApplicationShutdown {
 			prohibitedWords = this.meta.prohibitedWords;
 		}
 
+		if (prohibitedWords.length === 0) {
+			return false;
+		}
+
 		if (
 			this.utilityService.isKeyWordIncluded(
-				this.utilityService.concatNoteContentsForKeyWordCheck(content),
+				this.utilityService.concatNoteContentsForKeyWordCheck({
+					...content,
+					others: [
+						...(content.others ?? []),
+						...extractUrlsForKeyWordCheck(content.cw ?? ''),
+						...extractUrlsForKeyWordCheck(content.text ?? ''),
+					],
+				}),
 				prohibitedWords,
 			)
 		) {

@@ -21,6 +21,7 @@ import { IdService } from '@/core/IdService.js';
 import { NotificationService } from '@/core/NotificationService.js';
 import { JsonArrayStream } from '@/misc/JsonArrayStream.js';
 import { FileWriterStream } from '@/misc/FileWriterStream.js';
+import { nextPrefix, prefixesAscending, prefixOf } from '@/misc/partition.js';
 import { QueueLoggerService } from '../QueueLoggerService.js';
 import type * as Bull from 'bullmq';
 import type { DbJobDataWithUser } from '../types.js';
@@ -118,12 +119,25 @@ export class ExportNotesProcessorService {
 
 		const queryRunner = this.dbLong.createQueryRunner();
 		try {
+			const notesRepository = this.notesRepository;
+			const nowPrefix = prefixOf(this.idService.gen(Date.now(), true));
+			const ceilingPrefix = nextPrefix(nowPrefix) ?? nowPrefix;
+
+			async function* iterateNotesAscending() {
+				for (const prefix of prefixesAscending(prefixOf(user!.id), ceilingPrefix)) {
+					const upper = nextPrefix(prefix);
+					const query = notesRepository.createQueryBuilder('note', queryRunner)
+						.where('note.userId = :userId', { userId: user!.id })
+						.andWhere('note.id >= :lower', { lower: prefix })
+						.orderBy('note.id');
+					if (upper != null) query.andWhere('note.id < :upper', { upper });
+					yield* await query.stream();
+				}
+			}
+
 			// メモリが足りなくならないようにストリームで処理する
 			await Readable.toWeb(
-				await this.notesRepository.createQueryBuilder('note', queryRunner)
-					.where('note.userId = :userId', { userId: user.id })
-					.orderBy('note.id')
-					.stream(),
+				Readable.from(iterateNotesAscending()),
 			)
 				.pipeThrough(new NoteStream(job, this.pollsRepository, this.driveFileEntityService, this.idService, user))
 				.pipeThrough(new JsonArrayStream())

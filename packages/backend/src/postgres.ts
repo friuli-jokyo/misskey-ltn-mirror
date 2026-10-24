@@ -30,6 +30,9 @@ import { MiClip } from '@/models/Clip.js';
 import { MiClipNote } from '@/models/ClipNote.js';
 import { MiClipFavorite } from '@/models/ClipFavorite.js';
 import { MiDriveFile } from '@/models/DriveFile.js';
+import { MiDriveFileAccessKey } from '@/models/DriveFileAccessKey.js';
+import { MiDriveFileMd5 } from '@/models/DriveFileMd5.js';
+import { MiUserDriveUsage } from '@/models/UserDriveUsage.js';
 import { MiDriveFolder } from '@/models/DriveFolder.js';
 import { MiEmoji } from '@/models/Emoji.js';
 import { MiFollowing } from '@/models/Following.js';
@@ -45,8 +48,15 @@ import { MiRenoteMuting } from '@/models/RenoteMuting.js';
 import { MiNote } from '@/models/Note.js';
 import { MiNoteFavorite } from '@/models/NoteFavorite.js';
 import { MiNoteReaction } from '@/models/NoteReaction.js';
+import { MiNoteReactionLocator } from '@/models/NoteReactionLocator.js';
+import { MiNoteRelation } from '@/models/NoteRelation.js';
 import { MiNoteThreadMuting } from '@/models/NoteThreadMuting.js';
+import { MiNoteUri } from '@/models/NoteUri.js';
 import { MiNoteDraft } from '@/models/NoteDraft.js';
+import { MiNotePendingParent } from '@/models/NotePendingParent.js';
+import { MiNoteUnlinkedRelation } from '@/models/NoteUnlinkedRelation.js';
+import { MiDeletedNote } from '@/models/DeletedNote.js';
+import { MiPartitionMigrationState } from '@/models/PartitionMigrationState.js';
 import { MiPage } from '@/models/Page.js';
 import { MiPageLike } from '@/models/PageLike.js';
 import { MiPasswordResetRequest } from '@/models/PasswordResetRequest.js';
@@ -205,13 +215,23 @@ export const entities = [
 	MiNote,
 	MiNoteFavorite,
 	MiNoteReaction,
+	MiNoteReactionLocator,
+	MiNoteRelation,
 	MiNoteThreadMuting,
+	MiNoteUri,
 	MiNoteDraft,
+	MiNotePendingParent,
+	MiNoteUnlinkedRelation,
+	MiDeletedNote,
+	MiPartitionMigrationState,
 	MiPage,
 	MiPageLike,
 	MiGalleryPost,
 	MiGalleryLike,
 	MiDriveFile,
+	MiDriveFileAccessKey,
+	MiDriveFileMd5,
+	MiUserDriveUsage,
 	MiDriveFolder,
 	MiPoll,
 	MiPollVote,
@@ -295,17 +315,13 @@ export function createPostgresDataSource(config: Config, long = false) {
 				})),
 			},
 		} : {}),
-		synchronize: process.env.NODE_ENV === 'test',
-		dropSchema: process.env.NODE_ENV === 'test',
+		synchronize: process.env.NODE_ENV === 'test' && !long,
+		dropSchema: process.env.NODE_ENV === 'test' && !long,
 		cache: !config.db.disableCache && process.env.NODE_ENV !== 'test' ? { // dbをcloseしても何故かredisのコネクションが内部的に残り続けるようで、テストの際に支障が出るため無効にする(キャッシュも含めてテストしたいため本当は有効にしたいが...)
 			type: 'ioredis',
 			options: {
-				host: config.redis.host,
-				port: config.redis.port,
-				family: config.redis.family ?? 0,
-				password: config.redis.pass,
+				...config.redis,
 				keyPrefix: `${config.redis.prefix}:query:`,
-				db: config.redis.db ?? 0,
 			},
 		} : false,
 		logging: log,

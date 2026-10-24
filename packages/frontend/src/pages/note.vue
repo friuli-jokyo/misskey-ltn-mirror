@@ -88,6 +88,12 @@ const note = ref<null | Misskey.entities.Note>(CTX_NOTE);
 const clips = ref<Misskey.entities.Clip[]>();
 const showPrev = ref<'user' | 'global' | 'local' | 'channel' | false>(false);
 const showNext = ref<'user' | 'global' | 'local' | 'channel' | false>(false);
+const initialTab = computed<'reactions' | 'replies' | 'renotes' | undefined>(() => {
+	if (['reactions', 'replies', 'renotes'].includes(props.initialTab ?? '')) {
+		return props.initialTab as 'reactions' | 'replies' | 'renotes';
+	}
+	return undefined;
+});
 const prevPaginator = computed(() => {
 	switch (showPrev.value) {
 		case 'channel': return prevChannelPaginator;

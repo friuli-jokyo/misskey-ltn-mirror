@@ -11,6 +11,7 @@ import type { MiDriveFile } from '@/models/DriveFile.js';
 import type { MiNote } from '@/models/Note.js';
 import { DI } from '@/di-symbols.js';
 import { UtilityService } from '@/core/UtilityService.js';
+import { QueryService } from '@/core/QueryService.js';
 import { bindThis } from '@/decorators.js';
 import { acquireChartInsertLock } from '@/misc/distributed-lock.js';
 import Chart from '../core.js';
@@ -44,6 +45,7 @@ export default class InstanceChart extends Chart<typeof schema> { // eslint-disa
 
 		private utilityService: UtilityService,
 		private chartLoggerService: ChartLoggerService,
+		private queryService: QueryService,
 	) {
 		super(db, (k) => acquireChartInsertLock(redisClient, k), chartLoggerService.logger, name, schema, true);
 	}
@@ -56,7 +58,7 @@ export default class InstanceChart extends Chart<typeof schema> { // eslint-disa
 			followersCount,
 			driveFiles,
 		] = await Promise.all([
-			this.notesRepository.countBy({ userHost: group }),
+			this.queryService.countAcrossPartitions(this.notesRepository.createQueryBuilder('note').where({ userHost: group })),
 			this.usersRepository.countBy({ host: group }),
 			this.followingsRepository.countBy({ followerHost: group }),
 			this.followingsRepository.countBy({ followeeHost: group }),

@@ -40,6 +40,11 @@ export class UtilityService {
 		return this.punyHost(uri) === this.toPuny(this.config.host);
 	}
 
+	@bindThis
+	public isSynonymousUriLocal(uri: string): boolean {
+		return this.punyHost(uri).replace(/^www\./, '') === this.toPuny(this.config.host).replace(/^www\./, '');
+	}
+
 	// メールアドレスのバリデーションを行う
 	// https://html.spec.whatwg.org/multipage/input.html#valid-e-mail-address
 	@bindThis

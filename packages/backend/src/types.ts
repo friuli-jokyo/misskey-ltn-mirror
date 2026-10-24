@@ -120,6 +120,7 @@ export const moderationLogTypes = [
 	'createAvatarDecoration',
 	'updateAvatarDecoration',
 	'deleteAvatarDecoration',
+	'unsetMfa',
 	'unsetUserAvatar',
 	'unsetUserBanner',
 	'createSystemWebhook',
@@ -327,6 +328,11 @@ export type ModerationLogPayloads = {
 		avatarDecorationId: string;
 		avatarDecoration: any;
 	};
+	unsetMfa: {
+		userId: string;
+		userUsername: string;
+		userHost: string | null;
+	};
 	unsetUserAvatar: {
 		userId: string;
 		userUsername: string;
@@ -410,7 +416,9 @@ export type Serialized<T> = {
 					? (Serialized<T[K]> | null)
 					: T[K] extends (Record<string, any> | undefined)
 						? (Serialized<T[K]> | undefined)
-						: T[K];
+						: T[K] extends (Record<string, any> | null | undefined)
+							? (Serialized<T[K]> | null | undefined)
+							: T[K];
 };
 
 export type FilterUnionByProperty<

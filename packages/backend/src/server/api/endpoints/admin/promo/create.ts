@@ -5,7 +5,7 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import type { PromoNotesRepository } from '@/models/_.js';
+import type { PromoNotesRepository, MiPromoNote } from '@/models/_.js';
 import { GetterService } from '@/server/api/GetterService.js';
 import { DI } from '@/di-symbols.js';
 import { ApiError } from '../../../error.js';
@@ -61,11 +61,14 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw new ApiError(meta.errors.alreadyPromoted);
 			}
 
-			await this.promoNotesRepository.insert({
-				noteId: note.id,
-				expiresAt: new Date(ps.expiresAt),
-				userId: note.userId,
-			});
+			const inserted: { noteId: MiPromoNote['noteId'] }[] = await this.promoNotesRepository.query(
+				'WITH "target" AS (SELECT "id" FROM "note" WHERE "id" = $3 FOR KEY SHARE) INSERT INTO "promo_note" ("noteId", "expiresAt", "userId") SELECT "id", $1, $2 FROM "target" RETURNING "noteId"',
+				[new Date(ps.expiresAt), note.userId, note.id],
+			);
+
+			if (inserted.length === 0) {
+				throw new ApiError(meta.errors.noSuchNote);
+			}
 		});
 	}
 }

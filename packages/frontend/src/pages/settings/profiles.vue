@@ -43,7 +43,6 @@ async function create(): Promise<void> {
 	});
 	if (canceled || name == null || name.trim() === '') return;
 
-	// Check if profile with same name already exists
 	if (backups.some(b => b.name === name)) {
 		await os.alert({
 			type: 'warning',
@@ -52,7 +51,6 @@ async function create(): Promise<void> {
 		return;
 	}
 
-	// Create empty profile with the given name
 	const newProfile = {
 		...prefer.profile,
 		name,
@@ -64,7 +62,6 @@ async function create(): Promise<void> {
 		value: newProfile,
 	});
 
-	// Refresh the list
 	backups.push({ name });
 
 	os.success();

@@ -12,6 +12,7 @@ import type { MiMeta } from '@/models/Meta.js';
 import { Packed } from '@/misc/json-schema.js';
 import type { NotesRepository } from '@/models/_.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
+import { QueryService } from '@/core/QueryService.js';
 import { FanoutTimelineName, FanoutTimelineService } from '@/core/FanoutTimelineService.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { isUserRelated } from '@/misc/is-user-related.js';
@@ -59,6 +60,7 @@ export class FanoutTimelineEndpointService {
 		private fanoutTimelineService: FanoutTimelineService,
 		private utilityService: UtilityService,
 		private channelMutingService: ChannelMutingService,
+		private queryService: QueryService,
 	) {
 	}
 
@@ -151,6 +153,16 @@ export class FanoutTimelineEndpointService {
 				};
 			}
 
+			if (ps.me == null && this.meta.ugcVisibilityForVisitor !== 'all') {
+				const parentFilter = filter;
+				filter = (note) => {
+					if (this.meta.ugcVisibilityForVisitor === 'none') return false;
+					if (this.meta.ugcVisibilityForVisitor === 'local' && note.userHost != null) return false;
+
+					return parentFilter(note);
+				};
+			}
+
 			{
 				const parentFilter = filter;
 				filter = (note) => {
@@ -209,13 +221,12 @@ export class FanoutTimelineEndpointService {
 		const query = this.notesRepository.createQueryBuilder('note')
 			.where('note.id IN (:...noteIds)', { noteIds: noteIds })
 			.innerJoinAndSelect('note.user', 'user')
-			.leftJoinAndSelect('note.reply', 'reply')
-			.leftJoinAndSelect('note.renote', 'renote')
-			.leftJoinAndSelect('reply.user', 'replyUser')
-			.leftJoinAndSelect('renote.user', 'renoteUser')
 			.leftJoinAndSelect('note.channel', 'channel');
 
-		const notes = (await query.getMany()).filter(noteFilter);
+		const fetchedNotes = await query.getMany();
+		await this.queryService.attachReplyAndRenote(fetchedNotes);
+
+		const notes = fetchedNotes.filter(noteFilter);
 
 		notes.sort((a, b) => idCompare(a.id, b.id));
 

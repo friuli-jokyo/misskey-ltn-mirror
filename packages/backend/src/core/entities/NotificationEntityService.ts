@@ -20,6 +20,7 @@ import { ChatEntityService } from './ChatEntityService.js';
 import type { OnModuleInit } from '@nestjs/common';
 import type { UserEntityService } from './UserEntityService.js';
 import type { NoteEntityService } from './NoteEntityService.js';
+import type { QueryService } from '../QueryService.js';
 
 const NOTE_REQUIRED_NOTIFICATION_TYPES = new Set([
 	'note',
@@ -40,6 +41,7 @@ export class NotificationEntityService implements OnModuleInit {
 	private noteEntityService: NoteEntityService;
 	private roleEntityService: RoleEntityService;
 	private chatEntityService: ChatEntityService;
+	private queryService: QueryService;
 
 	constructor(
 		private moduleRef: ModuleRef,
@@ -62,6 +64,7 @@ export class NotificationEntityService implements OnModuleInit {
 		this.noteEntityService = this.moduleRef.get('NoteEntityService');
 		this.roleEntityService = this.moduleRef.get('RoleEntityService');
 		this.chatEntityService = this.moduleRef.get('ChatEntityService');
+		this.queryService = this.moduleRef.get('QueryService');
 	}
 
 	/**
@@ -212,14 +215,9 @@ export class NotificationEntityService implements OnModuleInit {
 			where: { id: In(noteIds) },
 			relations: {
 				user: true,
-				reply: {
-					user: true,
-				},
-				renote: {
-					user: true,
-				},
 			},
 		}) : [];
+		await this.queryService.attachReplyAndRenote(notes);
 		const packedNotesArray = await this.noteEntityService.packMany(notes, { id: meId }, {
 			detail: true,
 		});

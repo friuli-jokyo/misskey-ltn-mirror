@@ -48,7 +48,7 @@ import { misskeyApi } from '@/utility/misskey-api.js';
 import { ensureSignin } from '@/i.js';
 import { useRouter } from '@/router.js';
 import * as os from '@/os.js';
-import { updateCurrentAccountPartial } from '@/accounts.js';
+import { updateCurrentAccount } from '@/accounts.js';
 import MkInput from '@/components/MkInput.vue';
 import MkFoldableSection from '@/components/MkFoldableSection.vue';
 import MkInfo from '@/components/MkInfo.vue';
@@ -120,7 +120,7 @@ async function search() {
 }
 
 onMounted(() => {
-	updateCurrentAccountPartial({ hasUnreadChatMessages: false });
+	updateCurrentAccount({ hasUnreadChatMessages: false });
 });
 </script>
 

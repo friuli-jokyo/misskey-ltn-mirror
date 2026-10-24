@@ -35,11 +35,7 @@ export class MiNote {
 	})
 	public replyId: MiNote['id'] | null;
 
-	@ManyToOne(() => MiNote, {
-		createForeignKeyConstraints: false,
-	})
-	@JoinColumn()
-	public reply: MiNote | null;
+	public reply?: MiNote | null;
 
 	@Index()
 	@Column({
@@ -49,11 +45,7 @@ export class MiNote {
 	})
 	public renoteId: MiNote['id'] | null;
 
-	@ManyToOne(() => MiNote, {
-		createForeignKeyConstraints: false,
-	})
-	@JoinColumn()
-	public renote: MiNote | null;
+	public renote?: MiNote | null;
 
 	@Index()
 	@Column('varchar', {
@@ -84,7 +76,7 @@ export class MiNote {
 	public userId: MiUser['id'];
 
 	@ManyToOne(() => MiUser, {
-		onDelete: 'CASCADE',
+		createForeignKeyConstraints: false,
 	})
 	@JoinColumn()
 	public user: MiUser | null;
@@ -208,7 +200,7 @@ export class MiNote {
 	public anonymouslySendToUserId: MiUser['id'] | null;
 
 	@ManyToOne(type => MiUser, {
-		onDelete: 'CASCADE',
+		createForeignKeyConstraints: false,
 	})
 	@JoinColumn()
 	public anonymouslySendToUser: MiUser | null;
@@ -228,7 +220,7 @@ export class MiNote {
 	public channelId: MiChannel['id'] | null;
 
 	@ManyToOne(() => MiChannel, {
-		onDelete: 'CASCADE',
+		createForeignKeyConstraints: false,
 	})
 	@JoinColumn()
 	public channel: MiChannel | null;

@@ -10,6 +10,7 @@ import { IdentifiableError } from '@/misc/identifiable-error.js';
 import type { MiLocalUser, MiRemoteUser, MiUser } from '@/models/User.js';
 import type { MiNote } from '@/models/Note.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
+import { QueryService } from '@/core/QueryService.js';
 import { bindThis } from '@/decorators.js';
 
 @Injectable()
@@ -22,6 +23,7 @@ export class GetterService {
 		private notesRepository: NotesRepository,
 
 		private userEntityService: UserEntityService,
+		private queryService: QueryService,
 	) {
 	}
 
@@ -45,18 +47,14 @@ export class GetterService {
 			where: { id: noteId },
 			relations: {
 				user: true,
-				reply: {
-					user: true,
-				},
-				renote: {
-					user: true,
-				},
 			},
 		});
 
 		if (note == null) {
 			throw new IdentifiableError('9725d0ce-ba28-4dde-95a7-2cbb2c15de24', 'No such note.');
 		}
+
+		await this.queryService.attachReplyAndRenote([note]);
 
 		return note;
 	}

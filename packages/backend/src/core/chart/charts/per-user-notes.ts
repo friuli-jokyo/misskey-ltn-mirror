@@ -12,6 +12,7 @@ import { DI } from '@/di-symbols.js';
 import type { NotesRepository } from '@/models/_.js';
 import { bindThis } from '@/decorators.js';
 import { acquireChartInsertLock } from '@/misc/distributed-lock.js';
+import { QueryService } from '@/core/QueryService.js';
 import Chart from '../core.js';
 import { ChartLoggerService } from '../ChartLoggerService.js';
 import { name, schema } from './entities/per-user-notes.js';
@@ -33,13 +34,14 @@ export default class PerUserNotesChart extends Chart<typeof schema> { // eslint-
 		private notesRepository: NotesRepository,
 
 		private chartLoggerService: ChartLoggerService,
+		private queryService: QueryService,
 	) {
 		super(db, (k) => acquireChartInsertLock(redisClient, k), chartLoggerService.logger, name, schema, true);
 	}
 
 	protected async tickMajor(group: string): Promise<Partial<KVs<typeof schema>>> {
 		const [count] = await Promise.all([
-			this.notesRepository.countBy({ userId: group }),
+			this.queryService.countAcrossPartitions(this.notesRepository.createQueryBuilder('note').where({ userId: group }), { floorKey: await this.queryService.noteFloorOf(group) }),
 		]);
 
 		return {

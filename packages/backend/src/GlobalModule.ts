@@ -13,6 +13,7 @@ import { Config, loadConfig } from './config.js';
 import { createPostgresDataSource } from './postgres.js';
 import { RepositoryModule } from './models/RepositoryModule.js';
 import { allSettled } from './misc/promise-tracker.js';
+import { assertPartitionCopiesMatch } from './misc/partition-copies.js';
 import { GlobalEvents } from './core/GlobalEventService.js';
 import type { Provider, OnApplicationShutdown } from '@nestjs/common';
 
@@ -25,8 +26,9 @@ const $db: Provider = {
 	provide: DI.db,
 	useFactory: async (config) => {
 		try {
-			const db = createPostgresDataSource(config);
-			return await db.initialize();
+			const db = await createPostgresDataSource(config).initialize();
+			await assertPartitionCopiesMatch(db);
+			return db;
 		} catch (e) {
 			console.log(e);
 			throw e;

@@ -7,6 +7,7 @@ import { Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { GetterService } from '@/server/api/GetterService.js';
 import { ReactionService } from '@/core/ReactionService.js';
+import { AuthenticationError } from '@/server/api/AuthenticateService.js';
 import { ApiError } from '../../../error.js';
 
 export const meta = {
@@ -69,6 +70,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				if (err.id === '51c42bb4-931a-456b-bff7-e5a8a70dd298') throw new ApiError(meta.errors.alreadyReacted);
 				if (err.id === 'e70412a4-7197-4726-8e74-f3e0deb92aa7') throw new ApiError(meta.errors.youHaveBeenBlocked);
 				if (err.id === '12c35529-3c79-4327-b1cc-e2cf63a71925') throw new ApiError(meta.errors.cannotReactToRenote);
+				if (err.id === 'a149b3de-783e-433e-9ee6-d2642d817af4') throw new ApiError(meta.errors.noSuchNote);
+				if (err.id === 'cc7e1130-6bf7-4105-adeb-25f799da854f') throw new AuthenticationError('user not found');
 				throw err;
 			});
 			return;

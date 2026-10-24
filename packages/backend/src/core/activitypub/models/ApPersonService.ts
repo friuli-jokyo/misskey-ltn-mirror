@@ -14,13 +14,13 @@ import type { MiLocalUser, MiRemoteUser } from '@/models/User.js';
 import { MiUser } from '@/models/User.js';
 import { truncate } from '@/misc/truncate.js';
 import type { CacheService } from '@/core/CacheService.js';
-import { normalizeForSearch } from '@/misc/normalize-for-search.js';
+import { normalizeTag } from '@/misc/normalize-tag.js';
 import { isDuplicateKeyValueError } from '@/misc/is-duplicate-key-value-error.js';
 import type Logger from '@/logger.js';
 import type { MiNote } from '@/models/Note.js';
 import type { IdService } from '@/core/IdService.js';
 import type { MfmService } from '@/core/MfmService.js';
-import { toArray } from '@/misc/prelude/array.js';
+import { toArray, unique } from '@/misc/prelude/array.js';
 import type { GlobalEventService } from '@/core/GlobalEventService.js';
 import type { FederatedInstanceService } from '@/core/FederatedInstanceService.js';
 import type { FetchInstanceMetadataService } from '@/core/FetchInstanceMetadataService.js';
@@ -31,6 +31,7 @@ import type InstanceChart from '@/core/chart/charts/instance.js';
 import type { HashtagService } from '@/core/HashtagService.js';
 import { MiUserNotePining } from '@/models/UserNotePining.js';
 import { StatusError } from '@/misc/status-error.js';
+import { IdentifiableError } from '@/misc/identifiable-error.js';
 import type { UtilityService } from '@/core/UtilityService.js';
 import type { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { bindThis } from '@/decorators.js';
@@ -38,6 +39,7 @@ import { RoleService } from '@/core/RoleService.js';
 import { DriveFileEntityService } from '@/core/entities/DriveFileEntityService.js';
 import type { AccountMoveService } from '@/core/AccountMoveService.js';
 import { checkHttps } from '@/misc/check-https.js';
+import { lockNotesInIdOrder } from '@/misc/note-dependents.js';
 import { getApId, getApType, getOneApHrefNullable, isActor, isCollection, isCollectionOrOrderedCollection, isPropertyValue } from '../type.js';
 import { extractApHashtags } from './tag.js';
 import type { OnModuleInit } from '@nestjs/common';
@@ -139,19 +141,19 @@ export class ApPersonService implements OnModuleInit {
 		const expectHost = this.utilityService.punyHost(uri);
 
 		if (!isActor(x)) {
-			throw new Error(`invalid Actor type '${x.type}'`);
+			throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', `invalid Actor type '${x.type}'`);
 		}
 
 		if (!(typeof x.id === 'string' && x.id.length > 0)) {
-			throw new Error('invalid Actor: wrong id');
+			throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: wrong id');
 		}
 
 		if (!(typeof x.inbox === 'string' && x.inbox.length > 0)) {
-			throw new Error('invalid Actor: wrong inbox');
+			throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: wrong inbox');
 		}
 
 		if (this.utilityService.punyHost(x.inbox) !== expectHost) {
-			throw new Error('invalid Actor: inbox has different host');
+			throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: inbox has different host');
 		}
 
 		const sharedInboxObject = x.sharedInbox ?? (x.endpoints ? x.endpoints.sharedInbox : undefined);
@@ -172,16 +174,16 @@ export class ApPersonService implements OnModuleInit {
 				const collectionUri = getApId(xCollection);
 				if (typeof collectionUri === 'string' && collectionUri.length > 0) {
 					if (this.utilityService.punyHost(collectionUri) !== expectHost) {
-						throw new Error(`invalid Actor: ${collection} has different host`);
+						throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', `invalid Actor: ${collection} has different host`);
 					}
 				} else if (collectionUri != null) {
-					throw new Error(`invalid Actor: wrong ${collection}`);
+					throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', `invalid Actor: wrong ${collection}`);
 				}
 			}
 		}
 
 		if (!(typeof x.preferredUsername === 'string' && x.preferredUsername.length > 0 && x.preferredUsername.length <= 128 && /^\w([\w-.]*\w)?$/.test(x.preferredUsername))) {
-			throw new Error('invalid Actor: wrong username');
+			throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: wrong username');
 		}
 
 		// These fields are only informational, and some AP software allows these
@@ -189,7 +191,7 @@ export class ApPersonService implements OnModuleInit {
 		// we can at least see these users and their activities.
 		if (x.name) {
 			if (!(typeof x.name === 'string' && x.name.length > 0)) {
-				throw new Error('invalid Actor: wrong name');
+				throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: wrong name');
 			}
 			x.name = truncate(x.name, nameLength);
 		} else if (x.name === '') {
@@ -198,24 +200,24 @@ export class ApPersonService implements OnModuleInit {
 		}
 		if (x.summary) {
 			if (!(typeof x.summary === 'string' && x.summary.length > 0)) {
-				throw new Error('invalid Actor: wrong summary');
+				throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: wrong summary');
 			}
 			x.summary = truncate(x.summary, summaryLength);
 		}
 
 		const idHost = this.utilityService.punyHost(x.id);
 		if (idHost !== expectHost) {
-			throw new Error('invalid Actor: id has different host');
+			throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: id has different host');
 		}
 
 		if (x.publicKey) {
 			if (typeof x.publicKey.id !== 'string') {
-				throw new Error('invalid Actor: publicKey.id is not a string');
+				throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: publicKey.id is not a string');
 			}
 
 			const publicKeyIdHost = this.utilityService.punyHost(x.publicKey.id);
 			if (publicKeyIdHost !== expectHost) {
-				throw new Error('invalid Actor: publicKey.id has different host');
+				throw new IdentifiableError('97acabe7-7638-4f83-ab14-ffefa0ad793a', 'invalid Actor: publicKey.id has different host');
 			}
 		}
 
@@ -321,7 +323,7 @@ export class ApPersonService implements OnModuleInit {
 
 		const fields = this.analyzeAttachments(person.attachment ?? []);
 
-		const tags = extractApHashtags(person.tag).map(normalizeForSearch).splice(0, 32);
+		const tags = extractApHashtags(person.tag).splice(0, 32).map(normalizeTag);
 
 		const isBot = getApType(object) === 'Service' || getApType(object) === 'Application';
 
@@ -518,7 +520,7 @@ export class ApPersonService implements OnModuleInit {
 
 		const fields = this.analyzeAttachments(person.attachment ?? []);
 
-		const tags = extractApHashtags(person.tag).map(normalizeForSearch).splice(0, 32);
+		const tags = extractApHashtags(person.tag).splice(0, 32).map(normalizeTag);
 
 		const [followingVisibility, followersVisibility] = await Promise.all(
 			[
@@ -728,16 +730,20 @@ export class ApPersonService implements OnModuleInit {
 			}))));
 
 		await this.db.transaction(async transactionalEntityManager => {
+			await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [user.id]);
+			const noteIds = unique(featuredNotes.filter(x => x != null).map(x => x.id));
+			const lockedNoteIds = await lockNotesInIdOrder(transactionalEntityManager, noteIds, 'KEY SHARE');
+
 			await transactionalEntityManager.delete(MiUserNotePining, { userId: user.id });
 
 			// とりあえずidを別の時間で生成して順番を維持
 			let td = 0;
-			for (const note of featuredNotes.filter(x => x != null)) {
+			for (const noteId of noteIds.filter(x => lockedNoteIds.includes(x))) {
 				td -= 1000;
-				transactionalEntityManager.insert(MiUserNotePining, {
+				await transactionalEntityManager.insert(MiUserNotePining, {
 					id: this.idService.gen(Date.now() + td),
 					userId: user.id,
-					noteId: note.id,
+					noteId,
 				});
 			}
 		});
@@ -758,8 +764,8 @@ export class ApPersonService implements OnModuleInit {
 		let dst = await this.fetchPerson(src.movedToUri);
 
 		if (dst && this.userEntityService.isLocalUser(dst)) {
-			// targetがローカルユーザーだった場合データベースから引っ張ってくる
-			dst = await this.usersRepository.findOneByOrFail({ uri: src.movedToUri }) as MiLocalUser;
+			// ローカルユーザーの uri は null なので、ID で最新の移行設定を取得する
+			dst = await this.usersRepository.findOneByOrFail({ id: dst.id }) as MiLocalUser;
 		} else if (dst) {
 			if (movePreventUris.includes(src.movedToUri)) return 'skip: circular move';
 
@@ -777,8 +783,9 @@ export class ApPersonService implements OnModuleInit {
 			dst = await this.resolvePerson(src.movedToUri);
 		}
 
-		if (dst.movedToUri === dst.uri) return 'skip: movedTo itself (dst)'; // ？？？
-		if (src.movedToUri !== dst.uri) return 'skip: missmatch uri'; // ？？？
+		const dstUri = this.userEntityService.getUserUri(dst);
+		if (dst.movedToUri === dstUri) return 'skip: movedTo itself (dst)'; // ？？？
+		if (src.movedToUri !== dstUri) return 'skip: missmatch uri'; // ？？？
 		if (dst.movedToUri === src.uri) return 'skip: dst.movedToUri === src.uri';
 		if (!dst.alsoKnownAs || dst.alsoKnownAs.length === 0) {
 			return 'skip: dst.alsoKnownAs is empty';

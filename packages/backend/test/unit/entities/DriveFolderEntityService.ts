@@ -40,6 +40,9 @@ describe('DriveFolderEntityService', () => {
 
 	const createFile = async (folderId: string | null) => {
 		const id = nextId();
+		if (folderId != null) {
+			await driveFoldersRepository.increment({ id: folderId }, 'filesCount', 1);
+		}
 		await driveFilesRepository.insert({
 			id,
 			userId: null,
@@ -107,7 +110,8 @@ describe('DriveFolderEntityService', () => {
 			await createFile(child.id);
 			await createFile(child.id);
 
-			const packed = await service.pack(child, { detail: true }) as any;
+			const freshChild = await driveFoldersRepository.findOneByOrFail({ id: child.id });
+			const packed = await service.pack(freshChild, { detail: true }) as any;
 			expect(packed.id).toBe(child.id);
 			expect(packed.foldersCount).toBe(1);
 			expect(packed.filesCount).toBe(2);
@@ -142,7 +146,9 @@ describe('DriveFolderEntityService', () => {
 			await createFolder('child-a-sub', childA.id);
 			await createFile(childA.id);
 
-			const packed = await service.packMany([childB, childA], { detail: true }) as any;
+			const freshA = await driveFoldersRepository.findOneByOrFail({ id: childA.id });
+			const freshB = await driveFoldersRepository.findOneByOrFail({ id: childB.id });
+			const packed = await service.packMany([freshB, freshA], { detail: true }) as any;
 			expect(packed[0].id).toBe(childB.id);
 			expect(packed[1].id).toBe(childA.id);
 			expect(packed[0].parent?.id).toBe(root.id);

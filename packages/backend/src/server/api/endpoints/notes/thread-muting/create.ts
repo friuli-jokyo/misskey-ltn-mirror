@@ -5,11 +5,13 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import ms from 'ms';
-import type { NotesRepository, NoteThreadMutingsRepository } from '@/models/_.js';
+import { DataSource } from 'typeorm';
+import { MiNoteThreadMuting } from '@/models/_.js';
 import { IdService } from '@/core/IdService.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { GetterService } from '@/server/api/GetterService.js';
 import { DI } from '@/di-symbols.js';
+import { lockNoteRowsInIdOrder } from '@/misc/note-dependents.js';
 import { ApiError } from '../../../error.js';
 
 export const meta = {
@@ -30,6 +32,12 @@ export const meta = {
 			code: 'NO_SUCH_NOTE',
 			id: '5ff67ada-ed3b-2e71-8e87-a1a421e177d2',
 		},
+
+		alreadyMuting: {
+			message: 'You are already muting that thread.',
+			code: 'ALREADY_MUTING',
+			id: 'c146e22d-1141-4b31-b28d-176371014d18',
+		},
 	},
 } as const;
 
@@ -44,11 +52,8 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
-		@Inject(DI.notesRepository)
-		private notesRepository: NotesRepository,
-
-		@Inject(DI.noteThreadMutingsRepository)
-		private noteThreadMutingsRepository: NoteThreadMutingsRepository,
+		@Inject(DI.db)
+		private db: DataSource,
 
 		private getterService: GetterService,
 		private idService: IdService,
@@ -59,19 +64,34 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw err;
 			});
 
-			const _mutedNotes = await this.notesRepository.find({
-				where: [{
-					id: note.threadId ?? note.id,
-				}, {
-					threadId: note.threadId ?? note.id,
-				}],
+			const muted = await this.db.transaction('READ COMMITTED', async transactionalEntityManager => {
+				await transactionalEntityManager.query('SELECT 1 FROM "user" WHERE "id" = $1 FOR KEY SHARE', [me.id]);
+				const locked = (await lockNoteRowsInIdOrder(transactionalEntityManager, [note.id], 'KEY SHARE')).at(0);
+				if (locked == null) return false;
+
+				// Check if already muting
+				const exist = await transactionalEntityManager.exists(MiNoteThreadMuting, {
+					where: {
+						threadId: locked.threadId ?? locked.id,
+						userId: me.id,
+					},
+				});
+
+				if (exist) {
+					throw new ApiError(meta.errors.alreadyMuting);
+				}
+
+				await transactionalEntityManager.insert(MiNoteThreadMuting, {
+					id: this.idService.gen(),
+					threadId: locked.threadId ?? locked.id,
+					userId: me.id,
+				});
+				return true;
 			});
 
-			await this.noteThreadMutingsRepository.insert({
-				id: this.idService.gen(),
-				threadId: note.threadId ?? note.id,
-				userId: me.id,
-			});
+			if (!muted) {
+				throw new ApiError(meta.errors.noSuchNote);
+			}
 		});
 	}
 }

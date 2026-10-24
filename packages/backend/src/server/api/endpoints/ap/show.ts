@@ -136,11 +136,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			throw new ApiError(meta.errors.federationNotAllowed);
 		}
 
-		let local = await this.mergePack(me, ...await Promise.all([
+		const [localUser, localNote] = await Promise.all([
 			this.apDbResolverService.getUserFromApId(uri),
-			this.apDbResolverService.getNoteFromApId(uri),
-		]));
+			this.apDbResolverService.getNoteReferenceFromApId(uri),
+		]);
+		let local = await this.mergePack(me, localUser, localNote.note);
 		if (local != null) return local;
+		if (localNote.formerId != null) return null;
 
 		const host = this.utilityService.extractDbHost(uri);
 
@@ -185,11 +187,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		// /@user のような正規id以外で取得できるURIが指定されていた場合、ここで初めて正規URIが確定する
 		// これはDBに存在する可能性があるため再度DB検索
 		if (uri !== object.id) {
-			local = await this.mergePack(me, ...await Promise.all([
+			const [canonicalUser, canonicalNote] = await Promise.all([
 				this.apDbResolverService.getUserFromApId(object.id),
-				this.apDbResolverService.getNoteFromApId(object.id),
-			]));
+				this.apDbResolverService.getNoteReferenceFromApId(object.id),
+			]);
+			local = await this.mergePack(me, canonicalUser, canonicalNote.note);
 			if (local != null) return local;
+			if (canonicalNote.formerId != null) return null;
 		}
 
 		// 同一ユーザーの情報を再度処理するので、使用済みのresolverを再利用してはいけない
