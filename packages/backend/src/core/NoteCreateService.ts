@@ -497,7 +497,9 @@ export class NoteCreateService implements OnApplicationShutdown {
 		isBot: MiUser['isBot'];
 		isCat: MiUser['isCat'];
 	}, data: Option, silent = false): Promise<MiNote> {
+		let localOnlyAllowed = false;
 		if (data.anonymouslySendToUser) {
+			localOnlyAllowed = true;
 			data.files = null; // file オブジェクトを照会すると送信元を特定できるため
 			data.localOnly = true;
 			data.visibility = 'public';
@@ -533,9 +535,12 @@ export class NoteCreateService implements OnApplicationShutdown {
 		if (data.createdAt == null) data.createdAt = new Date();
 		if (data.visibility == null) data.visibility = 'public';
 		if (data.localOnly == null) data.localOnly = false;
-		if (data.channel != null) data.visibility = 'public';
-		if (data.channel != null) data.visibleUsers = [];
-		if (data.channel != null) data.localOnly = true;
+		if (data.channel != null) {
+			localOnlyAllowed = true;
+			data.visibility = 'public';
+			data.visibleUsers = [];
+			data.localOnly = true;
+		}
 
 		if (data.channel?.anonymousStrategy && data.anonymousChannelUsername == null) {
 			data.anonymousChannelUsername = await this.genAnonymousChannelUsername(data.channel, user.id, data.createdAt);
@@ -643,6 +648,10 @@ export class NoteCreateService implements OnApplicationShutdown {
 
 		if (data.localOnly && data.visibility === 'specified') {
 			throw new Error('Cannot set visibility to specified when localOnly is true');
+		}
+
+		if (data.localOnly && !localOnlyAllowed) {
+			throw new Error('Cannot set localOnly to true when it is not necessary');
 		}
 
 		if (data.text) {

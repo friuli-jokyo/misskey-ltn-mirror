@@ -13,7 +13,6 @@ import { writeHeapSnapshot } from 'node:v8';
 import Xev from 'xev';
 import type { INestApplicationContext } from '@nestjs/common';
 import Logger from '@/logger.js';
-import { ServerService } from '@/server/ServerService.js';
 import { envOption } from '../env.js';
 import { installProcessErrorHandlers } from './process-error-handler.js';
 import { isShutdownInProgress } from './shutdown-handler.js';
@@ -104,7 +103,10 @@ if (!envOption.disableClustering) {
 
 readyRef.value = true;
 
-await server?.get(ServerService).ready();
+if (server) {
+	const { ServerService } = await import('@/server/ServerService.js');
+	await server.get(ServerService).ready();
+}
 
 process.on('message', msg => {
 	if (msg === 'gc') {

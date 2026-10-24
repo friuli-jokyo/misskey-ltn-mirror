@@ -274,7 +274,7 @@ const compiledConfigFilePathForTest = resolve(projectBuiltDir, '._config_.json')
 
 export const compiledConfigFilePath = fs.existsSync(compiledConfigFilePathForTest)
 	? compiledConfigFilePathForTest
-	: resolve(projectBuiltDir, '.config.json');
+	: resolve(projectBuiltDir, process.env.MISSKEY_CONFIG_YML ? `.config.${process.env.MISSKEY_CONFIG_YML}.json` : '.config.json');
 
 export function loadConfig(): Config {
 	if (!fs.existsSync(compiledConfigFilePath)) {
